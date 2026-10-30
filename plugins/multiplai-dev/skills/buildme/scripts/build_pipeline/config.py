@@ -572,7 +572,16 @@ class EpicSettings:
     feature branch, else `manual` (`Coordinator.__post_init__`). `max_usd`: one ceiling for
     the whole epic, None for none. `round_worth`: which Code MEDIUM earns
     another review round (`epic.review.decide`): `breaks`, one the verifier
-    did not rate `correctness-only` or `hygiene`; `any`, every one.
+    did not rate `hygiene`; `any`, every one. `accepted_findings`: per
+    child id, the review finding ids a person accepted, each with its reason;
+    a listed id does not block that child (`Coordinator._fields`).
+    `accept_size`: every child launch adds `--accept-size`, and a child
+    parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
+    launches of a failed child in one run.
+    `review_dimensions` and `review_finder_model`: the dimension finders and
+    their model for each review of a child's PR, passed as the review's
+    `--dimensions` and `--finder-model` (`epic.review.review_argv`); None
+    leaves the review skill's own settings.
     `shared_analysis`: run the codebase analysis once for the epic, at the
     feature branch, and have each child reuse it (`Coordinator._shared_analysis`);
     off, each child runs its own, as before."""
@@ -582,6 +591,11 @@ class EpicSettings:
     merge: Literal["auto", "manual"] | None = None
     max_usd: float | None = None
     round_worth: Literal["breaks", "any"] = "breaks"
+    accept_size: bool = False
+    max_child_attempts: int = 2
+    accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
+    review_dimensions: list[str] | None = None
+    review_finder_model: str | None = None
     shared_analysis: bool = False
 
 
@@ -593,6 +607,56 @@ def _cfg_int(value, key: str, default: int) -> int:
         )
         return default
     return value
+
+
+def _cfg_names(value, key: str) -> list[str] | None:
+    """A non-empty list of non-empty strings from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(v, str) and v.strip() for v in value)
+    ):
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return [v.strip() for v in value]
+
+
+def _cfg_text(value, key: str) -> str | None:
+    """A non-empty string from config.yaml, or None (with a warning for anything else)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        log.warning("Invalid %s value %r in config.yaml — ignoring it", key, value)
+        return None
+    return value.strip()
+
+
+def _accepted_findings(value) -> dict[str, dict[str, str]]:
+    """`epic.accepted_findings`: `{<child id>: {<finding id>: <reason>}}`. A
+    child or finding entry of another shape, or a finding with no reason, is
+    left out with a warning, so it still blocks."""
+    out: dict[str, dict[str, str]] = {}
+    for child, ids in _cfg_mapping(value, "epic.accepted_findings").items():
+        if not isinstance(ids, dict):
+            log.warning(
+                "Invalid epic.accepted_findings.%s value %r in config.yaml — ignoring it",
+                child,
+                ids,
+            )
+            continue
+        for fid, reason in ids.items():
+            if not isinstance(reason, str) or not reason.strip():
+                log.warning(
+                    "epic.accepted_findings.%s.%s has no reason in config.yaml — "
+                    "it still blocks",
+                    child,
+                    fid,
+                )
+                continue
+            out.setdefault(str(child), {})[str(fid)] = reason.strip()
+    return out
 
 
 def _cfg_mapping(value, key: str) -> dict:
@@ -882,6 +946,10 @@ class BuildConfig:
     # loop narrows each one in its own directory (`narrow_tests.narrow_parts`).
     # Empty: `test_command` is narrowed as one command.
     narrow_commands: list[NarrowCommand] = field(default_factory=list)
+    # tdd.spec_tests: before each block's test writer, a second test writer
+    # gets the block's scenarios marked security or permission and its public
+    # interfaces, not the design (`spec_tests.py`). Off: no such step.
+    spec_tests: bool = False
     # tdd.parallel: "auto" lets the full-suite runs (`gates.baseline_test_gate`,
     # `gates.integration_gate`, the epic's merge tests) add `-n auto` when the
     # command runs pytest and pytest-xdist imports in its environment
@@ -891,6 +959,10 @@ class BuildConfig:
     # integration gates, the final verification and the epic's merge tests)
     # before it counts as not run.
     test_timeout: int = 300
+    # tdd.db_check: a command run from the project before the first paid
+    # call (`preflight.py`); exit 0 means the test database answers. Empty:
+    # not checked.
+    db_check: str = ""
     # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
@@ -1144,6 +1216,18 @@ class BuildConfig:
     # the findings go to `unfixed-findings.md`. False: a passing block stops
     # its review loop at once, as before.
     fix_on_pass: bool = True
+
+    # One review of the whole component after the last block and the whole
+    # suite (`code_review.component_review`, item 61 of
+    # plan-factory-merged-2026-10-29.md). Off by default: the per-block review
+    # then runs exactly as before. On: that review's Critical and Major
+    # findings get one fix round, and the per-block review fails a block only
+    # on `block_gate_severities` (and the spec-compliance floor), in at most
+    # `COMPONENT_BLOCK_ROUNDS` rounds, with no fix on pass.
+    component_review: bool = False
+    # `code_review.block_gate_severities`, lower-case. Read only when
+    # `component_review` is on.
+    block_gate_severities: tuple[str, ...] = ("critical", "major")
 
     # Stop 4: an engineer approves the implementation plan before TDD starts
     # (`review.plan_approval`). The build stops after the plan check and the
@@ -1430,8 +1514,26 @@ class BuildConfig:
                 "tdd.whole_suite is end but tdd.narrow_tests is false — every "
                 "block's test run falls back to the whole test command"
             )
+        spec_tests = tdd.get("spec_tests", False)
+        if isinstance(spec_tests, bool):
+            self.spec_tests = spec_tests
+        else:
+            log.warning(
+                "Invalid tdd.spec_tests value %r in config.yaml — want true | false; "
+                "using false",
+                spec_tests,
+            )
+            self.spec_tests = False
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
+        db_check = tdd.get("db_check")
+        if isinstance(db_check, str):
+            self.db_check = db_check.strip()
+        elif db_check is not None:
+            log.warning(
+                "tdd.db_check in config.yaml is not a command (%r) — ignoring it",
+                db_check,
+            )
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
@@ -1454,6 +1556,8 @@ class BuildConfig:
         self._load_review_gate(code_review_cfg)
         self.adjudicate_findings = bool(code_review_cfg.get("adjudicate", True))
         self.fix_on_pass = bool(code_review_cfg.get("fix_on_pass", True))
+        self.component_review = bool(code_review_cfg.get("component_review", False))
+        self._load_block_gate_severities(code_review_cfg)
         self._load_budget(data.get("budget", {}) or {})
 
         # Gate toggles
@@ -1722,6 +1826,24 @@ class BuildConfig:
         if panel:
             log.info("Review panel configured: %s", panel)
 
+    def _load_block_gate_severities(self, code_review_cfg: dict) -> None:
+        """`code_review.block_gate_severities`: a list of Critical, Major,
+        Minor and Note. Anything else logs a warning and keeps the default."""
+        value = code_review_cfg.get("block_gate_severities")
+        if value is None:
+            return
+        known = ("critical", "major", "minor", "note")
+        if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip().lower() in known for v in value
+        ):
+            log.warning(
+                "code_review.block_gate_severities must be a list of Critical, "
+                "Major, Minor and Note; got %r — using [Critical, Major]",
+                value,
+            )
+            return
+        self.block_gate_severities = tuple(v.strip().lower() for v in value)
+
     def _load_review_gate(self, code_review_cfg: dict) -> None:
         """Load graded-gate thresholds, keeping the defaults on bad input."""
         gate_cfg = code_review_cfg.get("gate") or {}
@@ -1782,6 +1904,13 @@ class BuildConfig:
                 shared,
             )
             shared = False
+        accept_size = epic_cfg.get("accept_size", False)
+        if not isinstance(accept_size, bool):
+            log.warning(
+                "Invalid epic.accept_size value %r in config.yaml — want true | false; using false",
+                accept_size,
+            )
+            accept_size = False
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1792,6 +1921,17 @@ class BuildConfig:
             merge=merge,
             max_usd=max_usd,
             round_worth=worth,
+            accept_size=accept_size,
+            max_child_attempts=_cfg_int(
+                epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
+            ),
+            accepted_findings=_accepted_findings(epic_cfg.get("accepted_findings")),
+            review_dimensions=_cfg_names(
+                epic_cfg.get("review_dimensions"), "epic.review_dimensions"
+            ),
+            review_finder_model=_cfg_text(
+                epic_cfg.get("review_finder_model"), "epic.review_finder_model"
+            ),
             shared_analysis=shared,
         )
 

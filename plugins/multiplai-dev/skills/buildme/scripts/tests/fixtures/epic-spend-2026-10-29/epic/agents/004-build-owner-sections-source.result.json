@@ -1,0 +1,13 @@
+{
+  "exit_code": 4,
+  "markers": [
+    "WORKTREE:{WORKTREES}/buildme-account-management-owner-sections-source",
+    "BRANCH:DFACCMGMT-12-account-management-owner-sections-source",
+    "SPEC:ISSUES:{WORKTREES}/buildme-account-management-owner-sections-source/specs/changes/account-management/components/owner-sections-source/spec-issues.md",
+    "SPEND:28.432856:9211644"
+  ],
+  "pr": null,
+  "interrupted": false,
+  "spend": 28.432856,
+  "at": "2026-10-27T06:25:07.481343+00:00"
+}

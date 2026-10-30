@@ -20,7 +20,13 @@ from pydantic import BaseModel, Field, model_validator
 from . import budget
 from .change_manager import PLAN_HASH_KEY
 from .findings.models import PRComment, SpecIssue, Triage
-from .models import BlockInfo, BlockStatus, BuildPhase, EndSuiteState
+from .models import (
+    BlockInfo,
+    BlockStatus,
+    BuildPhase,
+    ComponentReviewState,
+    EndSuiteState,
+)
 from .stop_record import StepStop  # moved; `from .state import StepStop` keeps working
 from .stop_record import record as record_stop
 
@@ -261,6 +267,10 @@ class TDDState(BaseModel):
     # The whole-change refactor's commit, so the end run can throw it away
     # when the suite is red right after it.
     refactor_all_commit: str | None = None
+    # The component review (`code_review.component_review`) is done, and
+    # the one in flight; None when none is.
+    component_review_done: bool = False
+    component_review: ComponentReviewState | None = None
 
 
 FINDINGS_STEPS = ("fetch", "triage", "spec", "code", "publish", "review")
@@ -326,6 +336,14 @@ class FindingsRound(BaseModel):
     # the step starts again, so a step killed before it could record its
     # stop has none. Empty in checkpoints written before the field existed.
     stops: dict[str, StepStop] = Field(default_factory=dict)
+    # With `--from-review` (`findings/from_review.py`): the head of the review
+    # the round acts on and the ids of its blockers, saved when the round
+    # starts, and one decision per id, saved as the step that settles it
+    # finishes and never replaced. None and empty in other rounds and in
+    # older checkpoints.
+    review_head: str | None = None
+    expected: list[str] = Field(default_factory=list)
+    decisions: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     @property
     def seen_ids(self) -> set[int]:

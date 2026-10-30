@@ -11,7 +11,9 @@ in `state.finder_reports` and written as `report-<dimension>-<id>.md` or
 `report-path-<id>.md` before a second call converts it into findings
 (`run_reported`). A dimension finder that stops at the turn limit has its piece
 split in two (`chunks.split_piece`), and that dimension alone is asked on both
-halves, in the same job; a half is not split again. Only `RepoTrustError`, a
+halves, in the same job; a half is not split again. Before any finder runs, a
+piece whose diff changes more than `CALLERS_MAX_SYMBOLS` existing definitions
+is split for `callers` alone (`split_for_callers`). Only `RepoTrustError`, a
 hit usage limit and a budget stop end the stage; a failed report or convert
 call is recorded in coverage and the others go on, and `resume` asks only for
 the missing report or convert.
@@ -37,7 +39,7 @@ from pydantic import ValidationError
 
 from .. import budget, checks, sdk, timings
 from ..checks import add_coverage, drop_coverage
-from ..chunks import piece_diff_text, split_piece
+from ..chunks import changed_symbols, piece_diff_text, split_piece
 from ..config import CHANGE_DEFAULT_OFF, DIMENSIONS, TRIM_DIMENSION, ReviewConfig
 from ..gates import file_at_head, finding_gate, gated_locations, gated_need, reason_kind
 from ..linked_docs import LinkSource, linked_docs, not_included_line
@@ -295,7 +297,7 @@ def _normalise(
         other_locations=[
             relative_path(loc, target, ctx.snapshot) for loc in finding.other_locations
         ],
-        dimension="pre-existing" if finding.dimension == "pre-existing" else dimension,
+        dimension=dimension,
         finder=dimension,
         finders=[dimension],
     )
@@ -347,14 +349,38 @@ def write_report_file(target_dir: Path, key: str, text: str) -> Path:
     return path
 
 
+# A converted defect whose claim says the reviewer found no problem: the convert prompt marks such a
+# note `advice` with no file, and `drop_no_problem` drops one that still comes back as a defect.
+NO_PROBLEM = re.compile(
+    r"\bfound no (?:problems?|issues?|defects?|bugs?|faults?)\b"
+    r"|\bno (?:problems?|issues?|defects?|bugs?|faults?) (?:was |were )?found\b"
+    r"|\bfound nothing wrong\b",
+    re.IGNORECASE,
+)
+
+
+def drop_no_problem(key: str, out: ConvertOutput) -> tuple[ConvertOutput, list[str]]:
+    """*out* without the defect items whose claim says no problem was found, and one
+    `state.errors` line per item dropped."""
+    kept, errors = [], []
+    for it in out.items:
+        if it.kind == "defect" and NO_PROBLEM.search(it.claim):
+            errors.append(
+                f"convert {key}: dropped a defect item that reports no problem: {it.claim[:200]}"
+            )
+        else:
+            kept.append(it)
+    return ConvertOutput(items=kept, needs=out.needs), errors
+
+
 def map_converted(
     key: str, out: ConvertOutput
 ) -> tuple[list[ConvertedItem], list[Finding]]:
     """Every converted item as a `ConvertedItem`, and a `Finding` for each one that has a location.
 
     A missing severity is LOW. A finding's finder is the key's kind (the
-    dimension, or `path`), and so is its dimension, except "pre-existing" for
-    an item the report marks so. An item with no file, line or citation, or one
+    dimension, or `path`), and so is its dimension; an item the report marks
+    pre-existing has `pre_existing` set. An item with no file, line or citation, or one
     whose location does not validate, stays an item with `finding_id` None.
     """
     kind = key.partition("@")[0]
@@ -368,7 +394,8 @@ def map_converted(
                 finding = Finding(
                     claim=it.claim,
                     severity=severity,
-                    dimension="pre-existing" if it.pre_existing else kind,
+                    dimension=kind,
+                    pre_existing=it.pre_existing,
                     file=it.file,
                     line_start=it.line_start,
                     line_end=it.line_end or it.line_start,
@@ -576,6 +603,8 @@ async def run_reported(
         save(state, ctx)
         return
     out = _relative(out, target, ctx.snapshot)
+    out, dropped = drop_no_problem(key, out)
+    state.errors.extend(dropped)
     rep.items, rep.findings = map_converted(key, out)
     rep.needs = [n for n in out.needs if n.what.strip()]
     rep.converted, rep.convert_error = True, None
@@ -635,6 +664,41 @@ def covering(state: ReviewState, piece: Piece, dimension: str) -> list[Piece]:
         if i in by_id and dimension in by_id[i].split_for
     ]
     return halves or [piece]
+
+
+CALLERS_DIMENSION = "callers"
+# A piece whose diff changes more existing definitions than this (`chunks.changed_symbols`) is split in
+# two for the callers finder before it runs. Set from the callers finders of DFACCMGMT-1's reviews of
+# PRs #37 and #38 (2026-10-29), which ran with search broken. Of the whole pieces, four hit the 60-turn
+# limit: three changed 13, 16 and 22, and one (a single hunk, no definition) changed 0, which no count
+# catches. Of the twelve whose finder answered, two changed more than 12 (33 and 15). Two halves also
+# hit the limit, with 3 and 9. Re-check it once finders can search, since searching changes the turns.
+CALLERS_MAX_SYMBOLS = 12
+
+
+def split_for_callers(state: ReviewState, diff: str) -> list[Piece]:
+    """Before the finders run: cut each stored piece whose *diff* part changes more than
+    `CALLERS_MAX_SYMBOLS` existing definitions in two, for the callers finder only (the halves'
+    `split_for`). Returns the pieces cut. A piece already cut, a half, a piece `split_piece` cannot cut
+    and a review that does not run `callers` are left as they are. Called once, when a review plans its
+    pieces; `resume` uses the stored pieces and never calls it."""
+    if CALLERS_DIMENSION not in change_dimensions(state):
+        return []
+    cut: list[Piece] = []
+    for piece in top_pieces(state):
+        if piece.split_into:
+            continue
+        if len(changed_symbols(piece_diff_text(diff, piece))) <= CALLERS_MAX_SYMBOLS:
+            continue
+        halves = split_piece(piece, diff, max(p.id for p in state.pieces or []) + 1)
+        if halves is None:
+            continue
+        for half in halves:
+            half.split_for.append(CALLERS_DIMENSION)
+        piece.split_into = [h.id for h in halves]
+        state.pieces = [*(state.pieces or []), *halves]
+        cut.append(piece)
+    return cut
 
 
 def is_converted(state: ReviewState, key: str) -> bool:

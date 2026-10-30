@@ -27,6 +27,16 @@ Two sources, each read from disk on every look:
 
 A `SPEND:` line ending `:incomplete` (`budget.spend_marker`: a skill the
 process ran printed no spend) counts its USD and makes the total incomplete.
+
+A third source covers builds the epic did not launch, such as a child built
+by hand (plan-factory-merged-2026-10-29.md, item 28): each child's
+`.build-state.json` and `.build-state.complete.json` in its worktree. A
+checkpoint's `budget.cost_usd` is the running total of every build that
+resumed it, the epic's included, so what it holds beyond the child's `build`
+records is added (`state_spend`), once per child and state-file path, and
+never below 0. It is read from disk on every look, so nothing is counted
+twice by a later run. A checkpoint that cannot be read, or with calls of
+unknown spend not accepted, makes the total incomplete.
 """
 
 from __future__ import annotations
@@ -59,6 +69,55 @@ def attempts_spend(tries: list[records.Attempt]) -> tuple[float, bool]:
                 complete = False
         else:
             complete = False
+    return total, complete
+
+
+def build_spend(tries: list[records.Attempt]) -> dict[str, float]:
+    """The USD of each child's `build` records."""
+    out: dict[str, float] = {}
+    for a in tries:
+        value = (a.result or {}).get("spend")
+        if (
+            a.kind == "build"
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            out[a.child] = out.get(a.child, 0.0) + float(value)
+    return out
+
+
+def state_spend(
+    paths: dict[str, list[Path]], counted: dict[str, float]
+) -> tuple[float, bool]:
+    """(USD, complete): what each child's checkpoints (*paths*, per child)
+    hold beyond its `build` records (*counted*). A path that does not exist
+    counts 0; the same file named twice counts once."""
+    total, complete = 0.0, True
+    for cid, files in paths.items():
+        held, seen = 0.0, set()
+        for path in files:
+            key = Path(path).resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                data = json.loads(Path(path).read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError) as e:
+                log.warning("cannot read the build checkpoint %s: %s", path, e)
+                complete = False
+                continue
+            budget = data.get("budget") if isinstance(data, dict) else None
+            value = budget.get("cost_usd") if isinstance(budget, dict) else None
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                complete = False
+                continue
+            held += float(value)
+            unknown = len(budget.get("unaccounted_calls") or [])
+            if unknown > int(budget.get("accepted_unknown_calls") or 0):
+                complete = False
+        total += max(0.0, held - counted.get(cid, 0.0))
     return total, complete
 
 

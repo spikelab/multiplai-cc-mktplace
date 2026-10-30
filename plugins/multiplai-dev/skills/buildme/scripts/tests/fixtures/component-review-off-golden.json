@@ -1,0 +1,407 @@
+{
+ "fixer_calls": [
+  {
+   "block_description": "Fix review issues: Weighted average 2.0 < 3.5 threshold\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Major] off-by-one in add() (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Note] add() could be a lambda (app.py:2)\n  evidence: returns a + b + 1\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+   "block_name": "Adder",
+   "carry_notes": false,
+   "context_bundle": "# Block 1: Adder\n\nadd two numbers\n\n\n## Evaluation Rubric\n# Rubric\n\n- Q (weight 2): correct\n",
+   "effort": "medium",
+   "failing_tests": "Weighted average 2.0 < 3.5 threshold\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Major] off-by-one in add() (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Note] add() could be a lambda (app.py:2)\n  evidence: returns a + b + 1",
+   "model": null,
+   "prompt_style": "clean",
+   "test_command": "<PYTHON> -c \"import sys; sys.exit(0)\"\n\nDo not run this command: it runs the whole suite and is slow. Run only the test files you wrote or changed, with the project's test runner. buildme runs the whole suite itself after you finish."
+  },
+  {
+   "block_description": "Fix review issues: The block passed review. The judge accepted these findings and they are still open: fix them, and change nothing else.\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] the name add is vague (app.py:2)\n  evidence: returns a + b + 1\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+   "block_name": "Adder",
+   "context_bundle": "# Block 1: Adder\n\nadd two numbers\n\n\n## Evaluation Rubric\n# Rubric\n\n- Q (weight 2): correct\n",
+   "effort": "medium",
+   "failing_tests": "The block passed review. The judge accepted these findings and they are still open: fix them, and change nothing else.\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] the name add is vague (app.py:2)\n  evidence: returns a + b + 1",
+   "model": null,
+   "prompt_style": "clean",
+   "test_command": "<PYTHON> -c \"import sys; sys.exit(0)\"\n\nDo not run this command: it runs the whole suite and is slow. Run only the test files you wrote or changed, with the project's test runner. buildme runs the whole suite itself after you finish."
+  }
+ ],
+ "judge_prompts": [
+  "You are the orchestrator of a build. Independent reviewers examined one block's\ndiff in fresh contexts \u2014 they see the diff and the spec, but not the build's\nhistory, not the decisions already made, and not the other blocks.\n\nReviewers are useful precisely because they lack that context, and wrong for\nthe same reason. Your job is to decide which of their findings are real.\n\n## Block\nBlock 1: Adder\nadd two numbers\n\n## Diff (ground truth)\n```\n(no diff captured)\n```\n\n## Build context the reviewers did NOT have\n(no additional build context)\n\n## Findings to adjudicate\n[0] (Major, confidence 0.90) off-by-one in add()\n     location: app.py:2\n     evidence: returns a + b + 1\n[1] (Minor, confidence 0.90) add() has no docstring\n     location: app.py:2\n     evidence: returns a + b + 1\n[2] (Note, confidence 0.90) add() could be a lambda\n     location: app.py:2\n     evidence: returns a + b + 1\n\n## How to judge\nAccept a finding when the diff genuinely shows the problem it claims, and\nfixing it would improve the block.\n\nReject a finding when:\n- the claimed problem is not actually in the diff (the reviewer misread it);\n- it is already handled elsewhere in the build, outside this block's diff;\n- it contradicts a deliberate decision recorded in the spec or context above;\n- it is a style preference the project's standards do not ask for;\n- it restates the spec rather than identifying a deviation from it.\n\nJudge each finding on its own evidence. A confident tone is not evidence, and a\nlow-confidence finding backed by real diff lines is still real. Do not reject a\nfinding merely because it is inconvenient or would take work to fix.\n\nReturn a verdict for EVERY finding, by its index.\n\n## Output Format\n```json\n{\n  \"verdicts\": [\n    {\"index\": 0, \"accepted\": true, \"reason\": \"Why this is real, citing the diff\"},\n    {\"index\": 1, \"accepted\": false, \"reason\": \"Why the reviewer is wrong here\"}\n  ]\n}\n```\n\nReturn ONLY the JSON. No commentary.\n",
+  "You are the orchestrator of a build. Independent reviewers examined one block's\ndiff in fresh contexts \u2014 they see the diff and the spec, but not the build's\nhistory, not the decisions already made, and not the other blocks.\n\nReviewers are useful precisely because they lack that context, and wrong for\nthe same reason. Your job is to decide which of their findings are real.\n\n## Block\nBlock 1: Adder\nadd two numbers\n\n## Diff (ground truth)\n```\ndiff --git a/app.py b/app.py\nindex <SHORT>..<SHORT> 100644\n--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b + 1\n+    return a + b\n\n```\n\n## Build context the reviewers did NOT have\n(no additional build context)\n\n## Findings to adjudicate\n[0] (Minor, confidence 0.90) the name add is vague\n     location: app.py:2\n     evidence: returns a + b + 1\n\n## Findings still open from earlier rounds\n- B01-R1-F1 [Major] off-by-one in add() (app.py:2)\n- B01-R1-F2 [Minor] add() has no docstring (app.py:2)\n- B01-R1-F3 [Note] add() could be a lambda (app.py:2)\n\n## Findings rejected in earlier rounds\n(none)\n\n## Changes since the previous review (scope diff)\nEverything committed since the previous review ran, which is what the last\nfix changed:\n```\ndiff --git a/app.py b/app.py\nindex <SHORT>..<SHORT> 100644\n--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b + 1\n+    return a + b\n\n```\n\n## Restatements and scope\nEarlier rounds of this block were judged already. For each finding above\n(under Findings to adjudicate), also give:\n\n- `duplicate_of`: the id of the open or earlier-rejected finding it restates\n  (the same defect at the same place, in other words), or null when it\n  restates none of them.\n- `in_fix_scope`: true when the finding is in code the scope diff added or\n  changed, or in code that calls what it changed; false otherwise.\n\nAdd these to each verdict, for example:\n`{\"index\": 0, \"accepted\": true, \"reason\": \"...\", \"duplicate_of\": null, \"in_fix_scope\": true}`\n\n## How to judge\nAccept a finding when the diff genuinely shows the problem it claims, and\nfixing it would improve the block.\n\nReject a finding when:\n- the claimed problem is not actually in the diff (the reviewer misread it);\n- it is already handled elsewhere in the build, outside this block's diff;\n- it contradicts a deliberate decision recorded in the spec or context above;\n- it is a style preference the project's standards do not ask for;\n- it restates the spec rather than identifying a deviation from it.\n\nJudge each finding on its own evidence. A confident tone is not evidence, and a\nlow-confidence finding backed by real diff lines is still real. Do not reject a\nfinding merely because it is inconvenient or would take work to fix.\n\nReturn a verdict for EVERY finding, by its index.\n\n## Output Format\n```json\n{\n  \"verdicts\": [\n    {\"index\": 0, \"accepted\": true, \"reason\": \"Why this is real, citing the diff\"},\n    {\"index\": 1, \"accepted\": false, \"reason\": \"Why the reviewer is wrong here\"}\n  ]\n}\n```\n\nReturn ONLY the JSON. No commentary.\n"
+ ],
+ "ok": true,
+ "records": {
+  "block-01-round-1.json": {
+   "accepted": [
+    {
+     "claim": "off-by-one in add()",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F1",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Major"
+    },
+    {
+     "claim": "add() has no docstring",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F2",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Minor"
+    },
+    {
+     "claim": "add() could be a lambda",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F3",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Note"
+    }
+   ],
+   "block": {
+    "name": "Adder",
+    "number": 1
+   },
+   "extra": [],
+   "fix": {
+    "commit": "<SHA>",
+    "report": "fixed\nSEARCHED:\n- app.py",
+    "searched": [
+     "app.py"
+    ],
+    "success": true,
+    "timed_out": false
+   },
+   "fix_brief": "Fix review issues: Weighted average 2.0 < 3.5 threshold\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Major] off-by-one in add() (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Note] add() could be a lambda (app.py:2)\n  evidence: returns a + b + 1\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+   "gate": {
+    "passed": false,
+    "reason": "Weighted average 2.0 < 3.5 threshold"
+   },
+   "generated_at": "<TIME>",
+   "head_sha": "<SHA>",
+   "kind": "review",
+   "missing": [],
+   "misunderstood": [],
+   "open_findings": [
+    {
+     "claim": "off-by-one in add()",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F1",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Major"
+    },
+    {
+     "claim": "add() has no docstring",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F2",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Minor"
+    },
+    {
+     "claim": "add() could be a lambda",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F3",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Note"
+    }
+   ],
+   "outside_fix_scope": [],
+   "prior_assessments": [],
+   "rejected": [],
+   "reviewed_sha": "<SHA>",
+   "round": 1,
+   "scores": [
+    {
+     "confidence": 1.0,
+     "dimension": "Q",
+     "evidence": "e",
+     "score": 2,
+     "weight": 2
+    }
+   ],
+   "weighted_average": 2.0
+  },
+  "block-01-round-2.json": {
+   "accepted": [
+    {
+     "claim": "the name add is vague",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R2-F1",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Minor"
+    }
+   ],
+   "block": {
+    "name": "Adder",
+    "number": 1
+   },
+   "extra": [],
+   "fix": {
+    "commit": "<SHA>",
+    "kept": true,
+    "pass_kind": "fix_on_pass",
+    "report": "fixed\nSEARCHED:\n- app.py",
+    "searched": [
+     "app.py"
+    ],
+    "success": true,
+    "timed_out": false
+   },
+   "fix_brief": "Fix review issues: The block passed review. The judge accepted these findings and they are still open: fix them, and change nothing else.\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] the name add is vague (app.py:2)\n  evidence: returns a + b + 1\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
+   "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 5.0"
+   },
+   "generated_at": "<TIME>",
+   "head_sha": "<SHA>",
+   "kind": "review",
+   "missing": [],
+   "misunderstood": [],
+   "open_findings": [
+    {
+     "claim": "add() has no docstring",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F2",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Minor"
+    },
+    {
+     "claim": "add() could be a lambda",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F3",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Note"
+    },
+    {
+     "claim": "the name add is vague",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R2-F1",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Minor"
+    }
+   ],
+   "outside_fix_scope": [],
+   "prior_assessments": [
+    {
+     "evidence": "",
+     "finding_id": "B01-R1-F1",
+     "status": "resolved"
+    },
+    {
+     "evidence": "",
+     "finding_id": "B01-R1-F2",
+     "status": "cannot_verify"
+    },
+    {
+     "evidence": "",
+     "finding_id": "B01-R1-F3",
+     "status": "cannot_verify"
+    }
+   ],
+   "rejected": [],
+   "reviewed_sha": "<SHA>",
+   "round": 2,
+   "scores": [
+    {
+     "confidence": 1.0,
+     "dimension": "Q",
+     "evidence": "e",
+     "score": 5,
+     "weight": 2
+    }
+   ],
+   "weighted_average": 5.0
+  },
+  "block-01-round-3.json": {
+   "accepted": [],
+   "block": {
+    "name": "Adder",
+    "number": 1
+   },
+   "extra": [],
+   "fix": null,
+   "fix_brief": null,
+   "gate": {
+    "passed": true,
+    "reason": "Review passed: weighted average 5.0"
+   },
+   "generated_at": "<TIME>",
+   "head_sha": "<SHA>",
+   "kind": "fix_on_pass_review",
+   "missing": [],
+   "misunderstood": [],
+   "open_findings": [
+    {
+     "claim": "add() has no docstring",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F2",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Minor"
+    },
+    {
+     "claim": "add() could be a lambda",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R1-F3",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Note"
+    },
+    {
+     "claim": "the name add is vague",
+     "confidence": 0.9,
+     "defect_class": "",
+     "dimension": "",
+     "duplicate_of": null,
+     "earlier_judge_reason": "",
+     "evidence": "returns a + b + 1",
+     "file_path": "app.py",
+     "finding_id": "B01-R2-F1",
+     "in_fix_scope": null,
+     "line": 2,
+     "other_locations": [],
+     "reviewers": [],
+     "severity": "Minor"
+    }
+   ],
+   "outside_fix_scope": [],
+   "prior_assessments": [
+    {
+     "evidence": "",
+     "finding_id": "B01-R1-F2",
+     "status": "cannot_verify"
+    },
+    {
+     "evidence": "",
+     "finding_id": "B01-R1-F3",
+     "status": "cannot_verify"
+    },
+    {
+     "evidence": "",
+     "finding_id": "B01-R2-F1",
+     "status": "cannot_verify"
+    }
+   ],
+   "rejected": [],
+   "reviewed_sha": "<SHA>",
+   "round": 3,
+   "scores": [
+    {
+     "confidence": 1.0,
+     "dimension": "Q",
+     "evidence": "e",
+     "score": 5,
+     "weight": 2
+    }
+   ],
+   "weighted_average": 5.0
+  }
+ },
+ "reviewer_prompts": [
+  "You are reviewing a block implementation against its spec and a quality\nrubric. The diff is the only ground truth; everything the implementer reports\nabout their own work is a claim you verify against it.\n\n## Tools \u2014 the diff says what changed, the repo says what it means\n\nYou are not working from the diff alone. You hold `Read`, `Grep` and `Glob`\nover the project, and you should use them before you make a claim:\n\n- **Open the surrounding file.** A hunk shows you changed lines, not the\n  function they sit in. Read enough of the file to know whether the change is\n  correct where it landed.\n- **Grep for callers of every changed symbol.** A signature, a return type, a\n  raised error or a default that moved is a claim about every call site, and\n  the diff shows you none of them.\n- **Read the conventions docs before citing one.** Quote the rule as written,\n  from the file it is written in.\n\nThe diff stays ground truth for *what changed* \u2014 anything outside it is\ncontext, not something you are reviewing. And you have `Read`, `Grep` and\n`Glob` and nothing else, deliberately: you report, you never fix. Do not\npropose to edit a file yourself; describe the change and let the build's own\nagents make it.\n\n## Diff (ground truth)\n```\n(no diff captured)\n```\n\n## Spec Context \u2014 the scenarios this block must satisfy\nBlock 1: Adder\nadd two numbers\n\n## Implementer Report (unverified claims, incl. RED/GREEN test evidence)\n### GREEN evidence (suite after implementation)\n```\nAll tests pass\n```\n\n## Rubric\n# Rubric\n\n- Q (weight 2): correct\n\n\n## Coding Standards\n(no standards provided)\n\n## Conventions\n\nThe standards above carry the project's own `CLAUDE.md` chain \u2014 the repo root's\nfile plus any `CLAUDE.md` governing a directory a changed file sits under. Those\nare written rules, and this angle is about them alone.\n\n**The evidence bar: only flag a violation when you can quote the exact rule and\nthe exact line that breaks it.** No style preferences, no \"spirit of the doc\"\ninferences, no rule you believe a project like this one probably has. Name the\n`CLAUDE.md` path and quote the rule verbatim, so the report can cite it. If no\n`CLAUDE.md` applies to any changed file, return nothing for this angle \u2014 that\nis the correct result, not a gap.\n\nReview the change against the project's explicit written rules \u2014 import\npatterns, framework conventions, language style, function and type\ndeclarations, error handling, logging, testing practice, platform\ncompatibility, and naming. Alongside that, look for bugs that will actually\naffect behavior: logic errors, unhandled null or missing values, race\nconditions, resource leaks, security vulnerabilities, and performance\nproblems. And for the quality issues worth raising at review time: duplicated\ncode, missing critical error handling, accessibility problems, and inadequate\ntest coverage.\n\nRate every issue 0-100 on how confident you are that it is real:\n\n- **0-25** \u2014 likely a false positive, or a pre-existing issue this change did\n  not introduce.\n- **26-50** \u2014 a minor nitpick that no written project rule asks for.\n- **51-75** \u2014 valid, but low impact.\n- **76-90** \u2014 an important issue that needs attention.\n- **91-100** \u2014 a critical bug, or an explicit violation of a written project\n  rule.\n\nBe thorough, then filter aggressively \u2014 quality over quantity. Focus on the\nissues that truly matter.\n\nFor each one give all four of: a clear description carrying its confidence\nscore; the file path and line number; the specific rule it breaks or an\nexplanation of the bug; and a concrete fix.\n\nReport an issue in `issues` only at confidence 80 or above; below that it is a\n`findings` entry with its honest confidence, and the orchestrator decides.\nRecord the score in the JSON `confidence` field on its 0.0-1.0 scale \u2014 a 0-100\nscore of 85 is `0.85`.\n\n## Review Method\n1. Start with strengths: name what the implementation genuinely does well,\n   grounded in specific lines of the diff.\n2. Verify the implementer's claims: for each claim (behavior implemented,\n   tests run, evidence shown), find the supporting code in the diff. A claim\n   without supporting code in the diff is a finding.\n3. Account for what the diff removed. For every line the diff **deletes or\n   replaces**, name the invariant or behavior it enforced, then search the new\n   code for where that invariant is re-established. If you cannot find it, that\n   is a finding: a removed guard, a dropped error path, a narrowed validation,\n   a deleted test that covered a real case. Work it through the Removed\n   Behavior section below.\n4. Judge spec compliance scenario by scenario \u2014 Missing / Extra /\n   Misunderstood \u2014 sorting each deviation into exactly one:\n   - **Missing** (`missing`) \u2014 spec behavior with no implementation in the diff\n   - **Extra** (`extra`) \u2014 implementation beyond what the spec asks for\n   - **Misunderstood** (`misunderstood`) \u2014 implementation that addresses a\n     scenario but gets its meaning wrong\n5. Score each rubric dimension 1-5 with evidence from the diff. Where coding\n   standards are provided, reflect violations in the relevant dimension\n   scores.\n6. For every issue, cite the file path and line, say why it matters, and say\n   how to fix it \u2014 all three in the description.\n\n## Removed Behavior\n\nA deletion leaves no trace to review. This build deletes code on purpose \u2014 a\nrefactor pass runs on every block and one more runs over the whole change \u2014\nand the test files are hash-protected while a guard clause in source is not.\nSo removals get their own pass, and `removed-behavior` is a `dimension` value\nyou may use on any finding this section produces.\n\nTake every `-` line in the diff. For each one, answer two questions in order:\n**what did this line guarantee, and where in the new code is that guarantee\nnow?** A removal is fine when the second answer exists and you can point at it.\nA removal you cannot account for is a finding, whatever the implementer's\nreport says about it.\n\nTo name an invariant, look for: data-consistency requirements; which state\ntransitions are valid and which are not; constraints that hold between two or\nmore fields; business rules encoded in a type; and preconditions or\npostconditions a function relied on.\n\nThese are the shapes an invariant most often dissolves into, and each is worth\nflagging on its own:\n\n- a type that exposes its internals for mutation;\n- an invariant now enforced only by a comment or a docstring;\n- validation missing at a construction boundary;\n- enforcement applied inconsistently across the places that mutate;\n- a type that depends on the code around it to keep its own invariant true.\n\nDeleted error handling is the case that hides best, because the code still\nruns. Audit what the change did to failure paths:\n\nWork the change in five passes. A silent failure is one that costs someone\nhours later precisely because nothing recorded it at the time.\n\n1.  **Locate every error handler.** Systematically find: every try/catch or\n    try/except or Result-style branch; every error callback and error event\n    handler; every conditional that handles an error state; every fallback or\n    default value used on failure; every place an error is recorded and\n    execution continues anyway; every null-safe access that might be skipping\n    a failing operation.\n\n2.  **Interrogate each one on five axes.**\n    - *Logging quality* \u2014 is the failure recorded at a severity that matches\n      its seriousness, with enough context to identify what operation failed\n      and on what data? Would this line help someone debug the problem six\n      months from now?\n    - *Caller and user feedback* \u2014 does whoever is affected learn what went\n      wrong and what they can do about it, or does the message say nothing\n      that distinguishes this failure from any other?\n    - *Catch specificity* \u2014 does the handler catch only the error types it\n      expects? Name every kind of unexpected error this handler could swallow.\n      Should it be several narrower handlers instead?\n    - *Fallback behavior* \u2014 is the fallback explicitly asked for by the spec,\n      or does it mask the underlying problem? Is it a fallback to a stub or\n      fake outside test code?\n    - *Propagation* \u2014 should this error travel to a higher-level handler\n      rather than stop here? Does catching here skip cleanup or resource\n      release that a propagated error would have triggered?\n\n3.  **Examine the error messages themselves.** Each should say what went wrong\n    in terms its reader understands, give an actionable next step, carry the\n    relevant context such as the file or operation name, and be specific\n    enough to tell this failure apart from a similar one.\n\n4.  **Hunt the patterns that hide failures.** Empty catch blocks. Handlers\n    that record the error and continue as if nothing happened. Returning null,\n    a default, or an empty result on error with nothing recorded. Null-safe\n    access used to silently skip an operation that was supposed to run.\n    Fallback chains that try one approach after another without saying why the\n    first failed. Retry logic that exhausts its attempts and tells no one.\n\n5.  **Check against the project's own standards.** Whatever the project's\n    written rules say about error handling \u2014 how failures are recorded, what\n    context they must carry, where they are allowed to be swallowed \u2014 is the\n    bar, not your own preference.\n\nDescribe each such finding with all seven of:\n\n1.  **Location** \u2014 file path and line number.\n2.  **Severity and confidence** \u2014 from the calibration below, plus the 0-100\n    confidence score.\n3.  **Issue description** \u2014 what is wrong and why it is a problem.\n4.  **Hidden errors** \u2014 the specific kinds of failure that can now pass\n    unnoticed.\n5.  **Impact** \u2014 how this shows up for whoever hits it, and what it costs\n    someone debugging it later.\n6.  **Recommendation** \u2014 the specific change that fixes it.\n7.  **Example** \u2014 what the corrected code should look like.\n\nA deleted or weakened test is a removal too, and the same two questions apply\nto it \u2014 what did this test guarantee, and what still guarantees it?\n\nJudge coverage behaviorally, not by lines. The bar is adequate coverage of the\nfunctionality that matters, without pedantry about hitting 100% \u2014 a test that\nprevents a real bug is worth raising, one that chases a metric is not.\n\nA gap is worth reporting when it is one of: an untested error path that could\nfail silently; a missing boundary case; an uncovered branch of real logic; an\nabsent negative case for validation; or missing coverage of concurrent or\nasynchronous behavior where that behavior matters.\n\nAsk four things of the tests that are there:\n\n- do they test behavior and contracts, or implementation details?\n- would they catch a meaningful regression from a future change?\n- do they survive a reasonable refactoring?\n- do their names describe, in meaningful phrases, what they actually assert?\n\n## Severity Calibration\nCritical = correctness or security is broken; blocks merge.\nMajor = this block cannot be trusted until fixed.\nMinor = improvement opportunity; trust is intact.\nNote = observation, no action needed.\n\n## Output Format\nReturn a JSON object matching this schema:\n\n```json\n{\n  \"strengths\": [\"What the diff does well, with file references\"],\n  \"missing\": [\"Spec scenario/behavior absent from the diff\"],\n  \"extra\": [\"Implementation beyond the spec\"],\n  \"misunderstood\": [\"Scenario implemented with the wrong meaning\"],\n  \"scores\": [\n    {\n      \"dimension\": \"Dimension Name\",\n      \"weight\": 2,\n      \"score\": 4,\n      \"evidence\": \"Specific evidence from the diff\"\n    }\n  ],\n  \"issues\": [\n    {\n      \"dimension\": \"Dimension Name\",\n      \"severity\": \"Critical\",\n      \"description\": \"What's wrong, why it matters, and how to fix it\",\n      \"file_path\": \"path/to/file.py\",\n      \"line\": 42\n    }\n  ],\n  \"findings\": [\n    {\n      \"claim\": \"One discrete, checkable statement about the diff\",\n      \"severity\": \"Major\",\n      \"confidence\": 0.8,\n      \"evidence\": \"The exact diff lines that support the claim\",\n      \"dimension\": \"Dimension Name\",\n      \"file_path\": \"path/to/file.py\",\n      \"line\": 42,\n      \"defect_class\": \"The kind of defect, in a few words\",\n      \"other_locations\": [\"path/to/other.py:17\"]\n    }\n  ],\n  \"prior_assessments\": [\n    {\n      \"finding_id\": \"B01-R1-F1\",\n      \"status\": \"resolved | still_present | partially_resolved | cannot_verify\",\n      \"evidence\": \"The diff lines that show the status\"\n    }\n  ]\n}\n```\n\nAn empty array is the correct value for missing/extra/misunderstood when the\ndiff matches the spec \u2014 report what you verified, not what you assume.\n\nScore honestly. A 5 means genuinely excellent, not just \"no obvious problems.\"\nA 3 means acceptable but clearly improvable. A 1 means fundamentally broken.\n\n## Confidence\nEvery score and finding carries a `confidence` from 0.0 to 1.0: how sure you\nare, given only what the diff shows. Use it honestly \u2014 a well-grounded 1.0 and\na hunch at 0.3 are both useful, and a hunch dressed up as certainty is not.\nLow confidence is not a penalty: it marks a claim as weak evidence rather than\na verdict, so it will neither sink nor rescue the block on its own.\n\n## Findings\n`findings` are your discrete claims, one per checkable statement, each with the\nevidence that supports it. They are **proposals**: an orchestrator with the\nfull build context accepts or rejects each one before anything acts on it.\nWrite each so it can be judged alone \u2014 a finding whose evidence is \"see above\"\ncannot be adjudicated and will be discarded. Every issue you list should also\nappear as a finding.\n\nName the kind of defect in a few words in `defect_class`, and list every other\nplace in the diff with the same defect as `path:line` in `other_locations`.\n\nFor each finding listed under Findings still open from earlier rounds, give its\nstatus with the diff lines that show it. The status is `resolved`,\n`still_present`, `partially_resolved` or `cannot_verify`, and it goes in\n`prior_assessments` with the finding's `finding_id`. With no such list above,\n`prior_assessments` is an empty array.\n\n`dimension` is normally a rubric dimension's name. Two values are also\navailable for findings the rubric has no dimension for:\n`removed-behavior` \u2014 an invariant, guard, error path, validation or test the\ndiff deleted and did not re-establish \u2014 and `conventions` \u2014 a written\n`CLAUDE.md` rule the diff breaks, quoted.\n\nReturn ONLY the JSON. No commentary.\n",
+  "You are reviewing a block implementation against its spec and a quality\nrubric. The diff is the only ground truth; everything the implementer reports\nabout their own work is a claim you verify against it.\n\n## Tools \u2014 the diff says what changed, the repo says what it means\n\nYou are not working from the diff alone. You hold `Read`, `Grep` and `Glob`\nover the project, and you should use them before you make a claim:\n\n- **Open the surrounding file.** A hunk shows you changed lines, not the\n  function they sit in. Read enough of the file to know whether the change is\n  correct where it landed.\n- **Grep for callers of every changed symbol.** A signature, a return type, a\n  raised error or a default that moved is a claim about every call site, and\n  the diff shows you none of them.\n- **Read the conventions docs before citing one.** Quote the rule as written,\n  from the file it is written in.\n\nThe diff stays ground truth for *what changed* \u2014 anything outside it is\ncontext, not something you are reviewing. And you have `Read`, `Grep` and\n`Glob` and nothing else, deliberately: you report, you never fix. Do not\npropose to edit a file yourself; describe the change and let the build's own\nagents make it.\n\n## Diff (ground truth)\n```\ndiff --git a/app.py b/app.py\nindex <SHORT>..<SHORT> 100644\n--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b + 1\n+    return a + b\n\n```\n\n## Spec Context \u2014 the scenarios this block must satisfy\nBlock 1: Adder\nadd two numbers\n\n## Implementer Report (unverified claims, incl. RED/GREEN test evidence)\n### GREEN evidence (suite after implementation)\n```\nAll tests pass\n```\n\n### Findings still open from earlier rounds\n- B01-R1-F1 [Major] off-by-one in add() (app.py:2)\n- B01-R1-F2 [Minor] add() has no docstring (app.py:2)\n- B01-R1-F3 [Note] add() could be a lambda (app.py:2)\n\n## Rubric\n# Rubric\n\n- Q (weight 2): correct\n\n\n## Coding Standards\n(no standards provided)\n\n## Conventions\n\nThe standards above carry the project's own `CLAUDE.md` chain \u2014 the repo root's\nfile plus any `CLAUDE.md` governing a directory a changed file sits under. Those\nare written rules, and this angle is about them alone.\n\n**The evidence bar: only flag a violation when you can quote the exact rule and\nthe exact line that breaks it.** No style preferences, no \"spirit of the doc\"\ninferences, no rule you believe a project like this one probably has. Name the\n`CLAUDE.md` path and quote the rule verbatim, so the report can cite it. If no\n`CLAUDE.md` applies to any changed file, return nothing for this angle \u2014 that\nis the correct result, not a gap.\n\nReview the change against the project's explicit written rules \u2014 import\npatterns, framework conventions, language style, function and type\ndeclarations, error handling, logging, testing practice, platform\ncompatibility, and naming. Alongside that, look for bugs that will actually\naffect behavior: logic errors, unhandled null or missing values, race\nconditions, resource leaks, security vulnerabilities, and performance\nproblems. And for the quality issues worth raising at review time: duplicated\ncode, missing critical error handling, accessibility problems, and inadequate\ntest coverage.\n\nRate every issue 0-100 on how confident you are that it is real:\n\n- **0-25** \u2014 likely a false positive, or a pre-existing issue this change did\n  not introduce.\n- **26-50** \u2014 a minor nitpick that no written project rule asks for.\n- **51-75** \u2014 valid, but low impact.\n- **76-90** \u2014 an important issue that needs attention.\n- **91-100** \u2014 a critical bug, or an explicit violation of a written project\n  rule.\n\nBe thorough, then filter aggressively \u2014 quality over quantity. Focus on the\nissues that truly matter.\n\nFor each one give all four of: a clear description carrying its confidence\nscore; the file path and line number; the specific rule it breaks or an\nexplanation of the bug; and a concrete fix.\n\nReport an issue in `issues` only at confidence 80 or above; below that it is a\n`findings` entry with its honest confidence, and the orchestrator decides.\nRecord the score in the JSON `confidence` field on its 0.0-1.0 scale \u2014 a 0-100\nscore of 85 is `0.85`.\n\n## Review Method\n1. Start with strengths: name what the implementation genuinely does well,\n   grounded in specific lines of the diff.\n2. Verify the implementer's claims: for each claim (behavior implemented,\n   tests run, evidence shown), find the supporting code in the diff. A claim\n   without supporting code in the diff is a finding.\n3. Account for what the diff removed. For every line the diff **deletes or\n   replaces**, name the invariant or behavior it enforced, then search the new\n   code for where that invariant is re-established. If you cannot find it, that\n   is a finding: a removed guard, a dropped error path, a narrowed validation,\n   a deleted test that covered a real case. Work it through the Removed\n   Behavior section below.\n4. Judge spec compliance scenario by scenario \u2014 Missing / Extra /\n   Misunderstood \u2014 sorting each deviation into exactly one:\n   - **Missing** (`missing`) \u2014 spec behavior with no implementation in the diff\n   - **Extra** (`extra`) \u2014 implementation beyond what the spec asks for\n   - **Misunderstood** (`misunderstood`) \u2014 implementation that addresses a\n     scenario but gets its meaning wrong\n5. Score each rubric dimension 1-5 with evidence from the diff. Where coding\n   standards are provided, reflect violations in the relevant dimension\n   scores.\n6. For every issue, cite the file path and line, say why it matters, and say\n   how to fix it \u2014 all three in the description.\n\n## Removed Behavior\n\nA deletion leaves no trace to review. This build deletes code on purpose \u2014 a\nrefactor pass runs on every block and one more runs over the whole change \u2014\nand the test files are hash-protected while a guard clause in source is not.\nSo removals get their own pass, and `removed-behavior` is a `dimension` value\nyou may use on any finding this section produces.\n\nTake every `-` line in the diff. For each one, answer two questions in order:\n**what did this line guarantee, and where in the new code is that guarantee\nnow?** A removal is fine when the second answer exists and you can point at it.\nA removal you cannot account for is a finding, whatever the implementer's\nreport says about it.\n\nTo name an invariant, look for: data-consistency requirements; which state\ntransitions are valid and which are not; constraints that hold between two or\nmore fields; business rules encoded in a type; and preconditions or\npostconditions a function relied on.\n\nThese are the shapes an invariant most often dissolves into, and each is worth\nflagging on its own:\n\n- a type that exposes its internals for mutation;\n- an invariant now enforced only by a comment or a docstring;\n- validation missing at a construction boundary;\n- enforcement applied inconsistently across the places that mutate;\n- a type that depends on the code around it to keep its own invariant true.\n\nDeleted error handling is the case that hides best, because the code still\nruns. Audit what the change did to failure paths:\n\nWork the change in five passes. A silent failure is one that costs someone\nhours later precisely because nothing recorded it at the time.\n\n1.  **Locate every error handler.** Systematically find: every try/catch or\n    try/except or Result-style branch; every error callback and error event\n    handler; every conditional that handles an error state; every fallback or\n    default value used on failure; every place an error is recorded and\n    execution continues anyway; every null-safe access that might be skipping\n    a failing operation.\n\n2.  **Interrogate each one on five axes.**\n    - *Logging quality* \u2014 is the failure recorded at a severity that matches\n      its seriousness, with enough context to identify what operation failed\n      and on what data? Would this line help someone debug the problem six\n      months from now?\n    - *Caller and user feedback* \u2014 does whoever is affected learn what went\n      wrong and what they can do about it, or does the message say nothing\n      that distinguishes this failure from any other?\n    - *Catch specificity* \u2014 does the handler catch only the error types it\n      expects? Name every kind of unexpected error this handler could swallow.\n      Should it be several narrower handlers instead?\n    - *Fallback behavior* \u2014 is the fallback explicitly asked for by the spec,\n      or does it mask the underlying problem? Is it a fallback to a stub or\n      fake outside test code?\n    - *Propagation* \u2014 should this error travel to a higher-level handler\n      rather than stop here? Does catching here skip cleanup or resource\n      release that a propagated error would have triggered?\n\n3.  **Examine the error messages themselves.** Each should say what went wrong\n    in terms its reader understands, give an actionable next step, carry the\n    relevant context such as the file or operation name, and be specific\n    enough to tell this failure apart from a similar one.\n\n4.  **Hunt the patterns that hide failures.** Empty catch blocks. Handlers\n    that record the error and continue as if nothing happened. Returning null,\n    a default, or an empty result on error with nothing recorded. Null-safe\n    access used to silently skip an operation that was supposed to run.\n    Fallback chains that try one approach after another without saying why the\n    first failed. Retry logic that exhausts its attempts and tells no one.\n\n5.  **Check against the project's own standards.** Whatever the project's\n    written rules say about error handling \u2014 how failures are recorded, what\n    context they must carry, where they are allowed to be swallowed \u2014 is the\n    bar, not your own preference.\n\nDescribe each such finding with all seven of:\n\n1.  **Location** \u2014 file path and line number.\n2.  **Severity and confidence** \u2014 from the calibration below, plus the 0-100\n    confidence score.\n3.  **Issue description** \u2014 what is wrong and why it is a problem.\n4.  **Hidden errors** \u2014 the specific kinds of failure that can now pass\n    unnoticed.\n5.  **Impact** \u2014 how this shows up for whoever hits it, and what it costs\n    someone debugging it later.\n6.  **Recommendation** \u2014 the specific change that fixes it.\n7.  **Example** \u2014 what the corrected code should look like.\n\nA deleted or weakened test is a removal too, and the same two questions apply\nto it \u2014 what did this test guarantee, and what still guarantees it?\n\nJudge coverage behaviorally, not by lines. The bar is adequate coverage of the\nfunctionality that matters, without pedantry about hitting 100% \u2014 a test that\nprevents a real bug is worth raising, one that chases a metric is not.\n\nA gap is worth reporting when it is one of: an untested error path that could\nfail silently; a missing boundary case; an uncovered branch of real logic; an\nabsent negative case for validation; or missing coverage of concurrent or\nasynchronous behavior where that behavior matters.\n\nAsk four things of the tests that are there:\n\n- do they test behavior and contracts, or implementation details?\n- would they catch a meaningful regression from a future change?\n- do they survive a reasonable refactoring?\n- do their names describe, in meaningful phrases, what they actually assert?\n\n## Severity Calibration\nCritical = correctness or security is broken; blocks merge.\nMajor = this block cannot be trusted until fixed.\nMinor = improvement opportunity; trust is intact.\nNote = observation, no action needed.\n\n## Output Format\nReturn a JSON object matching this schema:\n\n```json\n{\n  \"strengths\": [\"What the diff does well, with file references\"],\n  \"missing\": [\"Spec scenario/behavior absent from the diff\"],\n  \"extra\": [\"Implementation beyond the spec\"],\n  \"misunderstood\": [\"Scenario implemented with the wrong meaning\"],\n  \"scores\": [\n    {\n      \"dimension\": \"Dimension Name\",\n      \"weight\": 2,\n      \"score\": 4,\n      \"evidence\": \"Specific evidence from the diff\"\n    }\n  ],\n  \"issues\": [\n    {\n      \"dimension\": \"Dimension Name\",\n      \"severity\": \"Critical\",\n      \"description\": \"What's wrong, why it matters, and how to fix it\",\n      \"file_path\": \"path/to/file.py\",\n      \"line\": 42\n    }\n  ],\n  \"findings\": [\n    {\n      \"claim\": \"One discrete, checkable statement about the diff\",\n      \"severity\": \"Major\",\n      \"confidence\": 0.8,\n      \"evidence\": \"The exact diff lines that support the claim\",\n      \"dimension\": \"Dimension Name\",\n      \"file_path\": \"path/to/file.py\",\n      \"line\": 42,\n      \"defect_class\": \"The kind of defect, in a few words\",\n      \"other_locations\": [\"path/to/other.py:17\"]\n    }\n  ],\n  \"prior_assessments\": [\n    {\n      \"finding_id\": \"B01-R1-F1\",\n      \"status\": \"resolved | still_present | partially_resolved | cannot_verify\",\n      \"evidence\": \"The diff lines that show the status\"\n    }\n  ]\n}\n```\n\nAn empty array is the correct value for missing/extra/misunderstood when the\ndiff matches the spec \u2014 report what you verified, not what you assume.\n\nScore honestly. A 5 means genuinely excellent, not just \"no obvious problems.\"\nA 3 means acceptable but clearly improvable. A 1 means fundamentally broken.\n\n## Confidence\nEvery score and finding carries a `confidence` from 0.0 to 1.0: how sure you\nare, given only what the diff shows. Use it honestly \u2014 a well-grounded 1.0 and\na hunch at 0.3 are both useful, and a hunch dressed up as certainty is not.\nLow confidence is not a penalty: it marks a claim as weak evidence rather than\na verdict, so it will neither sink nor rescue the block on its own.\n\n## Findings\n`findings` are your discrete claims, one per checkable statement, each with the\nevidence that supports it. They are **proposals**: an orchestrator with the\nfull build context accepts or rejects each one before anything acts on it.\nWrite each so it can be judged alone \u2014 a finding whose evidence is \"see above\"\ncannot be adjudicated and will be discarded. Every issue you list should also\nappear as a finding.\n\nName the kind of defect in a few words in `defect_class`, and list every other\nplace in the diff with the same defect as `path:line` in `other_locations`.\n\nFor each finding listed under Findings still open from earlier rounds, give its\nstatus with the diff lines that show it. The status is `resolved`,\n`still_present`, `partially_resolved` or `cannot_verify`, and it goes in\n`prior_assessments` with the finding's `finding_id`. With no such list above,\n`prior_assessments` is an empty array.\n\n`dimension` is normally a rubric dimension's name. Two values are also\navailable for findings the rubric has no dimension for:\n`removed-behavior` \u2014 an invariant, guard, error path, validation or test the\ndiff deleted and did not re-establish \u2014 and `conventions` \u2014 a written\n`CLAUDE.md` rule the diff breaks, quoted.\n\nReturn ONLY the JSON. No commentary.\n",
+  "You are reviewing a block implementation against its spec and a quality\nrubric. The diff is the only ground truth; everything the implementer reports\nabout their own work is a claim you verify against it.\n\n## Tools \u2014 the diff says what changed, the repo says what it means\n\nYou are not working from the diff alone. You hold `Read`, `Grep` and `Glob`\nover the project, and you should use them before you make a claim:\n\n- **Open the surrounding file.** A hunk shows you changed lines, not the\n  function they sit in. Read enough of the file to know whether the change is\n  correct where it landed.\n- **Grep for callers of every changed symbol.** A signature, a return type, a\n  raised error or a default that moved is a claim about every call site, and\n  the diff shows you none of them.\n- **Read the conventions docs before citing one.** Quote the rule as written,\n  from the file it is written in.\n\nThe diff stays ground truth for *what changed* \u2014 anything outside it is\ncontext, not something you are reviewing. And you have `Read`, `Grep` and\n`Glob` and nothing else, deliberately: you report, you never fix. Do not\npropose to edit a file yourself; describe the change and let the build's own\nagents make it.\n\n## Diff (ground truth)\n```\ndiff --git a/app.py b/app.py\nindex <SHORT>..<SHORT> 100644\n--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a + b + 1\n+    return a + b\n\n```\n\n## Spec Context \u2014 the scenarios this block must satisfy\nBlock 1: Adder\nadd two numbers\n\n## Implementer Report (unverified claims, incl. RED/GREEN test evidence)\n### GREEN evidence (suite after implementation)\n```\nAll tests pass\n```\n\n### Findings still open from earlier rounds\n- B01-R1-F2 [Minor] add() has no docstring (app.py:2)\n- B01-R1-F3 [Note] add() could be a lambda (app.py:2)\n- B01-R2-F1 [Minor] the name add is vague (app.py:2)\n\n## Rubric\n# Rubric\n\n- Q (weight 2): correct\n\n\n## Coding Standards\n(no standards provided)\n\n## Conventions\n\nThe standards above carry the project's own `CLAUDE.md` chain \u2014 the repo root's\nfile plus any `CLAUDE.md` governing a directory a changed file sits under. Those\nare written rules, and this angle is about them alone.\n\n**The evidence bar: only flag a violation when you can quote the exact rule and\nthe exact line that breaks it.** No style preferences, no \"spirit of the doc\"\ninferences, no rule you believe a project like this one probably has. Name the\n`CLAUDE.md` path and quote the rule verbatim, so the report can cite it. If no\n`CLAUDE.md` applies to any changed file, return nothing for this angle \u2014 that\nis the correct result, not a gap.\n\nReview the change against the project's explicit written rules \u2014 import\npatterns, framework conventions, language style, function and type\ndeclarations, error handling, logging, testing practice, platform\ncompatibility, and naming. Alongside that, look for bugs that will actually\naffect behavior: logic errors, unhandled null or missing values, race\nconditions, resource leaks, security vulnerabilities, and performance\nproblems. And for the quality issues worth raising at review time: duplicated\ncode, missing critical error handling, accessibility problems, and inadequate\ntest coverage.\n\nRate every issue 0-100 on how confident you are that it is real:\n\n- **0-25** \u2014 likely a false positive, or a pre-existing issue this change did\n  not introduce.\n- **26-50** \u2014 a minor nitpick that no written project rule asks for.\n- **51-75** \u2014 valid, but low impact.\n- **76-90** \u2014 an important issue that needs attention.\n- **91-100** \u2014 a critical bug, or an explicit violation of a written project\n  rule.\n\nBe thorough, then filter aggressively \u2014 quality over quantity. Focus on the\nissues that truly matter.\n\nFor each one give all four of: a clear description carrying its confidence\nscore; the file path and line number; the specific rule it breaks or an\nexplanation of the bug; and a concrete fix.\n\nReport an issue in `issues` only at confidence 80 or above; below that it is a\n`findings` entry with its honest confidence, and the orchestrator decides.\nRecord the score in the JSON `confidence` field on its 0.0-1.0 scale \u2014 a 0-100\nscore of 85 is `0.85`.\n\n## Review Method\n1. Start with strengths: name what the implementation genuinely does well,\n   grounded in specific lines of the diff.\n2. Verify the implementer's claims: for each claim (behavior implemented,\n   tests run, evidence shown), find the supporting code in the diff. A claim\n   without supporting code in the diff is a finding.\n3. Account for what the diff removed. For every line the diff **deletes or\n   replaces**, name the invariant or behavior it enforced, then search the new\n   code for where that invariant is re-established. If you cannot find it, that\n   is a finding: a removed guard, a dropped error path, a narrowed validation,\n   a deleted test that covered a real case. Work it through the Removed\n   Behavior section below.\n4. Judge spec compliance scenario by scenario \u2014 Missing / Extra /\n   Misunderstood \u2014 sorting each deviation into exactly one:\n   - **Missing** (`missing`) \u2014 spec behavior with no implementation in the diff\n   - **Extra** (`extra`) \u2014 implementation beyond what the spec asks for\n   - **Misunderstood** (`misunderstood`) \u2014 implementation that addresses a\n     scenario but gets its meaning wrong\n5. Score each rubric dimension 1-5 with evidence from the diff. Where coding\n   standards are provided, reflect violations in the relevant dimension\n   scores.\n6. For every issue, cite the file path and line, say why it matters, and say\n   how to fix it \u2014 all three in the description.\n\n## Removed Behavior\n\nA deletion leaves no trace to review. This build deletes code on purpose \u2014 a\nrefactor pass runs on every block and one more runs over the whole change \u2014\nand the test files are hash-protected while a guard clause in source is not.\nSo removals get their own pass, and `removed-behavior` is a `dimension` value\nyou may use on any finding this section produces.\n\nTake every `-` line in the diff. For each one, answer two questions in order:\n**what did this line guarantee, and where in the new code is that guarantee\nnow?** A removal is fine when the second answer exists and you can point at it.\nA removal you cannot account for is a finding, whatever the implementer's\nreport says about it.\n\nTo name an invariant, look for: data-consistency requirements; which state\ntransitions are valid and which are not; constraints that hold between two or\nmore fields; business rules encoded in a type; and preconditions or\npostconditions a function relied on.\n\nThese are the shapes an invariant most often dissolves into, and each is worth\nflagging on its own:\n\n- a type that exposes its internals for mutation;\n- an invariant now enforced only by a comment or a docstring;\n- validation missing at a construction boundary;\n- enforcement applied inconsistently across the places that mutate;\n- a type that depends on the code around it to keep its own invariant true.\n\nDeleted error handling is the case that hides best, because the code still\nruns. Audit what the change did to failure paths:\n\nWork the change in five passes. A silent failure is one that costs someone\nhours later precisely because nothing recorded it at the time.\n\n1.  **Locate every error handler.** Systematically find: every try/catch or\n    try/except or Result-style branch; every error callback and error event\n    handler; every conditional that handles an error state; every fallback or\n    default value used on failure; every place an error is recorded and\n    execution continues anyway; every null-safe access that might be skipping\n    a failing operation.\n\n2.  **Interrogate each one on five axes.**\n    - *Logging quality* \u2014 is the failure recorded at a severity that matches\n      its seriousness, with enough context to identify what operation failed\n      and on what data? Would this line help someone debug the problem six\n      months from now?\n    - *Caller and user feedback* \u2014 does whoever is affected learn what went\n      wrong and what they can do about it, or does the message say nothing\n      that distinguishes this failure from any other?\n    - *Catch specificity* \u2014 does the handler catch only the error types it\n      expects? Name every kind of unexpected error this handler could swallow.\n      Should it be several narrower handlers instead?\n    - *Fallback behavior* \u2014 is the fallback explicitly asked for by the spec,\n      or does it mask the underlying problem? Is it a fallback to a stub or\n      fake outside test code?\n    - *Propagation* \u2014 should this error travel to a higher-level handler\n      rather than stop here? Does catching here skip cleanup or resource\n      release that a propagated error would have triggered?\n\n3.  **Examine the error messages themselves.** Each should say what went wrong\n    in terms its reader understands, give an actionable next step, carry the\n    relevant context such as the file or operation name, and be specific\n    enough to tell this failure apart from a similar one.\n\n4.  **Hunt the patterns that hide failures.** Empty catch blocks. Handlers\n    that record the error and continue as if nothing happened. Returning null,\n    a default, or an empty result on error with nothing recorded. Null-safe\n    access used to silently skip an operation that was supposed to run.\n    Fallback chains that try one approach after another without saying why the\n    first failed. Retry logic that exhausts its attempts and tells no one.\n\n5.  **Check against the project's own standards.** Whatever the project's\n    written rules say about error handling \u2014 how failures are recorded, what\n    context they must carry, where they are allowed to be swallowed \u2014 is the\n    bar, not your own preference.\n\nDescribe each such finding with all seven of:\n\n1.  **Location** \u2014 file path and line number.\n2.  **Severity and confidence** \u2014 from the calibration below, plus the 0-100\n    confidence score.\n3.  **Issue description** \u2014 what is wrong and why it is a problem.\n4.  **Hidden errors** \u2014 the specific kinds of failure that can now pass\n    unnoticed.\n5.  **Impact** \u2014 how this shows up for whoever hits it, and what it costs\n    someone debugging it later.\n6.  **Recommendation** \u2014 the specific change that fixes it.\n7.  **Example** \u2014 what the corrected code should look like.\n\nA deleted or weakened test is a removal too, and the same two questions apply\nto it \u2014 what did this test guarantee, and what still guarantees it?\n\nJudge coverage behaviorally, not by lines. The bar is adequate coverage of the\nfunctionality that matters, without pedantry about hitting 100% \u2014 a test that\nprevents a real bug is worth raising, one that chases a metric is not.\n\nA gap is worth reporting when it is one of: an untested error path that could\nfail silently; a missing boundary case; an uncovered branch of real logic; an\nabsent negative case for validation; or missing coverage of concurrent or\nasynchronous behavior where that behavior matters.\n\nAsk four things of the tests that are there:\n\n- do they test behavior and contracts, or implementation details?\n- would they catch a meaningful regression from a future change?\n- do they survive a reasonable refactoring?\n- do their names describe, in meaningful phrases, what they actually assert?\n\n## Severity Calibration\nCritical = correctness or security is broken; blocks merge.\nMajor = this block cannot be trusted until fixed.\nMinor = improvement opportunity; trust is intact.\nNote = observation, no action needed.\n\n## Output Format\nReturn a JSON object matching this schema:\n\n```json\n{\n  \"strengths\": [\"What the diff does well, with file references\"],\n  \"missing\": [\"Spec scenario/behavior absent from the diff\"],\n  \"extra\": [\"Implementation beyond the spec\"],\n  \"misunderstood\": [\"Scenario implemented with the wrong meaning\"],\n  \"scores\": [\n    {\n      \"dimension\": \"Dimension Name\",\n      \"weight\": 2,\n      \"score\": 4,\n      \"evidence\": \"Specific evidence from the diff\"\n    }\n  ],\n  \"issues\": [\n    {\n      \"dimension\": \"Dimension Name\",\n      \"severity\": \"Critical\",\n      \"description\": \"What's wrong, why it matters, and how to fix it\",\n      \"file_path\": \"path/to/file.py\",\n      \"line\": 42\n    }\n  ],\n  \"findings\": [\n    {\n      \"claim\": \"One discrete, checkable statement about the diff\",\n      \"severity\": \"Major\",\n      \"confidence\": 0.8,\n      \"evidence\": \"The exact diff lines that support the claim\",\n      \"dimension\": \"Dimension Name\",\n      \"file_path\": \"path/to/file.py\",\n      \"line\": 42,\n      \"defect_class\": \"The kind of defect, in a few words\",\n      \"other_locations\": [\"path/to/other.py:17\"]\n    }\n  ],\n  \"prior_assessments\": [\n    {\n      \"finding_id\": \"B01-R1-F1\",\n      \"status\": \"resolved | still_present | partially_resolved | cannot_verify\",\n      \"evidence\": \"The diff lines that show the status\"\n    }\n  ]\n}\n```\n\nAn empty array is the correct value for missing/extra/misunderstood when the\ndiff matches the spec \u2014 report what you verified, not what you assume.\n\nScore honestly. A 5 means genuinely excellent, not just \"no obvious problems.\"\nA 3 means acceptable but clearly improvable. A 1 means fundamentally broken.\n\n## Confidence\nEvery score and finding carries a `confidence` from 0.0 to 1.0: how sure you\nare, given only what the diff shows. Use it honestly \u2014 a well-grounded 1.0 and\na hunch at 0.3 are both useful, and a hunch dressed up as certainty is not.\nLow confidence is not a penalty: it marks a claim as weak evidence rather than\na verdict, so it will neither sink nor rescue the block on its own.\n\n## Findings\n`findings` are your discrete claims, one per checkable statement, each with the\nevidence that supports it. They are **proposals**: an orchestrator with the\nfull build context accepts or rejects each one before anything acts on it.\nWrite each so it can be judged alone \u2014 a finding whose evidence is \"see above\"\ncannot be adjudicated and will be discarded. Every issue you list should also\nappear as a finding.\n\nName the kind of defect in a few words in `defect_class`, and list every other\nplace in the diff with the same defect as `path:line` in `other_locations`.\n\nFor each finding listed under Findings still open from earlier rounds, give its\nstatus with the diff lines that show it. The status is `resolved`,\n`still_present`, `partially_resolved` or `cannot_verify`, and it goes in\n`prior_assessments` with the finding's `finding_id`. With no such list above,\n`prior_assessments` is an empty array.\n\n`dimension` is normally a rubric dimension's name. Two values are also\navailable for findings the rubric has no dimension for:\n`removed-behavior` \u2014 an invariant, guard, error path, validation or test the\ndiff deleted and did not re-establish \u2014 and `conventions` \u2014 a written\n`CLAUDE.md` rule the diff breaks, quoted.\n\nReturn ONLY the JSON. No commentary.\n"
+ ],
+ "status": "BlockStatus.DONE",
+ "unfixed": "## Unfixed review findings\n\nAccepted review findings that buildme left unfixed, each with the reason.\n\n- Block 1 (Adder): [Minor] add() has no docstring (`app.py:2`) \u2014 still open after the fix on pass (cannot_verify; one fix pass per block)\n- Block 1 (Adder): [Minor] the name add is vague (`app.py:2`) \u2014 still open after the fix on pass (cannot_verify; one fix pass per block)\n"
+}

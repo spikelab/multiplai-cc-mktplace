@@ -624,3 +624,132 @@ def test_the_cap_holds_when_the_names_alone_are_over_it(tmp_path):
     text = _read_registry(config, _registry_context(config), ["billing"])
     assert len(text) <= REGISTRY_TEXT_LIMIT
     assert text.endswith(f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)")
+
+
+# --- the requirements of the components this one depends on (plan item 48) ---
+
+
+def _component_tree(tmp_path, deps: dict[str, list[str]], specs: dict[str, str]):
+    """A change `feat` with one component per key of *deps*, each `depends_on`
+    its list, and a `specs.md` from *specs* where given. Returns the config of
+    the component `feat/billing`."""
+    project = tmp_path / "project"
+    root = project / "specs" / "changes" / "feat"
+    (root / "proposal.md").parent.mkdir(parents=True)
+    (root / "proposal.md").write_text("PROPOSAL")
+    for cid, dep_ids in deps.items():
+        comp = root / "components" / cid
+        comp.mkdir(parents=True)
+        (comp / "plan.md").write_text(f"# Plan: {cid}\n")
+        (comp / ".change.yaml").write_text("depends_on: [" + ", ".join(dep_ids) + "]\n")
+        if cid in specs:
+            (comp / "specs.md").write_text(specs[cid])
+    (root / "components" / "billing" / "implementation-plan.md").write_text("design")
+    config = BuildConfig(project_dir=project, change_name="feat/billing")
+    config.specs_dir = project / "specs"
+    return config
+
+
+def _spec(cid: str, body: str = "") -> str:
+    return (
+        f"# Capability: {cid}\n\n## ADDED Requirements\n\n"
+        f"### Requirement: {cid.upper()} rule\n{cid.upper()}-MARKER\n{body}"
+    )
+
+
+class TestDependencySpecsInThePrompts:
+    @pytest.mark.parametrize("artifact", ["design", "tasks"])
+    def test_design_and_tasks_get_the_transitive_dependencies_specs(
+        self, artifact, tmp_path
+    ):
+        config = _component_tree(
+            tmp_path,
+            {"billing": ["users"], "users": ["accounts"], "accounts": [], "other": []},
+            {c: _spec(c) for c in ("billing", "users", "accounts", "other")},
+        )
+        ctx = ChangeManager(config.specs_dir).artifact_context(
+            config.change_dir, artifact
+        )
+        prompt = _build_prompt(artifact, ctx, config)
+        section = prompt.split(
+            "## Requirements of the components this one depends on", 1
+        )[1]
+        assert "USERS-MARKER" in section and "ACCOUNTS-MARKER" in section
+        assert "OTHER-MARKER" not in prompt
+        assert "BILLING-MARKER" not in section  # its own specs are above
+        assert section.index(
+            "### users (specs/changes/feat/components/users/specs.md)"
+        ) < (section.index("### accounts (specs/changes/feat/components/accounts/"))
+
+    @pytest.mark.parametrize("artifact", ["design", "tasks"])
+    def test_a_component_with_no_dependency_gets_todays_prompt(
+        self, artifact, tmp_path
+    ):
+        from build_pipeline.llm_steps import spec_steps
+
+        config = _component_tree(
+            tmp_path, {"billing": [], "users": []}, {"users": _spec("users")}
+        )
+        ctx = ChangeManager(config.specs_dir).artifact_context(
+            config.change_dir, artifact
+        )
+        prompt = _build_prompt(artifact, ctx, config)
+        with patch.object(spec_steps, "dependency_specs_section", return_value=""):
+            today = _build_prompt(artifact, ctx, config)
+        assert prompt == today
+        assert spec_steps.DEPENDENCY_SPECS_HEADING not in prompt
+
+    def test_a_change_with_no_change_yaml_gets_no_section(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import dependency_specs_section
+
+        config = _make_config(tmp_path, {"billing": "R"})
+        assert dependency_specs_section(config.change_dir, config.specs_dir) == ""
+
+    def test_a_cycle_and_a_missing_dependency_dir_are_walked_once(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import dependency_specs_section
+
+        config = _component_tree(
+            tmp_path,
+            {"billing": ["users", "gone"], "users": ["billing", "users"]},
+            {"users": _spec("users"), "billing": _spec("billing")},
+        )
+        text = dependency_specs_section(config.change_dir, config.specs_dir)
+        assert text.count("USERS-MARKER") == 1
+        assert "BILLING-MARKER" not in text and "gone" not in text
+
+    def test_the_cap_drops_whole_files_from_the_end_and_names_them(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import (
+            REGISTRY_TEXT_LIMIT,
+            dependency_specs_section,
+        )
+
+        big = "x" * 25_000
+        config = _component_tree(
+            tmp_path,
+            {"billing": ["aaa", "bbb", "ccc"], "aaa": [], "bbb": [], "ccc": []},
+            {c: _spec(c, big + f"\n{c.upper()}-END\n") for c in ("aaa", "bbb", "ccc")},
+        )
+        text = dependency_specs_section(config.change_dir, config.specs_dir)
+        body = text.split("## Requirements of the components this one depends on", 1)[1]
+        assert len(body) <= REGISTRY_TEXT_LIMIT + 500  # the heading and rule
+        assert "AAA-END" in text and "BBB-END" in text and "CCC-END" not in text
+        assert (
+            "Left out to stay under 60,000 characters: ccc "
+            "(specs/changes/feat/components/ccc/specs.md; requirements: CCC rule)"
+        ) in text
+
+    def test_the_cap_holds_when_one_file_is_over_it(self, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import (
+            REGISTRY_TEXT_LIMIT,
+            dependency_specs_section,
+        )
+
+        names = "".join(f"### Requirement: Number {i}\nx\n" for i in range(5_000))
+        config = _component_tree(
+            tmp_path, {"billing": ["users"], "users": []}, {"users": names}
+        )
+        text = dependency_specs_section(config.change_dir, config.specs_dir)
+        assert "x\n### Requirement" not in text  # the file itself is left out
+        assert text.rstrip("\n").endswith(
+            f"(cut at {REGISTRY_TEXT_LIMIT:,} characters)"
+        )

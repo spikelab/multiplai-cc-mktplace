@@ -1,0 +1,15 @@
+{
+  "kind": "build",
+  "child": "dolcecleaning-feed-guard",
+  "argv": [
+    "python",
+    "-m",
+    "build_pipeline",
+    "build",
+    "--change",
+    "account-management/dolcecleaning-feed-guard"
+  ],
+  "pr_round": null,
+  "head_sha": "a8711d2a237902228ed69ab221aa4db01f22ed1f",
+  "at": "2026-10-27T07:23:37.980635+00:00"
+}
