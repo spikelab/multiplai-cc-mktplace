@@ -581,7 +581,10 @@ class EpicSettings:
     `review_dimensions` and `review_finder_model`: the dimension finders and
     their model for each review of a child's PR, passed as the review's
     `--dimensions` and `--finder-model` (`epic.review.review_argv`); None
-    leaves the review skill's own settings."""
+    leaves the review skill's own settings.
+    `shared_analysis`: run the codebase analysis once for the epic, at the
+    feature branch, and have each child reuse it (`Coordinator._shared_analysis`);
+    off, each child runs its own, as before."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
@@ -593,6 +596,7 @@ class EpicSettings:
     accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
     review_dimensions: list[str] | None = None
     review_finder_model: str | None = None
+    shared_analysis: bool = False
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -1016,6 +1020,10 @@ class BuildConfig:
     # `build --epic-child`: an epic's coordinator started this build (or its
     # saved command was run again). `orchestrator._epic_child` reads it.
     epic_child: bool = False
+    # `build --shared-analysis <dir>`: the epic's shared codebase analysis
+    # (`epic.shared_analysis`), which the coordinator passes once it finished.
+    # `spec_steps.run_codebase_analysis` reuses it; None analyses here.
+    shared_analysis_dir: Path | None = None
     # `models:` from specs/config.yaml: step, stage or `default` → a model spec
     # as written. `model_for` resolves it.
     model_specs: dict[str, str] = field(default_factory=dict)
@@ -1780,6 +1788,8 @@ class BuildConfig:
         self.base_ref = getattr(args, "base_ref", "") or ""
         self.feature_branch = getattr(args, "branch", "") or ""
         self.epic_child = bool(getattr(args, "epic_child", False))
+        shared = getattr(args, "shared_analysis", "") or ""
+        self.shared_analysis_dir = Path(shared) if shared else None
 
     def rebind_project_dir(self, new_project_dir: Path) -> None:
         """Point the whole config at a different checkout of the same project.
@@ -1887,6 +1897,13 @@ class BuildConfig:
                 worth,
             )
             worth = "breaks"
+        shared = epic_cfg.get("shared_analysis", False)
+        if not isinstance(shared, bool):
+            log.warning(
+                "Invalid epic.shared_analysis value %r in config.yaml — using false",
+                shared,
+            )
+            shared = False
         accept_size = epic_cfg.get("accept_size", False)
         if not isinstance(accept_size, bool):
             log.warning(
@@ -1915,6 +1932,7 @@ class BuildConfig:
             review_finder_model=_cfg_text(
                 epic_cfg.get("review_finder_model"), "epic.review_finder_model"
             ),
+            shared_analysis=shared,
         )
 
     def _discover_test_command(self) -> None:

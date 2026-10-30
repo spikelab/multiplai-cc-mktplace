@@ -65,6 +65,18 @@ waits for them and nothing new is launched, by `_loop` or inside a step
 and a re-run after `epic.max_usd` is raised runs it again; under it, it runs
 again with its share recomputed once the others end.
 `epic.json` and each summary hold `spent_usd` and `spend_complete`.
+
+Shared analysis (item 63 of plan-factory-merged-2026-10-29.md, behind
+`epic.shared_analysis`, off by default): before the first launch of a run,
+the codebase analysis runs once at `origin/<feature branch>`, in a detached
+worktree of its own, into `<epic_dir>/codebase-analysis/`
+(`_shared_analysis`, `code_analysis.run_shared`); its spend is an `analysis`
+record. Each child is then launched with `--shared-analysis <dir>`. A
+directory with no completion marker is a killed run and is analysed again
+from the start, before any child launches; a finished one whose settings
+are the current ones is kept even when the branch moved since, and the
+children re-check the facts whose cited files changed. Off, no child gets the
+flag and each runs its own analysis.
 """
 
 from __future__ import annotations
@@ -72,6 +84,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import io
 import json
 import logging
@@ -480,6 +493,8 @@ class Coordinator:
     merged: set[str] = field(
         default_factory=set
     )  # ids specs/archive/ holds on the feature branch: merged, never launched
+    shared: Path | None = None  # the finished shared analysis (`epic.shared_analysis`)
+    shared_tried: bool = False  # `_shared_analysis` ran in this invocation
 
     def change(self, cid: str) -> str:
         """The `--change` the child *cid* builds as (`phase.child_change`)."""
@@ -1084,6 +1099,14 @@ class Coordinator:
             argv.append("--accept-unknown-spend")
         if self.settings.accept_size:
             argv.append("--accept-size")
+        # Likewise the shared analysis: only this invocation's setting adds it.
+        if "--shared-analysis" in argv:
+            i = argv.index("--shared-analysis")
+            argv = argv[:i] + argv[i + 2 :]
+        if self.settings.shared_analysis:
+            shared = await self._shared_analysis(sha)
+            if shared is not None:
+                argv += ["--shared-analysis", str(shared)]
         c.attempt = records.start(self.epic_dir, "build", c.id, argv, head_sha=sha)
         c.launches += 1
         c.status, c.argv, c.reason = "running", argv, ""
@@ -1103,6 +1126,88 @@ class Coordinator:
         ):
             await CLOCK.sleep(POLL)
         return True
+
+    async def _shared_analysis(self, sha: str) -> Path | None:
+        """The epic's finished shared analysis directory (item 63), run here
+        at most once per invocation, before the launch that asked for it, so
+        no child starts while it runs. A finished one whose settings are
+        the current ones is kept, at whatever commit it was made (S42).
+        Otherwise it runs at *sha*, `origin/<feature branch>`, in the detached
+        worktree `<worktrees root>/buildme-analysis-<branch>`, replacing a
+        directory a killed run left with no marker (S41). None when it
+        failed: the children then analyse for themselves."""
+        from .. import code_analysis
+        from ..llm_steps.spec_steps import _codebase_analysis_call
+
+        if self.shared_tried:
+            return self.shared
+        self.shared_tried = True
+        directory = self.epic_dir / code_analysis.SHARED_DIR
+        settings = code_analysis.shared_settings(self.config)
+        marker = code_analysis.shared_marker(directory)
+        if marker is not None and marker.get("settings") == settings:
+            log.info(
+                "EPIC shared analysis: reusing %s, made at %s",
+                directory,
+                marker["sha"][:12],
+            )
+            self.shared = directory
+            return directory
+        w = git_ops.worktrees_root(self.repo) / (
+            "buildme-analysis-" + self.branch.replace("/", "-")
+        )
+        why = await asyncio.to_thread(feature_branch._checkout, self.repo, w, sha)
+        if why is not None:
+            log.warning("EPIC shared analysis not run: %s", why)
+            return None
+        prefix = git_ops.path_prefix(self.project_dir) or ""
+        project = w / prefix if prefix else w
+        try:  # the change's documents as the feature branch holds them
+            change = project / self.config.change_dir.relative_to(self.project_dir)
+        except ValueError:
+            change = self.config.change_dir
+        attempt = records.start(
+            self.epic_dir,
+            "analysis",
+            "shared",
+            ["codebase-analysis", str(project)],
+            head_sha=sha,
+        )
+        before = budget.process_spend().cost_usd
+        try:
+            marker = await code_analysis.run_shared(
+                directory,
+                project,
+                call=functools.partial(_codebase_analysis_call, config=self.config),
+                settings=settings,
+                name=self.config.project_name or self.project_dir.name,
+                named_text=code_analysis.epic_spec_text(change),
+            )
+        except BudgetExceededError:
+            records.finish(
+                attempt,
+                1,
+                interrupted=False,
+                extra={"spend": round(budget.process_spend().cost_usd - before, 6)},
+            )
+            raise
+        except Exception as exc:  # the children analyse for themselves
+            log.warning("EPIC shared analysis failed: %s: %s", type(exc).__name__, exc)
+            marker = None
+        except BaseException:  # a cancelled call records no usage: its spend is unknown
+            records.finish(attempt, None, interrupted=True)
+            raise
+        records.finish(
+            attempt,
+            0 if marker is not None else 1,
+            interrupted=False,
+            extra={"spend": round(budget.process_spend().cost_usd - before, 6)},
+        )
+        if marker is None:
+            return None
+        log.info("EPIC shared analysis: written to %s at %s", directory, sha[:12])
+        self.shared = directory
+        return directory
 
     def _done(self, c: Child, exit_code: int | None, *, interrupted: bool) -> None:
         records.finish(c.attempt, exit_code, interrupted=interrupted)

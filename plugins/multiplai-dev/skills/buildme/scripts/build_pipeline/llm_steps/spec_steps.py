@@ -516,6 +516,11 @@ async def run_codebase_analysis(
     more to the design than none. A project with no commit
     gets `code_analysis.no_commit_report` instead: labelled as not analysed,
     with its source files listed. *call* replaces the model call (tests).
+
+    With `--shared-analysis <dir>` (`epic.shared_analysis`) and a finished
+    shared analysis there whose settings are this build's, the report is
+    built from it (`code_analysis.reuse_shared`); without one, or with no
+    flag, the project is analysed here as above.
     """
     if not project_dir.exists():
         return "(new project — no existing code)"
@@ -523,13 +528,38 @@ async def run_codebase_analysis(
 
     md_path = config.codebase_analysis_path
     call = call or functools.partial(_codebase_analysis_call, config=config)
-    analysis = await code_analysis.analyse(
-        project_dir,
-        call=call,
-        max_units=config.codebase_analysis_max_units,
-        name=config.project_name or project_dir.name,
-        change_dir=config.change_dir,
-    )
+    name = config.project_name or project_dir.name
+    shared = config.shared_analysis_dir
+    marker = code_analysis.shared_marker(shared) if shared is not None else None
+    if marker is not None and marker.get("settings") != code_analysis.shared_settings(
+        config
+    ):
+        marker = None
+    if shared is not None and marker is None:
+        log.info(
+            "Codebase analysis: no finished shared analysis with this build's settings "
+            "in %s; analysing here",
+            shared,
+        )
+    if marker is not None:
+        plan = config.change_dir / "plan.md"
+        analysis = await code_analysis.reuse_shared(
+            shared,
+            marker,
+            project_dir,
+            call=call,
+            max_units=config.codebase_analysis_max_units,
+            name=name,
+            plan_text=plan.read_text(errors="replace") if plan.is_file() else "",
+        )
+    else:
+        analysis = await code_analysis.analyse(
+            project_dir,
+            call=call,
+            max_units=config.codebase_analysis_max_units,
+            name=name,
+            change_dir=config.change_dir,
+        )
     if analysis is None:
         return code_analysis.no_commit_report(project_dir)
     log.info(

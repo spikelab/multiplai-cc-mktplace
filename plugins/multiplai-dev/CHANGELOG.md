@@ -15,6 +15,11 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.144.0] - 2026-10-29
+
+### Added
+- **buildme**: `epic.shared_analysis: true` in `specs/config.yaml` makes an epic run the codebase analysis once, at the feature branch, before its first child starts, instead of once per child. Each child reuses it: facts about files that changed since are checked again against the child's code and dropped when their quoted lines moved, and only the files the child's `plan.md` names that the shared analysis did not read are analysed in the child. The shared analysis is written to `codebase-analysis/` in the epic's directory and its spend counts against `epic.max_usd`. A run stopped part way through is analysed again from the start before any child starts. Off by default: each child runs its own analysis, as before. Changing the setting does not change any plan revision.
+
 ## [0.143.0] - 2026-10-29
 
 ### Added
