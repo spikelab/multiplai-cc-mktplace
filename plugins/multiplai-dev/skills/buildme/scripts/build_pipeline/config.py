@@ -841,6 +841,16 @@ def parse_whole_suite(value: object) -> str:
     return "per_block"
 
 
+def parse_tdd_context(value: object) -> str:
+    """`tdd.context` from config.yaml as "full" or "sliced"; anything else
+    warns and is "full"."""
+    text = str(value).strip().lower()
+    if text in ("full", "sliced"):
+        return text
+    log.warning("Unrecognized tdd.context value %r in config.yaml — using full", value)
+    return "full"
+
+
 def parse_narrow_commands(value: object, project_dir: Path) -> list[NarrowCommand]:
     """`tdd.narrow_commands` from config.yaml: one entry per directory with a
     `dir` inside the project, a `command` with no `;`, `&` or `|`, and an
@@ -967,11 +977,20 @@ class BuildConfig:
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
     mutation_test_writer_max_turns: int = 30
+    # tdd.context: what `tdd_engine.assemble_context` gives the TDD agents.
+    # "full": the whole design, every requirement, the rubric and the memory
+    # files below. "sliced": the design sections the block cites, the
+    # requirements it satisfies, the rubric for the reviewer role only, and
+    # only the memory files in `tdd_memory_files`.
+    tdd_context: str = "full"
 
     # Memory files
     core_memory_files: list[str] = field(default_factory=lambda: ["technical-pref.md"])
     stack_memory_files: list[str] = field(default_factory=list)
     additional_memory_files: list[str] = field(default_factory=list)
+    # memory_files.tdd: the memory files TDD agents get with `tdd.context:
+    # sliced`; unused with "full".
+    tdd_memory_files: list[str] = field(default_factory=list)
 
     # Reference docs: per-stack/framework overrides from specs/config.yaml's
     # `reference_docs:` key. Empty means "built-in defaults only"; a key
@@ -1489,6 +1508,7 @@ class BuildConfig:
             self.stack = next(iter(stacks))
             self.stack_memory_files = stacks[self.stack]
         self.additional_memory_files = mem.get("additional", [])
+        self.tdd_memory_files = self._doc_list(mem.get("tdd"), "memory_files.tdd")
 
         # Reference docs (per stack/framework key, overriding the built-ins)
         self._load_reference_docs(data.get("reference_docs"))
@@ -1532,6 +1552,7 @@ class BuildConfig:
             self.spec_tests = False
         self.parallel_tests = parse_parallel(tdd.get("parallel", "auto"))
         self.test_timeout = parse_test_timeout(tdd.get("test_timeout"))
+        self.tdd_context = parse_tdd_context(tdd.get("context", "full"))
         db_check = tdd.get("db_check")
         if isinstance(db_check, str):
             self.db_check = db_check.strip()

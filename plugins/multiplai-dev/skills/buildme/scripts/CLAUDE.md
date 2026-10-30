@@ -298,6 +298,15 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   `current` arm depends on that. Resume rows are S1-S8 in
   plan-buildme-carry-block-notes-2026-10-27.md
   (`tests/test_handoff_notes_stop_resume.py`).
+- **`tdd.context: full` changes nothing.** `assemble_context` cuts the
+  bundle only under `sliced` (`_sliced_design`, `_sliced_requirements`, the
+  rubric for the `reviewer` role, `memory_files.tdd` for the memory files);
+  under `full`, the default, every prompt, context bundle and commit of a
+  block run equals the golden recorded at main 845ff594
+  (`tests/test_tdd_context_full.py`, `fixtures/tdd-context-full-golden.json`).
+  The setting is read when each bundle is built, so a resume uses the current
+  value, and `tdd:` is outside the plan revision: row S46 of
+  plan-factory-merged-2026-10-29.md (`tests/test_tdd_context_resume.py`).
 - **`SEARCHED:` is recorded, not gated.** Every review-fix brief ends with
   `prompts.implementation.REVIEW_FIX_SELF_CHECK`. `parse_searched` puts the
   section in the round record; a missing one is `searched: null` and a

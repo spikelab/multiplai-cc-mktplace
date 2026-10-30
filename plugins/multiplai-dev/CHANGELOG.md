@@ -15,6 +15,22 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.146.0] - 2026-10-29
+
+### Added
+
+- buildme: a new `tdd.context` setting in `specs/config.yaml` chooses what
+  each block's test writer, implementer and refactorer read. `full`, the
+  default, gives them what they get today, byte for byte. `sliced` gives them
+  only the design sections the block's name or tasks cite, the requirements
+  its `Satisfies:` line names, no rubric (the block review still reads it),
+  and only the memory files listed under the new `memory_files.tdd` key, to
+  make each prompt smaller. A block
+  that cites nothing still gets the whole design, and one whose `Satisfies:`
+  line names nothing still gets every requirement. Changing the setting
+  between a stop and a resume does not mark the plan stale; the resumed block
+  uses the new value.
+
 ## [0.145.0] - 2026-10-29
 
 ### Added
