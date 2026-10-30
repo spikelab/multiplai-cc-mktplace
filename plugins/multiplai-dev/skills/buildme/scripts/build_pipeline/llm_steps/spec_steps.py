@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 from code_facts import CallFn
+from multiplai_core.specs import read_change_meta
 
 from ..change_manager import (
     requirement_texts,
@@ -68,6 +69,14 @@ REGISTRY_HEADING = "## Current behaviour (specs/registry)"
 REGISTRY_PLAN_RULE = (
     "These files are what the code does today, for the capabilities this change's requirements "
     "name. Keep that behaviour unless a requirement above changes it."
+)
+
+DEPENDENCY_SPECS_HEADING = "## Requirements of the components this one depends on"
+DEPENDENCY_SPECS_RULE = (
+    "These are the specs.md of the components this one depends on: the `depends_on` "
+    "in its .change.yaml, and theirs in turn. Those components build these "
+    "requirements; this one uses what they provide as stated here, and does not "
+    "build it again."
 )
 
 
@@ -184,40 +193,48 @@ def _build_prompt(
     if artifact_id == "design":
         proposal_content = _read_dep(context, "proposal", config)
         specs_content = _read_specs(config)
-        return DESIGN_PROMPT.format(
-            project_context=project_context,
-            proposal_content=proposal_content,
-            plan_content=_read_plan(config),
-            specs_content=specs_content,
-            spec_ref=spec_issue_ref(config.change_dir),
-            codebase_analysis=codebase_analysis or "(new project)",
-            research=research or "(no research conducted)",
-            reference_docs=reference_docs or "(none available)",
-            audit_findings=audit_findings or "(none — first pass)",
-            instruction=instruction,
-            template=template,
-        ) + _registry_section(
-            config, context, _change_capabilities(config), REGISTRY_PLAN_RULE
+        return (
+            DESIGN_PROMPT.format(
+                project_context=project_context,
+                proposal_content=proposal_content,
+                plan_content=_read_plan(config),
+                specs_content=specs_content,
+                spec_ref=spec_issue_ref(config.change_dir),
+                codebase_analysis=codebase_analysis or "(new project)",
+                research=research or "(no research conducted)",
+                reference_docs=reference_docs or "(none available)",
+                audit_findings=audit_findings or "(none — first pass)",
+                instruction=instruction,
+                template=template,
+            )
+            + _registry_section(
+                config, context, _change_capabilities(config), REGISTRY_PLAN_RULE
+            )
+            + dependency_specs_section(config.change_dir, config.specs_dir)
         )
     elif artifact_id == "tasks":
         proposal_content = _read_dep(context, "proposal", config)
         specs_content = _read_specs(config)
         design_content = _read_dep(context, "design", config)
-        return TASKS_PROMPT.format(
-            project_context=project_context,
-            proposal_content=proposal_content,
-            plan_content=_read_plan(config),
-            specs_content=specs_content,
-            design_content=design_content,
-            use_cases_content=_read_dep(context, "use-cases", config),
-            granularity=config.task_granularity,
-            unknowns_content=context.get("unknowns_content") or "(none detected)",
-            reference_docs=reference_docs or "(none available)",
-            audit_findings=audit_findings or "(none — first pass)",
-            instruction=instruction,
-            template=template,
-        ) + _registry_section(
-            config, context, _change_capabilities(config), REGISTRY_PLAN_RULE
+        return (
+            TASKS_PROMPT.format(
+                project_context=project_context,
+                proposal_content=proposal_content,
+                plan_content=_read_plan(config),
+                specs_content=specs_content,
+                design_content=design_content,
+                use_cases_content=_read_dep(context, "use-cases", config),
+                granularity=config.task_granularity,
+                unknowns_content=context.get("unknowns_content") or "(none detected)",
+                reference_docs=reference_docs or "(none available)",
+                audit_findings=audit_findings or "(none — first pass)",
+                instruction=instruction,
+                template=template,
+            )
+            + _registry_section(
+                config, context, _change_capabilities(config), REGISTRY_PLAN_RULE
+            )
+            + dependency_specs_section(config.change_dir, config.specs_dir)
         )
     elif artifact_id == "unknowns":
         # Regeneration pass only — the first pass is one run_explainer call per
@@ -340,6 +357,95 @@ def _registry_section(config, context: dict, names: list[str], rule: str) -> str
     if not context.get("registry"):
         return ""
     return f"\n\n{REGISTRY_HEADING}\n\n{rule}\n\n{_read_registry(config, context, names)}\n"
+
+
+def _dependency_dirs(change_dir: Path) -> list[Path]:
+    """The change dirs of every component *change_dir* depends on: its
+    `.change.yaml` `depends_on`, then theirs, each once, nearest first. A
+    dependency is a sibling dir (`components/<id>` beside a component,
+    `changes/<name>` beside a change). One whose dir is gone, or whose
+    `.change.yaml` cannot be read, is skipped with a warning."""
+    found: list[Path] = []
+    seen = {Path(change_dir).name}
+    queue = [Path(change_dir)]
+    while queue:
+        current = queue.pop(0)
+        try:
+            deps = read_change_meta(current).get("depends_on") or []
+        except (OSError, UnicodeError, ValueError) as e:
+            log.warning("Cannot read the dependencies of %s: %s", current, e)
+            continue
+        if not isinstance(deps, list):
+            log.warning("depends_on in %s/.change.yaml is not a list", current)
+            continue
+        for dep in deps:
+            if not isinstance(dep, str) or dep in seen:
+                continue
+            seen.add(dep)
+            dep_dir = Path(change_dir).parent / dep
+            if not dep_dir.is_dir():
+                log.warning("%s depends on %s, which has no dir", current.name, dep)
+                continue
+            found.append(dep_dir)
+            queue.append(dep_dir)
+    return found
+
+
+def dependency_spec_files(change_dir: Path) -> list[Path]:
+    """The `specs.md` of each dir `_dependency_dirs` finds that has one, nearest
+    first: what `dependency_specs_section` reads and `spec_generator._plan_hashes`
+    hashes, so the prompt and the plan revision never disagree."""
+    files = [d / "specs.md" for d in _dependency_dirs(change_dir)]
+    return [f for f in files if f.is_file()]
+
+
+def dependency_specs_section(change_dir: Path, specs_dir: Path) -> str:
+    """The `## Requirements of the components this one depends on` section
+    appended to the design, tasks and plan-check prompts: the `specs.md` of each
+    component in the transitive `depends_on` (`_dependency_dirs`), each under
+    `### <id> (<path>)`. Over `REGISTRY_TEXT_LIMIT` characters, whole files are
+    dropped from the end and named instead, with their requirement names; names
+    still over it are cut (`_cap`). "" when no dependency has a `specs.md`, so a
+    component with no dependency gets today's prompt byte for byte."""
+    files = dependency_spec_files(change_dir)
+    if not files:
+        return ""
+    base = Path(specs_dir).parent
+
+    def label(f: Path) -> str:
+        try:
+            return f"{f.parent.name} ({f.relative_to(base)})"
+        except ValueError:
+            return f"{f.parent.name} ({f})"
+
+    texts = [f.read_text() for f in files]
+    parts = [f"### {label(f)}\n{text}" for f, text in zip(files, texts)]
+    dropped: list[str] = []
+
+    def named(i: int) -> str:
+        reqs = _REGISTRY_REQUIREMENT.findall(texts[i])
+        return (
+            f"{label(files[i])[:-1]}; requirements: {', '.join(reqs)})"
+            if reqs
+            else label(files[i])
+        )
+
+    def render() -> str:
+        left_out = (
+            f"Left out to stay under {REGISTRY_TEXT_LIMIT:,} characters: "
+            + ", ".join(dropped)
+            if dropped
+            else ""
+        )
+        return "\n\n".join(p for p in (*parts, left_out) if p)
+
+    while parts and len(render()) > REGISTRY_TEXT_LIMIT:
+        parts.pop()
+        dropped.insert(0, named(len(parts)))
+    return (
+        f"\n\n{DEPENDENCY_SPECS_HEADING}\n\n{DEPENDENCY_SPECS_RULE}\n\n"
+        f"{_cap(render())}\n"
+    )
 
 
 async def run_explainer(dep, config, usage_context: str = "") -> str:

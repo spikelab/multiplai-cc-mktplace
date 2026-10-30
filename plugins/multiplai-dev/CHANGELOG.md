@@ -15,6 +15,24 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.141.0] - 2026-10-29
+
+### Added
+
+- buildme: a component's design and tasks writers and its plan check now read
+  the requirements of the components it depends on. The `specs.md` of every
+  component in its `depends_on` in `.change.yaml`, and of their dependencies in
+  turn, is added to those prompts under `## Requirements of the components this
+  one depends on`, up to 60,000 characters; a file left out is named with its
+  requirement names. A component with no dependency gets the same prompts as
+  before.
+- buildme: an edit to the `specs.md` of a component another one depends on
+  (directly or in turn) now marks the dependent component's plan stale, as an
+  edit to `specs/registry/` already does: its design, unknowns, tasks and
+  rubric are planned again. After the upgrade, the plan of each component that
+  has a dependency gets a new revision once, so it is planned again on its next
+  run; components with no dependency keep their plan revision.
+
 ## [0.140.0] - 2026-10-29
 
 ### Added
