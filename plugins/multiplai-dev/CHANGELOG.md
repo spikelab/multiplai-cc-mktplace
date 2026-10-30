@@ -15,6 +15,12 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.148.1] - 2026-10-30
+
+### Fixed
+
+- **buildme**: the preflight runner check no longer fails a `bash -c` test command whose script starts with a shell builtin such as `set -e`. A `sh -c`, `bash -c` or `zsh -c` script that starts with a builtin, a keyword (`if`, `for`, `{`, …) or an assignment (`X=1 …`) is now checked as its shell, so DolceBot's `bash -c 'set -e; …'` no longer stops the build with `PREFLIGHT:FAILED:test-runner:… set is not on PATH`. A script whose own program is missing (`bash -c 'nosuchtool -q'`) still fails as before.
+
 ## [0.148.0] - 2026-10-29
 
 ### Added
