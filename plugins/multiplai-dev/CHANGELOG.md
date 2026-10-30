@@ -15,6 +15,15 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.132.0] - 2026-10-29
+
+### Changed
+- **review**: the verifier now gives each finding a severity (HIGH, MEDIUM or LOW) for the consequence it checked, using the same severity guide the finders use. Once every finding has a verdict, the review sets each confirmed or unverifiable finding's severity from it, so a severity can now go up as well as down. Two rules hold it to the verifier's impact: a `hygiene` finding is LOW, and a `breaks-users`, `breaks-business` or `depends-on-data` finding is at least MEDIUM. An unverifiable finding is then lowered one step as before. No verdict changes, and no prompt is told to leave anything out. The review shows the finder's severity beside a changed one, as "raised from" or "lowered from". A review stopped and resumed sets each severity once. A verdict saved by an older version has no severity, so its finding keeps the finder's severity, with the two rules applied. `answers` sets the severity the same way after a new verdict.
+
+### Added
+- **review**: a new impact, `depends-on-data`. The verifier uses it when default settings reach the code and the harm happens only if production holds data it cannot read, such as duplicate names or a login with two roles, and it names that data in its reason. `--mode critical` lists these findings, and a finding about tests rated this way is lowered to `correctness-only`, as `breaks-*` ones are.
+- **review-viewer**: shows the `depends-on-data` impact as a badge, describes it in the help, and lists it under **Critical only**. `findings.json` v1 accepts it.
+
 ## [0.131.0] - 2026-10-29
 
 ### Fixed
