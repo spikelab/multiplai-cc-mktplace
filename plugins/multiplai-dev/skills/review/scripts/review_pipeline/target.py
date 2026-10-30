@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -930,20 +931,110 @@ def deployed(target: TargetInfo) -> str | None:
     return "yes" if proc.returncode == 0 else "no"
 
 
-def snapshot_head(target: TargetInfo, dest: Path) -> Path:
+def _init_snapshot_repo(dest: Path) -> None:
+    """`git init` in *dest*, so search tools treat the snapshot as a repository of its own.
+
+    The snapshot sits under the data directory, whose `.gitignore` is `*`,
+    inside whatever repository holds that directory. ripgrep (and so the
+    agents' Grep) follows the ignore files of parent directories up to the
+    repository's root, so a directory search there listed no file. With its own
+    `.git`, ripgrep stops at *dest*; the snapshot's own `.gitignore` still applies.
+    """
+    try:
+        proc = subprocess.run(
+            [*GIT_ARGV, "init", "-q", str(dest)],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            env=git_env(),
+            shell=False,
+            check=False,
+        )
+    except OSError as e:
+        raise TargetError(f"git init {dest} failed: {e}") from e
+    if proc.returncode != 0:
+        raise TargetError(
+            f"git init {dest} failed: {proc.stderr.decode(errors='replace').strip()}"
+        )
+
+
+def _hidden_by(dest: Path) -> str:
+    """Which ignore file hides *dest* from its parent's repository (`git check-ignore -v`), in words."""
+    try:
+        proc = subprocess.run(
+            [*GIT_ARGV, "-C", str(dest.parent), "check-ignore", "-v", str(dest)],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            env=git_env(),
+            shell=False,
+            check=False,
+        )
+    except OSError:
+        return "git check-ignore could not run"
+    rule = proc.stdout.decode(errors="replace").strip().split("\t")[0]
+    if proc.returncode != 0 or not rule:
+        return "git check-ignore names no ignore file that hides it"
+    source, _, rest = rule.partition(":")
+    line, _, pattern = rest.partition(":")
+    return f"ignored by `{pattern}` at {source}:{line}"
+
+
+def _check_search(
+    target: TargetInfo, dest: Path, note: Callable[[str], None] | None
+) -> None:
+    """Raise TargetError when ripgrep lists no file in *dest* while the target has changed files.
+
+    Without ripgrep on PATH it writes one line through *note* (else the log) and returns.
+    """
+    rg = shutil.which("rg")
+    if rg is None:
+        line = f"NOTICE ripgrep (rg) not found: not checked that search sees the snapshot {dest}"
+        if note is not None:
+            note(line)
+        else:
+            log.warning(line)
+        return
+    if not target.files:
+        return
+    try:
+        proc = subprocess.run(
+            [rg, "--files", str(dest)],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            shell=False,
+            check=False,
+        )
+    except OSError as e:
+        raise TargetError(f"rg --files {dest} failed: {e}") from e
+    if not proc.stdout.strip():
+        raise TargetError(
+            f"search sees no file in the snapshot {dest} (rg --files lists nothing): {_hidden_by(dest)}"
+        )
+
+
+def snapshot_head(
+    target: TargetInfo, dest: Path, note: Callable[[str], None] | None = None
+) -> Path:
     """Extract the tree at head_sha into *dest* for the agents to read.
 
     The agents' Read/Grep/Glob tools see a directory, not a commit, and the
     repo's working tree is whatever happens to be checked out. The gates check
     quotes against `git show <head_sha>:<path>`, so the agents must read the
     same bytes. `git archive` reads the object store and writes nothing to the
-    repo.
+    repo. *dest* is then made a git work tree (`_init_snapshot_repo`) and
+    ripgrep must list a file in it (`_check_search`) before the `.review-head`
+    marker is written; a snapshot with the marker and no `.git` gets only the
+    init. *note* takes the one line written when ripgrep is not installed.
     """
     marker = dest / ".review-head"
     if (
         marker.exists()
         and marker.read_text(encoding="utf-8").strip() == target.head_sha
     ):
+        if not (dest / ".git").exists():
+            marker.unlink()  # a failed init or check leaves no marker, as on a first extract
+            _init_snapshot_repo(dest)
+            _check_search(target, dest, note)
+            marker.write_text(target.head_sha + "\n", encoding="utf-8")
         return dest
     if dest.exists():
         shutil.rmtree(dest)
@@ -962,6 +1053,8 @@ def snapshot_head(target: TargetInfo, dest: Path) -> Path:
         )
     with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
         tar.extractall(dest, filter="data")
+    _init_snapshot_repo(dest)
+    _check_search(target, dest, note)
     (dest / ".review-head").write_text(target.head_sha + "\n", encoding="utf-8")
     return dest
 
@@ -995,7 +1088,8 @@ def snapshot_base(target: TargetInfo, dest: Path, paths: list[str]) -> Path:
     The agents' working directory is the head snapshot. The explain stage's
     agents also read lines a change removed, so those files are extracted at
     base, beside it, with `git archive` (which writes nothing to the repo), in
-    batches that fit argv. Any failure, an OSError included, is a TargetError.
+    batches that fit argv, and made a git work tree (`_init_snapshot_repo`), so
+    search sees it. Any failure, an OSError included, is a TargetError.
     """
     if dest.exists():
         shutil.rmtree(dest)
@@ -1033,6 +1127,7 @@ def snapshot_base(target: TargetInfo, dest: Path, paths: list[str]) -> Path:
             # The "data" filter refuses, for one, a symlink that is absolute or points outside dest;
             # writing the files can fail with ENOSPC or ENAMETOOLONG.
             raise TargetError(f"extracting {target.base_sha[:12]} failed: {e}") from e
+    _init_snapshot_repo(dest)
     return dest
     proc = subprocess.run(
         [
