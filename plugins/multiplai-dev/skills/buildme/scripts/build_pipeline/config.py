@@ -584,7 +584,10 @@ class EpicSettings:
     leaves the review skill's own settings.
     `shared_analysis`: run the codebase analysis once for the epic, at the
     feature branch, and have each child reuse it (`Coordinator._shared_analysis`);
-    off, each child runs its own, as before."""
+    off, each child runs its own, as before.
+    `board`: `off`, or `plane`, which saves each child's `BOARD:` line to the
+    board outbox and moves its Plane card (`epic.outbox`). `plane_script`:
+    the plane skill's `plane.py`, None to look for it beside this plugin."""
 
     max_parallel: int = 2
     max_review_rounds: int = 3
@@ -597,6 +600,8 @@ class EpicSettings:
     review_dimensions: list[str] | None = None
     review_finder_model: str | None = None
     shared_analysis: bool = False
+    board: Literal["off", "plane"] = "off"
+    plane_script: str | None = None
 
 
 def _cfg_int(value, key: str, default: int) -> int:
@@ -1946,6 +1951,16 @@ class BuildConfig:
                 accept_size,
             )
             accept_size = False
+        board = epic_cfg.get("board", "off")
+        if board not in ("off", "plane"):
+            log.warning(
+                "Invalid epic.board value %r in config.yaml — using 'off'", board
+            )
+            board = "off"
+        script = epic_cfg.get("plane_script")
+        if script is not None and not (isinstance(script, str) and script.strip()):
+            log.warning("Invalid epic.plane_script=%r — ignoring", script)
+            script = None
         self.epic = EpicSettings(
             max_parallel=_cfg_int(
                 epic_cfg.get("max_parallel", 2), "epic.max_parallel", 2
@@ -1968,6 +1983,8 @@ class BuildConfig:
                 epic_cfg.get("review_finder_model"), "epic.review_finder_model"
             ),
             shared_analysis=shared,
+            board=board,
+            plane_script=script.strip() if script else None,
         )
 
     def _discover_test_command(self) -> None:

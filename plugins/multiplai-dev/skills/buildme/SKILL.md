@@ -894,7 +894,8 @@ into `codebase-analysis/` in the epic's directory, and counts its spend against
 files changed since, and analyses only the files its `plan.md` names that the
 shared analysis did not read; a run stopped mid-analysis is analysed again from
 the start, and a failed one leaves each child to analyse for itself; off, each
-child runs its own analysis, as before). `build` and `findings` print
+child runs its own analysis, as before). `epic.board` with `epic.plane_script`
+("Moving the Plane cards" below). `build` and `findings` print
 `SPEND:<usd>:<tokens>` as their last line on every exit but a kill (SIGTERM
 and SIGHUP included): what that process spent, the PR body's model calls and a
 walkthrough regeneration included (the pr skill and the walkthrough print
@@ -938,6 +939,40 @@ can end up to one fix round (a fix and a review) per fixer running at once
 past the cap, plus what children already running when it was reached go on
 to spend. A fixer an earlier,
 stopped run left running is not counted in another fixer's share.
+
+**Where the epic stands: `epic status`.** To see each child's state without
+reading logs, run
+
+```bash
+uv run -q --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" python -m build_pipeline \
+  epic status --change <parent> --project-dir <project>
+```
+
+It prints one JSON object per child, one per line: `state` (the epic's
+status for it, `running` while its build runs, or `interrupted` when its
+last process stopped with no result and nothing runs it), `head` (HEAD of
+its worktree), `target` (the branch its PR targets), `pr`, `blocker`,
+`next` (what the next epic run, or a person, does), `spend` (`known_usd`,
+and `unknown`: each part no record holds a spend for), `board_unsent`,
+`process` and `epic_running`. It launches nothing, writes nothing, calls no
+`gh`, and never takes the epic's lock: it reads who holds it, so it is safe
+while the epic runs. Read it when the epic exits or the user asks, instead
+of tailing the logs. Exit `2` when the change has no epic yet.
+
+**Moving the Plane cards: `epic.board`.** With `epic.board: plane` in
+`specs/config.yaml` (default `off`, which sends nothing), each
+`BOARD:<change>:<Column>` line a child prints is saved to
+`<epic dir>/board-outbox.jsonl` and then sent through the plane skill as
+`plane.py update <ticket> --state <Column>`, where `<ticket>` is the child's
+own `ticket_refs.epic` that pm-spec wrote (a child with none is not sent).
+The Plane project needs a state named after each column. The plane skill
+reads `PLANE_API_TOKEN`, `PLANE_WORKSPACE` and `PLANE_ALLOWED_PROJECTS` from
+the environment buildme runs in; `epic.plane_script` names its `plane.py`
+when it is not installed beside multiplai-dev (the multiplai-pm plugin). A
+send that fails stays in the outbox and is sent again by the next drain or
+the next epic run, in order, so a card never moves back; it never rebuilds
+anything. A send that was tried before reads the card first and does not move
+a card already in that column.
 
 **Reviewing the children's PRs.** Each child's open PR is reviewed with
 `/multiplai-dev:review` (`python -m review_pipeline review --repo <child

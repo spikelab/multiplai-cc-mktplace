@@ -105,7 +105,7 @@ from build_pipeline.budget import BudgetExceededError
 from .. import budget, feature_branch, git_ops, intake, readiness, stop_record
 from ..config import git_toggles
 from ..models import AgentResult
-from . import CHILD_ENV, fix, merge, records, review, spend, store
+from . import CHILD_ENV, fix, merge, outbox, records, review, spend, store
 from .fix import write_decisions
 
 log = logging.getLogger(__name__)
@@ -495,6 +495,10 @@ class Coordinator:
     )  # ids specs/archive/ holds on the feature branch: merged, never launched
     shared: Path | None = None  # the finished shared analysis (`epic.shared_analysis`)
     shared_tried: bool = False  # `_shared_analysis` ran in this invocation
+    board_task: asyncio.Future | None = None  # the board outbox's drain, while it runs
+    tickets: dict[str, str | None] = field(
+        default_factory=dict
+    )  # each child's own ticket ref, read once per run
 
     def change(self, cid: str) -> str:
         """The `--change` the child *cid* builds as (`phase.child_change`)."""
@@ -2865,6 +2869,7 @@ class Coordinator:
         self._read_prs([c for c in self.children.values() if c.status == "built"])
         self._resolve()
         self._save()
+        self._board()  # S52: what an earlier run left unsent goes first
         loop = asyncio.get_running_loop()
         task = asyncio.current_task()
 
@@ -2925,6 +2930,7 @@ class Coordinator:
             )
             if (c.status == "merged" or waits) and self._final_fix(c) is not None:
                 self._left_issue(c)
+        await self._board_end()
         self._summary(run_dir)
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:  # beside EPIC:MERGE_WAITING too, not only in the summary
@@ -3052,6 +3058,7 @@ class Coordinator:
                     self._read_prs(self._waited_on())
                     last_read = CLOCK.now()
                     self._save()
+                    self._board()
                 continue
             if (
                 self.budget_stop is not None
@@ -3067,6 +3074,67 @@ class Coordinator:
                 continue
             self._save()
             return 0
+
+    # -- the board outbox (item 70) ---------------------------------------------------
+
+    def _board(self) -> None:
+        """Under `epic.board: plane`, save the children's new `BOARD:` lines to
+        the outbox and, unless a drain is still sending, send what is unsent
+        in a thread, so a slow Plane never holds up the loop."""
+        if self.settings.board != "plane":
+            return
+        try:
+            outbox.collect(self.epic_dir, records.attempts(self.epic_dir))
+        except OSError as e:
+            log.warning("EPIC cannot write the board outbox: %s", e)
+            return
+        if self.board_task is None or self.board_task.done():
+            self.board_task = asyncio.ensure_future(asyncio.to_thread(self._send_board))
+
+    async def _board_end(self) -> None:
+        """At the end of a run: wait for the drain, save the last `BOARD:`
+        lines and send them."""
+        if self.settings.board != "plane":
+            return
+        if self.board_task is not None:
+            await self.board_task
+            self.board_task = None
+        self._board()
+        if self.board_task is not None:
+            await self.board_task
+            self.board_task = None
+
+    def _send_board(self) -> None:
+        """`outbox.drain`; a failure is logged and never stops the epic."""
+        try:
+            outbox.drain(
+                self.epic_dir,
+                self._ticket,
+                outbox.PlaneBoard(outbox.plane_script(self.settings.plane_script)),
+            )
+        except Exception as e:  # the board never breaks a build
+            log.warning("EPIC board outbox: %s", e)
+
+    def _ticket(self, cid: str) -> str | None:
+        """The child's own `ticket_refs.epic`, from its `.change.yaml` as
+        `origin/<feature branch>` holds it; None without one."""
+        if cid not in self.tickets:
+            from ..change_manager import split_component
+            from .phase import _specs_rel
+
+            where = _specs_rel(self.config)
+            ticket = None
+            if where is not None:
+                repo, rel = where
+                change = self.change(cid)
+                part = split_component(change)
+                sub = f"{part[0]}/components/{part[1]}" if part else change
+                meta = feature_branch._meta_at(
+                    repo, feature_branch.ref(self.branch), f"{rel}/changes/{sub}"
+                )
+                ticket = feature_branch.own_ticket(meta) or None
+            self.tickets[cid] = ticket
+        return self.tickets[cid]
 
     def _summary(self, run_dir: Path) -> Path:
         children = [
