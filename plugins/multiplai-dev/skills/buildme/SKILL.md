@@ -471,7 +471,15 @@ budget-checked like a block boundary, and is recorded in the checkpoint so a
 resume does not pay for it twice.
 
 buildme reviews each block, not the whole change. The whole-change review is
-`/multiplai-dev:review`, run on the PR.
+`/multiplai-dev:review`, run on the PR. With `code_review.component_review: true`
+in `specs/config.yaml` (off by default), buildme also reviews the whole
+component once, after the last block and the whole-suite run: its Critical and
+Major findings get one fix round, kept only if the whole suite stays green, and
+what stays open goes to the PR body (and to `spec-issues.md` when only a
+requirements change fixes it). With it on, the per-block review fails a block
+only on findings rated `code_review.block_gate_severities` (default
+`[Critical, Major]`) or a spec-compliance miss, in at most 2 rounds, with no fix
+on pass.
 
 ### 🚨 MUST: pass `--no-worktree` when you are already inside a worktree
 
