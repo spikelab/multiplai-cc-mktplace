@@ -60,7 +60,7 @@ SECTION_NOTES = {"trim": " (advisory: never blocks a merge)"}
 def listed(findings: list[dict], mode: str | None = None) -> list[dict]:
     """The findings the markdown lists and counts: confirmed or unverifiable,
     and not labelled low-value, repeat or important; in `critical` mode, also rated
-    `breaks-users` or `breaks-business`."""
+    one of `CRITICAL_IMPACTS` (`breaks-users`, `breaks-business`, `depends-on-data`)."""
     keep = [
         f
         for f in findings
@@ -388,7 +388,12 @@ def finding_section(
 
     status = fd["status"]
     if original_severity and original_severity != fd["severity"]:
-        status += f" (lowered from {original_severity})"
+        moved = (
+            "raised"
+            if SEVERITIES.index(fd["severity"]) < SEVERITIES.index(original_severity)
+            else "lowered"
+        )
+        status += f" ({moved} from {original_severity})"
     out += [
         f"**Verdict:** {status}. {_one_line(fd.get('verdict_reason') or '')}".rstrip(),
         "",

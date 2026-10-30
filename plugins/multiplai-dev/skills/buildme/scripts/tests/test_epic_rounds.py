@@ -13,7 +13,7 @@ from build_pipeline.config import BuildConfig, EpicSettings
 from build_pipeline.epic import review
 
 
-def medium(fid: str, impact: str | None = "correctness-only") -> dict:
+def medium(fid: str, impact: str | None = "hygiene") -> dict:
     f = {
         "id": fid,
         "severity": "MEDIUM",
@@ -56,7 +56,8 @@ def test_round_worth_defaults_to_breaks_and_falls_back(tmp_path, yaml_text, want
 @pytest.mark.parametrize(
     "found, pr_round, worth, want",
     [
-        ([medium("m1"), medium("m2", "hygiene")], 1, "breaks", "final_fix"),
+        ([medium("m1"), medium("m2")], 1, "breaks", "final_fix"),
+        ([medium("m1", "correctness-only")], 1, "breaks", "round"),
         ([medium("m1"), medium("m2", "breaks-users")], 1, "breaks", "round"),
         ([medium("m1", "breaks-business")], 2, "breaks", "round"),
         (
@@ -71,21 +72,29 @@ def test_round_worth_defaults_to_breaks_and_falls_back(tmp_path, yaml_text, want
             [medium("m1", "breaks-users")],
             3,
             "breaks",
+            "park",
+        ),  # at the cap an open confirmed MEDIUM parks
+        (
+            [{**medium("m1", "breaks-users"), "status": "unverified"}],
+            3,
+            "breaks",
             "final_fix",
-        ),  # at the cap only MEDIUMs: final fix
+        ),
         ([medium("m1")], 3, "any", "final_fix"),
         ([high("h1"), medium("m1")], 3, "breaks", "park"),
         ([high("h1")], 4, "breaks", "park"),
     ],
     ids=[
-        "only-correctness-only",
+        "only-hygiene",
+        "correctness-only-earns-a-round",
         "one-breaks-users",
         "breaks-business",
         "unrated",
         "high",
         "any-earns-a-round",
-        "cap-mediums",
-        "cap-mediums-any",
+        "cap-confirmed-medium",
+        "cap-unconfirmed-medium",
+        "cap-hygiene-any",
         "cap-high",
         "past-cap-high",
     ],
@@ -93,6 +102,13 @@ def test_round_worth_defaults_to_breaks_and_falls_back(tmp_path, yaml_text, want
 def test_decide(found, pr_round, worth, want):
     got, why = review.decide(found, pr_round, 3, worth)
     assert got == want and why
+
+
+def test_under_manual_a_confirmed_medium_at_the_cap_gets_the_final_fix():
+    """A person merges under `manual`, after reading what is left."""
+    found = [medium("m1", "breaks-users")]
+    assert review.decide(found, 3, 3, "breaks", "manual")[0] == "final_fix"
+    assert review.decide([high("h1")], 3, 3, "breaks", "manual")[0] == "park"
 
 
 def test_blocking_findings_are_the_listed_code_highs_and_mediums(tmp_path):
@@ -188,7 +204,7 @@ def _opt(argv: list[str], name: str) -> str | None:
     return argv[argv.index(name) + 1] if name in argv else None
 
 
-def test_only_correctness_only_mediums_get_one_final_fix_then_merge_and_one_issue(
+def test_only_hygiene_mediums_get_one_final_fix_then_merge_and_one_issue(
     tmp_path, monkeypatch
 ):
     """Done means 3: the review records `next: final_fix`; one fixer runs,
@@ -252,7 +268,7 @@ def test_a_breaks_users_medium_earns_another_round(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "left, want", [(high("h3"), "park"), (medium("m3", "breaks-users"), "final_fix")]
+    "left, want", [(high("h3"), "park"), (medium("m3"), "final_fix")]
 )
 def test_at_round_3_an_open_high_parks_and_mediums_get_the_final_fix(
     tmp_path, monkeypatch, left, want
@@ -298,7 +314,7 @@ def test_a_round_fixer_runs_one_round_so_a_low_value_review_2_gets_the_final_fix
     tmp_path, monkeypatch
 ):
     """Spike, 2026-10-15: one round per fixer launch, so a decision follows
-    every review. Review 2 leaves only a `correctness-only` MEDIUM: the
+    every review. Review 2 leaves only a `hygiene` MEDIUM: the
     decision on it is `final_fix`, not a third review."""
     one = {"rounds": [{"findings": [medium("m2")]}], "max_rounds": True, "push": True}
     r = Rounds(tmp_path, monkeypatch, [{"findings": [high("h1")]}], [one, FINAL])

@@ -95,10 +95,14 @@ the head, the base, the review directory, the cost, `pr_round`, `reused`,
 `conflicts` (never blocks) and `blocking` (open Code HIGH/MEDIUM findings),
 and with blockers `next` and `next_reason` (`review.decide`, no model call):
 `round` when a Code HIGH is open or, below `epic.max_review_rounds`, a Code
-MEDIUM earns one (`epic.round_worth: breaks`: the verifier rated it
-`breaks-users`/`breaks-business` or did not rate it; `any`: every one);
+MEDIUM earns one (`epic.round_worth: breaks`: the verifier did not rate it
+`hygiene`; `any`: every one);
 `final_fix` when only Code MEDIUMs are left and none earns a round, or at
-the cap; `park` for an open HIGH at the cap. A park, or any other failure,
+the cap when none is a confirmed one not rated `hygiene` (any MEDIUM under
+`epic.merge: manual`); `park` at the cap for an open HIGH, or under `auto` a
+confirmed MEDIUM not rated `hygiene`, with their ids in `open_ids`, until the
+head changes or `epic.accepted_findings` lists them all. A finding
+`epic.accepted_findings` lists for the child is not a blocker. A park, or any other failure,
 parks the child, except a failed read (`READ_FAILED`) and a review, resume or
 post that cannot start, which leave it `unknown`. A review counts against `epic.max_parallel` and
 `epic.max_usd` like a build. `final_fix` runs one fixer round with

@@ -643,8 +643,12 @@ elif a[:2] == ["pr", "list"]:      # the PRs of the repo it runs in, which gh re
     head = a[a.index("--head") + 1]
     here = subprocess.run(["{git}", "remote", "get-url", "origin"], capture_output=True, text=True).stdout.strip()
     repo = pathlib.Path(here).stem if here else None
+    base = a[a.index("--base") + 1] if "--base" in a else None      # G35: an open PR into the feature branch
+    state = a[a.index("--state") + 1] if "--state" in a else "open"
     print(json.dumps([{{"url": u}} for u, p in prs.items()
-                      if p["branch"] == head and repo in (None, u.split("/")[-3])]))
+                      if p["branch"] == head and repo in (None, u.split("/")[-3])
+                      and base in (None, p.get("base", "main"))
+                      and state in ("all", p["state"].lower())]))
 elif a[:2] in (["issue", "list"], ["issue", "create"]):     # the final fix's issue, in `<root>/issues.json`
     store = root / "issues.json"
     issues = json.loads(store.read_text()) if store.exists() else []

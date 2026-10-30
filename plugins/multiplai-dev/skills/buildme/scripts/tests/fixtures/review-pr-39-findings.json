@@ -1,0 +1,657 @@
+{
+  "schema_version": 1,
+  "mode": "full",
+  "producer": "multiplai-dev:review 0.128.0",
+  "generated_at": "2026-10-29T04:27:08Z",
+  "target": {
+    "slug": "DolceTech-Dolcebot--pr-39",
+    "head_sha": "f375976093659fbdfea3680934227e4ad902c245",
+    "base_sha": "9e048831719e90784f8934cd0999e09a0be8b0f3"
+  },
+  "findings": [
+    {
+      "id": "778b3546ba",
+      "severity": "MEDIUM",
+      "status": "confirmed",
+      "impact": "hygiene",
+      "section": "docs",
+      "topic": "docs",
+      "file": "backend/DolceEngine/docs/DB-2143-auth-refactor.md",
+      "line_start": 169,
+      "title": "Auth doc wrongly says DRF per-record checks need rewritten views",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "8684f487ee",
+      "severity": "MEDIUM",
+      "status": "confirmed",
+      "impact": "correctness-only",
+      "section": "code",
+      "topic": "code",
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 744,
+      "title": "Old-style cleaning-company login with manager role crashes cleaning endpoints",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "cd83b4ff3d",
+      "severity": "MEDIUM",
+      "status": "confirmed",
+      "impact": "correctness-only",
+      "section": "code",
+      "topic": "security",
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 709,
+      "title": "Old-style cleaning login may be tied to another company by name",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "5fe593ca9b",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/management/commands/audit_cleaning_provider_user.py",
+      "line_start": 106,
+      "title": "Audit command wrongly tells operators to remove a real manager's role",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "5518dd6d60",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 49,
+      "title": "Each feed or audit request repeats the same role and company lookups",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "312611e9f2",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 61,
+      "title": "Empty feed writes two filter log lines and a misleading provider label",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "ed65728696",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 53,
+      "title": "A failed company lookup now returns a 500 error to users",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "92759d1e05",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/accesso.py",
+      "line_start": 1,
+      "title": "Module comment gives an outdated reason and lists too few log steps",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "b4ec7b1a05",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/accesso.py",
+      "line_start": 1,
+      "title": "PR description lists an already-fixed issue as still open",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "0fa4a8ff1d",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 94,
+      "title": "Feed and audit view comments do not explain the impresa_id parameter",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "ddfe1473e0",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 497,
+      "title": "Refused resolve requests no longer log their reason under the request id",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "b33e561c00",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/tests/test_feed_guard_imprese.py",
+      "line_start": 413,
+      "title": "Security log test passes even when user and room ids are wrong",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "382a96737c",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/tests/test_drf_default_protected.py",
+      "line_start": 56,
+      "title": "Outdated test comment wrongly says the cleaning companies' feed is untested",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "9a7b12f8c8",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/endpoint_guard/cleaning.py",
+      "line_start": 84,
+      "title": "Record permission class lets everything through unless each view checks by hand",
+      "assessment": {
+        "label": "low-value"
+      }
+    },
+    {
+      "id": "945d35a439",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/tests/test_feed_guard_imprese.py",
+      "line_start": 452,
+      "title": "Logged-in users can learn which room type ids exist",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "5a851c923a",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/docs/DB-2143-auth-refactor.md",
+      "line_start": 432,
+      "title": "Doc gives wrong 403 text for logins with no allowed role",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "fd0ea83a1b",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/endpoint_guard/cleaning.py",
+      "line_start": 54,
+      "title": "Operators who are also company users get blocked from other companies",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "95dea11ff4",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/tests/test_feed_guard_imprese.py",
+      "line_start": 612,
+      "title": "Backend test fails on any wording change to one documentation line",
+      "assessment": {
+        "label": "low-value"
+      }
+    },
+    {
+      "id": "79e779a581",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/docs/DB-2143-auth-refactor.md",
+      "line_start": 156,
+      "title": "Auth doc table of auth_utils omits four new scope functions",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "74157c13a7",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/docs/DB-2143-auth-refactor.md",
+      "line_start": 234,
+      "title": "Auth doc still calls company endpoints excluded, though now covered",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "a5b4e4e40e",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/tests/test_drf_default_protected.py",
+      "line_start": 365,
+      "title": "Test comment misleads maintainers about which code limits each user's feed",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "5c567fe8e0",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceEngine/endpoint_guard/cleaning.py",
+      "line_start": 55,
+      "title": "Planned owner permission check is recorded only in code comments",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "e53f25e542",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/tests/test_feed_guard_imprese.py",
+      "line_start": 46,
+      "title": "Test helpers report real import errors as code still to write",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "f8a2ae69e0",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 729,
+      "title": "Manager role fails to narrow what a cleaning-company user sees",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "0a6847b772",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 759,
+      "title": "Each cleaning action loads every visible room type and re-reads roles",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "c9fa9fc8e0",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/management/commands/audit_clng_feed_visibility.py",
+      "line_start": 33,
+      "title": "Audit command shows the wrong expected feed for users with several roles",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "89fdc2cb42",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+      "line_start": 66,
+      "title": "Code comment overstates which cleanings owners and operators can see",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "633570379d",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+      "line_start": 93,
+      "title": "No breakage found where the status and photo endpoints changed",
+      "assessment": {
+        "label": "low-value"
+      }
+    },
+    {
+      "id": "b1173d4677",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+      "line_start": 93,
+      "title": "Refusal logs no longer say which endpoint or cleaning was refused",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "f3e399aca3",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 694,
+      "title": "Comment wrongly claims one function alone links logins to cleaning companies",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "0c6f8aced6",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/management/commands/audit_clng_feed_visibility.py",
+      "line_start": 96,
+      "title": "Audit command skips the scope check for owners despite its label",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "d08ca37e89",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 13,
+      "title": "Module's function list omits four new public cleaning-access functions",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "0b61aa2562",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 705,
+      "title": "Old cleaning logins get an empty feed after small text differences",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "b5a78a37ed",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/management/commands/audit_clng_feed_visibility.py",
+      "line_start": 87,
+      "title": "User profile loaded repeatedly, costing extra queries on every feed request",
+      "assessment": {
+        "label": "low-value"
+      }
+    },
+    {
+      "id": "a052c2a93b",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 744,
+      "title": "Managers keep cleaning access through stale links to former owners",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "d29acb1092",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/auth_utils.py",
+      "line_start": 735,
+      "title": "No tests check users with combined roles in the cleaning feed",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "b970fcf9b3",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 293,
+      "title": "Audit loads every booking on the platform, then discards most",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "e5d0ece3dc",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+      "line_start": 74,
+      "title": "Malformed status-update requests get a server error instead of a 400",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "3846f08d9f",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+      "line_start": 90,
+      "title": "Users without access can tell whether a cleaning id exists",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "d7fe8661dd",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+      "line_start": 95,
+      "title": "Status update accepts any status and can erase a concurrent photo upload",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "09e835ea1e",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/tests/test_feed_guard_imprese.py",
+      "line_start": 539,
+      "title": "Status updates miss tests for security log, unassignment, CSRF and e2e",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "0f2534ea03",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 482,
+      "title": "Oddly shaped resolve request body crashes with 500 instead of 400",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "bf7e80e752",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/endpointz/feed.py",
+      "line_start": 500,
+      "title": "Two quick clicks can create duplicate cleanings for one room",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "6a7de0c4a3",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceCleaning/tests/test_feed_guard_imprese.py",
+      "line_start": 539,
+      "title": "Photo upload lacks tests for unassigned properties and legacy company logins",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "45f00aeb22",
+      "severity": "LOW",
+      "status": "unverified",
+      "impact": null,
+      "section": "code",
+      "topic": null,
+      "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+      "line_start": 236,
+      "title": "Photo files go to folders named from the raw client-sent id",
+      "assessment": {
+        "label": "useful"
+      }
+    },
+    {
+      "id": "49256c0da0",
+      "severity": "MEDIUM",
+      "status": "refuted",
+      "impact": null,
+      "section": "docs",
+      "topic": "docs",
+      "file": "backend/DolceEngine/docs/DB-2143-auth-refactor.md",
+      "line_start": 134,
+      "title": null,
+      "assessment": {
+        "label": null
+      }
+    }
+  ]
+}

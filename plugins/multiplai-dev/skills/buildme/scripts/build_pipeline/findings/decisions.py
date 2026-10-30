@@ -34,7 +34,9 @@ DECISIONS_FILE = "buildme-decisions.json"
 # `--mode critical` keeps.
 _SHOWN_STATUSES = ("confirmed", "unverifiable", "unverified")
 _HIDDEN_LABELS = ("repeat", "low-value", "important")
-_CRITICAL_IMPACTS = ("breaks-users", "breaks-business")
+# `review_pipeline.models.CRITICAL_IMPACTS`; `test_epic_review_fix_merge_resume.py`
+# pins this copy against the review skill's.
+_CRITICAL_IMPACTS = ("breaks-users", "breaks-business", "depends-on-data")
 
 # Test files by name or directory. The engine's `_TEST_PATH_RE`
 # (`tdd_engine.py`) covers Python, Go, Swift and JS/TS; this adds the JVM,
@@ -93,6 +95,24 @@ def _accepted(finding: dict, mode: str | None) -> bool:
     )
 
 
+def chosen_ids(
+    doc: dict,
+    severities: tuple[str, ...] | None = None,
+    code_only: bool = False,
+) -> list[str]:
+    """The ids, in the review's order, of the findings in the review's
+    findings.json *doc* that `--auto` posts (`write_decisions`). Raises
+    `KeyError`, `TypeError` or `AttributeError` on a document of another shape."""
+    mode = doc.get("mode")
+    return [
+        str(f["id"])
+        for f in doc["findings"]
+        if _accepted(f, mode)
+        and (severities is None or f.get("severity") in severities)
+        and (not code_only or _section(f) == "code")
+    ]
+
+
 def write_decisions(
     review_dir: str | Path,
     severities: tuple[str, ...] | None = None,
@@ -109,13 +129,9 @@ def write_decisions(
         raise FileNotFoundError(f"no findings.json at {source}")
     try:
         doc = json.loads(source.read_text(encoding="utf-8"))
-        mode = doc.get("mode")
         chosen = {
-            str(f["id"]): {"decision": "accept"}
-            for f in doc["findings"]
-            if _accepted(f, mode)
-            and (severities is None or f.get("severity") in severities)
-            and (not code_only or _section(f) == "code")
+            fid: {"decision": "accept"}
+            for fid in chosen_ids(doc, severities, code_only)
         }
     except (
         json.JSONDecodeError,

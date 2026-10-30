@@ -268,35 +268,73 @@ def blocker_line(f: dict) -> str:
 def blockers(review_dir: Path | str) -> list[str] | None:
     """`blocking_findings`, one line each; None when the file cannot be read."""
     found = blocking_findings(review_dir)
+    return None if found is None else lines(found, review_dir)
+
+
+def lines(found: list[dict], review_dir: Path | str) -> list[str] | None:
+    """`blocker_line` of each of *found*, read from *review_dir*; None when
+    one cannot be read."""
     try:
-        return None if found is None else [blocker_line(f) for f in found]
+        return [blocker_line(f) for f in found]
     except (KeyError, TypeError, AttributeError) as e:
         log.warning("cannot read %s: %s", Path(review_dir) / "findings.json", e)
         return None
 
 
-# The impacts the verifier gives a defect that does not reach a user or the
-# business (`review_pipeline/prompts/verify.py`, `IMPACT_RULES`).
-HARMLESS_IMPACTS = ("correctness-only", "hygiene")
+# The impact the verifier gives a defect that does not reach a user or the
+# business (`review_pipeline/prompts/verify.py`, `IMPACT_RULES`). A
+# `correctness-only` defect is not harmless: #39 merged with two
+# (plan-factory-merged-2026-10-29.md, item 18).
+HARMLESS_IMPACTS = ("hygiene",)
 
 
-def decide(found: list[dict], pr_round: int, cap: int, worth: str) -> tuple[str, str]:
+def open_at_cap(found: list[dict], merge: str = "auto") -> list[str]:
+    """The ids that park a child at the round cap: every HIGH, and under
+    *merge* `auto` every confirmed MEDIUM not rated `hygiene` (item 18).
+    Under `manual` a person merges after reading them, so MEDIUMs go to the
+    final fix as before."""
+    return [
+        f["id"]
+        for f in found
+        if f.get("severity") == "HIGH"
+        or (
+            merge == "auto"
+            and f.get("status") == "confirmed"
+            and f.get("impact") not in HARMLESS_IMPACTS
+        )
+    ]
+
+
+def decide(
+    found: list[dict], pr_round: int, cap: int, worth: str, merge: str = "auto"
+) -> tuple[str, str]:
     """What follows a review that left the blockers *found* (not empty): `round`
     (another fix and review), `final_fix` (one fix with no review after it,
     then the merge step) or `park`, and why (plan-review-rounds-and-finders,
-    item 2). An open HIGH earns a round, and parks at the cap. A MEDIUM earns
-    a round under *worth* `any`, and under `breaks` unless the verifier rated
-    it `correctness-only` or `hygiene`: one it did not rate is not known to be
-    harmless. At the cap, MEDIUMs alone get the final fix. Reads only the
-    review's own fields; calls no model."""
+    item 2). An open HIGH earns a round. A MEDIUM earns a round under *worth*
+    `any`, and under `breaks` unless the verifier rated it `hygiene`: one it
+    did not rate is not known to be harmless. At the cap, `open_at_cap`
+    parks (an open confirmed finding never auto-merges,
+    plan-factory-merged-2026-10-29.md, item 18); the rest get the final fix.
+    Reads only the review's own fields; calls no model."""
     highs = [f["id"] for f in found if f.get("severity") == "HIGH"]
     if pr_round >= cap:
-        if highs:
+        parks = open_at_cap(found, merge)
+        if parks:
+            left = ", ".join(parks)
             return (
                 "park",
-                f"review round {pr_round} of {cap} left Code HIGH {', '.join(highs)}",
+                f"review round {pr_round} of {cap} left open Code findings {left}",
             )
-        return "final_fix", f"review round {pr_round} of {cap} left only Code MEDIUMs"
+        return (
+            "final_fix",
+            f"review round {pr_round} of {cap} left only Code MEDIUMs that "
+            + (
+                "a person merges after reading"
+                if merge == "manual"
+                else "are unconfirmed or rated hygiene"
+            ),
+        )
     if highs:
         return "round", f"Code HIGH {', '.join(highs)} is open"
     worthy = [
@@ -309,7 +347,7 @@ def decide(found: list[dict], pr_round: int, cap: int, worth: str) -> tuple[str,
             "round",
             f"Code MEDIUM {', '.join(worthy)} earns another round (epic.round_worth: {worth})",
         )
-    return "final_fix", "every Code MEDIUM left is rated correctness-only or hygiene"
+    return "final_fix", "every Code MEDIUM left is rated hygiene"
 
 
 def log_text(path: Path) -> str:

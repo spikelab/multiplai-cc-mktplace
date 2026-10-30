@@ -464,6 +464,9 @@
           money lost or miscounted, a deploy or job that fails, access granted wider than intended, a record
           audits or billing rely on that is wrong, or a document that would lead an operator to a wrong
           action in production.</dd>
+        <dt><code>depends-on-data</code></dt><dd>Default settings reach the code, and the harm happens only
+          when production holds data the verifier could not read, such as duplicate names or a login with two
+          roles. The verdict names that data.</dd>
         <dt><code>correctness-only</code></dt><dd>The code is wrong, but no path after merge reaches a user
           or the business: an edge case no caller reaches, a trap for the next change. Every missing or weak
           test is rated this.</dd>
@@ -471,7 +474,8 @@
           with no consequence, a stale comment that misleads nobody.</dd>
       </dl>
       <p>A review run with <code>--mode critical</code> shows <strong>Critical only</strong> in the header and
-        lists only <code>breaks-users</code> and <code>breaks-business</code> findings; the rest are in the
+        lists only <code>breaks-users</code>, <code>breaks-business</code> and <code>depends-on-data</code>
+        findings; the rest are in the
         review's markdown appendix.</p>
       <p>Gate-rejected, repeat, low-value and important findings stay in <code>findings.json</code> and in the
         review's markdown appendix; the page leaves them out of the list, every count, the code markers,

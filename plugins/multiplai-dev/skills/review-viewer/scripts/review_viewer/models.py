@@ -193,9 +193,17 @@ class Finding(_Strict):
     ) = None
     # What breaks in production if the change is merged as is, as the verifier
     # rated it (multiplai-dev 0.32+). Absent on refuted and rejected findings
-    # and in older files. A `critical` review lists only the two `breaks-*`.
+    # and in older files. A `critical` review lists only `breaks-users`,
+    # `breaks-business` and `depends-on-data` (multiplai-dev 0.132+).
     impact: (
-        Literal["breaks-users", "breaks-business", "correctness-only", "hygiene"] | None
+        Literal[
+            "breaks-users",
+            "breaks-business",
+            "depends-on-data",
+            "correctness-only",
+            "hygiene",
+        ]
+        | None
     ) = None
     # The section the review lists the finding in (multiplai-dev 0.71+): `trim`
     # for what only the trim finder reported, else from the topic. Absent in
