@@ -1052,3 +1052,16 @@ def test_S16_the_parent_of_an_old_split_points_at_its_children(repo, model, caps
     assert run(repo, *RESUME) == 0
     assert run_dir_files(change_dir(repo).parent) == whole
     assert git(wt, "rev-parse", "HEAD") == head and model.calls == []
+
+
+def test_S12_a_second_process_changes_nothing_in_the_shared_checkout(
+    repo, model, tmp_path
+):
+    two(model)
+    go(repo, FLOW[:3])
+    cdir = change_dir(repo)
+    head = git(worktree(repo), "rev-parse", "HEAD")
+    push_edit(repo, tmp_path / "reviewer", "components/ui/plan.md", "# Plan: edited\n")
+    with runlock.hold(cdir / ".pm-spec"):
+        assert run(repo, *RESUME) == 5
+    assert git(worktree(repo), "rev-parse", "HEAD") == head
