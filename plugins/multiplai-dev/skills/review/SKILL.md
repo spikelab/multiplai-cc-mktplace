@@ -840,7 +840,7 @@ The first call that reports it stops the run: no stage tries that call again
 or starts another, and the checkpoint keeps every answer that came back. The
 message gives the reset time when the CLI or the window gave one, and the
 `resume` command of each target it
-stopped, with the run's `--max-cost-usd` and `--no-deps`. Tell the user both,
+stopped, with the run's `--max-cost-usd`, `--no-deps`, `--verify-low` and `--model`. Tell the user both,
 and **do not resume or start another review before the reset**: every call
 until then fails the same way. After the reset, run that `resume`: it
 continues the stopped run. A plain `review` of the same target and head prints

@@ -530,6 +530,23 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
 
 
 @pytest.mark.usefixtures("every_dimension")
+def test_the_usage_limit_resume_command_carries_verify_low_and_model(
+    fixture_repo, tmp_path, agents, capsys
+):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents(limit_at=8, cost=1.0)
+    args = _review_args(repo, base, head, out, "--no-deps", "--model", "opus")
+    assert main(args + ["--verify-low", "risky"]) == 6
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
+    err = capsys.readouterr().err
+    assert (
+        f"python -m review_pipeline resume {target_dir} --trust-repo --no-deps "
+        "--verify-low risky --model opus" in err
+    )
+
+
+@pytest.mark.usefixtures("every_dimension")
 def test_a_usage_limit_during_verify_saves_the_checkpoint_exits_6_and_resume_asks_only_the_rest(
     fixture_repo, tmp_path, agents, capsys
 ):
