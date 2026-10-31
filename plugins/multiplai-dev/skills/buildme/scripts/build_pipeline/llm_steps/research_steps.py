@@ -41,10 +41,12 @@ def specs_summary(change_dir: Path) -> str:
 
 async def decide_research(config, summary: str, *, call=None) -> ResearchDecision:
     """One toolless call: is outside research needed, and why."""
+    from multiplai_core.untrusted import fence
+
     call = call or llm_call_structured
     prompt = RESEARCH_DECISION_PROMPT.format(
         notice=UNTRUSTED_NOTICE,
-        summary=summary or "(no specs)",
+        summary="\n".join(fence(summary, source="change specs")) or "(no specs)",
     )
     return await call(
         prompt,

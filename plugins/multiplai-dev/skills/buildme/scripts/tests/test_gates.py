@@ -1051,6 +1051,14 @@ class TestParseDocsImpact:
         )
         assert parse_docs_impact(echoed) is None
 
+    def test_the_prompt_keeps_the_no_changelog_note_out_of_the_slot(self):
+        """DOCS_IMPACT is parsed as the list of files to commit, so the prompt
+        must not ask for a free-text note there."""
+        from build_pipeline.prompts.docs_update import DOCS_UPDATE_PROMPT
+
+        assert "record that under DOCS_IMPACT" not in DOCS_UPDATE_PROMPT
+        assert "only file paths" in DOCS_UPDATE_PROMPT
+
     def test_echoed_placeholder_wrapping_onto_a_second_line_is_not_an_answer(self):
         """The regression this guards: the capture regex takes one line, so an
         echo of a wrapped placeholder starts with `<` but never reaches the

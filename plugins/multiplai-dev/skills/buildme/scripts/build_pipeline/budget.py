@@ -111,7 +111,7 @@ class BuildBudget:
 
         *usage* is an `AgentUsage` (or anything with the same attributes); a
         run that died before the SDK emitted a ResultMessage reports zeros,
-        which is correct — we were not billed for what we never got.
+        and `sdk._record_partial` also records that call as unaccounted.
         """
         try:
             self.calls += 1

@@ -237,6 +237,10 @@ _GENERIC_TERMS = frozenset(
 # ``.-_`` separators, optionally npm-scoped (``@scope/name``).
 _NAME_RE = re.compile(r"^@?[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)?$")
 
+# A Go module path: a domain, then any number of path segments
+# (``github.com/spf13/cobra``).
+_GO_MODULE_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[A-Za-z0-9._~+-]+)+$")
+
 # Builtins are not packages. `sys.stdlib_module_names` only knows *top-level
 # module* names, so `open`, `str` and `NotADirectoryError` sailed straight
 # through it and each minted an explainer on the first real run.
@@ -446,7 +450,7 @@ def _is_plausible_dependency(
 ) -> bool:
     if len(canonical_name) < 2:
         return False
-    if not _NAME_RE.match(canonical_name):
+    if not (_NAME_RE.match(canonical_name) or _GO_MODULE_RE.match(canonical_name)):
         return False
     if _FILE_EXT_RE.search(canonical_name):
         return False

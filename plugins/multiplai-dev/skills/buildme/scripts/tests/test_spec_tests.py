@@ -132,6 +132,52 @@ The system SHALL scope every manager query to the manager's company.
         assert "A cleaner cannot change roles" in text
         assert "Managers see their own company only" not in text
 
+    SHARED_NAME_SPECS = """\
+# Capability: account-roles
+
+### Requirement: Audit
+
+#### Scenario: Role changes are logged [security]
+- **WHEN** a role changes
+- **THEN** it is logged
+
+### Requirement: Managers see their own company only (permission)
+
+#### Scenario: A manager asks for another company's staff
+- **WHEN** a manager requests another company's staff
+- **THEN** the request is refused with 403
+
+# Capability: billing
+
+### Requirement: Audit
+
+#### Scenario: Voided invoices are logged [security]
+- **WHEN** an invoice is voided
+- **THEN** it is logged
+"""
+
+    def test_an_entry_about_another_capability_does_not_narrow_this_one(self, tmp_path):
+        change = self._change(tmp_path, self.SHARED_NAME_SPECS)
+        block = BlockInfo(
+            number=1,
+            name="b",
+            description="",
+            satisfies=["account-roles", "billing: Audit"],
+        )
+        text = block_marked_scenarios(block, change)
+        assert "A manager asks for another company's staff" in text
+        assert "Role changes are logged" in text
+        assert "Voided invoices are logged" in text
+
+    def test_an_entry_about_another_capability_adds_nothing_to_this_one(self, tmp_path):
+        change = self._change(tmp_path, self.SHARED_NAME_SPECS)
+        block = BlockInfo(
+            number=1, name="b", description="", satisfies=["billing: Audit"]
+        )
+        text = block_marked_scenarios(block, change)
+        assert "Voided invoices are logged" in text
+        assert "account-roles" not in text
+
     def test_marks_match_in_any_case_and_form(self, tmp_path):
         change = self._change(tmp_path, self.SPECS)
         block = BlockInfo(number=1, name="b", description="", satisfies=["billing"])

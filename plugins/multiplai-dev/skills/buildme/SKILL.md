@@ -92,7 +92,7 @@ fixture runs establish harness behavior, not model quality.
 | `--skip-research` | Skip the research phase |
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations without passing, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 | `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. The pass is **off by default**: its dependency scan flags spec words such as `assert` or `followed` as dependencies (#375), so the flag only matters when `explainers: {enabled: true}` turns it on. |
-| `--accept-unknown-spend` | Resume after interrupted calls whose usage is unknown. Preserves the unknown records; the cap covers known spend only. Epic builds forward it to children and fixers for this invocation. Pass only when the user explicitly accepts that uncertainty. |
+| `--accept-unknown-spend` | Resume after interrupted or timed-out calls whose usage is unknown. Preserves the unknown records; the cap covers known spend only. Epic builds forward it to children and fixers for this invocation. Pass only when the user explicitly accepts that uncertainty. |
 | `--no-worktree` | Build in the project dir on the current branch instead of creating a worktree + branch. **Required when the calling session is already inside a worktree** — see [Git lifecycle](#git-lifecycle). Also disables push and PR (they only ever act on a branch the pipeline created). |
 | `--no-push` | Do not push the build's branch to `origin`. |
 | `--no-pr` | Do not open a pull request after pushing. |
@@ -762,6 +762,9 @@ characters (a file left out is named with its requirement names); a
 component with no dependency gets no such section. Those files are part of
 the plan revision: an edit to a dependency's `specs.md` marks the component's
 design, unknowns, tasks and rubric stale, as a `specs/registry/` edit does.
+So is the component's own `plan.md`: an edit to it marks the same four stale,
+and a build already planned before 0.148.2 records it on resume without
+planning again.
 After upgrading to 0.141.0, the plan of each component with a dependency gets
 a new revision once. A merged component's dir
 stays on the branch (the saved `epic.json` says it merged), and no component
@@ -893,7 +896,7 @@ codebase analysis once at the feature branch, before the first child starts,
 into `codebase-analysis/` in the epic's directory, and counts its spend against
 `epic.max_usd`; each child reuses it, re-checks only the facts whose cited
 files changed since, and analyses only the files its `plan.md` names that the
-shared analysis did not read; a run stopped mid-analysis is analysed again from
+shared analysis did not read or failed to analyse; a run stopped mid-analysis is analysed again from
 the start, and a failed one leaves each child to analyse for itself; off, each
 child runs its own analysis, as before). `epic.board` with `epic.plane_script`
 ("Moving the Plane cards" below). `build` and `findings` print

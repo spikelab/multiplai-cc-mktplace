@@ -42,7 +42,8 @@ You are working in `{project_dir}`. Read what is there before you write.
    Create a `CHANGELOG.md` only when the project's own conventions show one is
    expected (a `CHANGELOG` referenced by the README, by contributing docs, or
    by a release process in the repo). When nothing suggests a changelog is
-   kept, record that under DOCS_IMPACT and move on.
+   kept, say so in your report's text and move on; never in the DOCS_IMPACT
+   slot, which holds only file paths.
 5. **Write only what the diff supports.** Every sentence you add must be
    traceable to a line in the diff or to code you read. If the diff shows no
    user-visible change, the honest answer is that no document needed updating.

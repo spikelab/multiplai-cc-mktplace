@@ -80,12 +80,20 @@ def block_marked_scenarios(block: BlockInfo, change_dir: Path) -> str:
     """The marked scenarios *block* satisfies, under their capability and
     requirement headings, word for word; "" when there are none."""
     parts: list[str] = []
-    for cap, text in requirement_texts(change_dir).items():
+    texts = requirement_texts(change_dir)
+    for cap, text in texts.items():
         reqs = _requirements(text)
         entries = [e for e in block.satisfies if _mentions(e, cap)]
-        specific = [
+        # An entry that names another capability, and not this one, is about
+        # that capability, even when a requirement name is shared.
+        ours = [
             e
             for e in block.satisfies
+            if _mentions(e, cap) or not any(_mentions(e, c) for c in texts)
+        ]
+        specific = [
+            e
+            for e in ours
             if any(
                 _mentions(e, r.name) or any(_mentions(e, s) for s, _ in r.scenarios)
                 for r in reqs

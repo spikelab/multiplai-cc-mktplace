@@ -64,6 +64,8 @@ from code_facts import (
 from multiplai_core.citations import check_quote, file_at
 
 from . import git_ops
+from .budget import BudgetExceededError
+from .sdk import RepoTrustError
 
 log = logging.getLogger(__name__)
 
@@ -619,6 +621,7 @@ async def analyse(
         ),
         errors=[],
         recoverable=(Exception,),
+        fatal=(BudgetExceededError, RepoTrustError),
     )
     keep = citation_keeper(git.resolver(), root=project_dir)
     gated = gate_answers(answers, keep, conventions=True)
@@ -1018,9 +1021,16 @@ async def reuse_shared(
 
     read = {p: int(n) for p, n in marker.get("read", {}).items()}
     texts = source_files(project_dir, git)
-    extra = sorted(_named_in(plan_text, list(texts)) - set(read))
-    spans = [Span.whole(p, n) for p, n in read.items()]
-    failed = [(list(files), error) for files, error in marker.get("failed", [])]
+    # A file whose slice failed was not analysed: the child asks again for
+    # the ones its plan names, rather than carrying the failure forward.
+    unread = {p for files, _ in marker.get("failed", []) for p in files}
+    extra = sorted(_named_in(plan_text, list(texts)) - (set(read) - unread))
+    spans = [Span.whole(p, n) for p, n in read.items() if p not in extra]
+    failed = [
+        (left, error)
+        for files, error in marker.get("failed", [])
+        if (left := [p for p in files if p not in extra])
+    ]
     not_analysed = [p for p in marker.get("not_analysed", []) if p not in extra]
     if extra:
         own = await analyse(

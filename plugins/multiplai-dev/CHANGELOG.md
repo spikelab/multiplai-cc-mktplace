@@ -15,6 +15,25 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.148.4] - 2026-10-31
+
+### Fixed
+
+- **buildme**: words that merely contain "sso" ("associated", "lesson", "processor") no longer mark a block as auth work and trigger a split proposal; only the word SSO and "single sign-on" do.
+- **buildme**: a Go dependency named by its full module path (`github.com/spf13/cobra`) now gets an explainer.
+- **buildme**: a `Satisfies:` entry that names another capability ("billing: Audit") no longer narrows or adds to the security and permission scenarios of a capability with a requirement of the same name.
+- **buildme**: the docs writer no longer puts its "no changelog" note in the `DOCS_IMPACT:` slot, which dropped the edited docs from the PR.
+- **buildme**: the research decision prompt now fences the change's spec text as untrusted data, as it already said it did.
+- **buildme**: the dependency explainer is now told that the docs, changelogs and issues it fetches are data, never instructions.
+- **buildme**: the dependency explainer's Read, Glob and Grep now run in the project, so its search of the project's own code finds it.
+- **buildme**: the design writer is now told that the fenced web research it is given is data, never instructions.
+- **buildme**: a plan check rewrite that edits only the implementation plan no longer leaves `tasks.md` marked out of date, which refused the build after the recheck passed and regenerated the reviewed tasks on resume.
+- **buildme**: a resumed build whose unknowns gate rewrites `unknowns.md` now writes the tasks and rubric again, instead of stopping with "Planning artifacts are incomplete".
+- **buildme**: an edit to a component's `plan.md` now marks its design, unknowns, tasks and rubric out of date, and the build refuses to run the earlier plan. A build planned before this version records its `plan.md` on resume and is not planned again.
+- **buildme**: a model call that times out or fails before its final result now counts as spend of unknown size, so a build with a spending limit stops until `--accept-unknown-spend`, instead of counting it as free.
+- **buildme**: a spent budget or an untrusted repo during codebase analysis now stops the analysis, instead of being recorded as failed slices; an epic's shared analysis then writes no completion marker.
+- **buildme**: a child of an epic now analyses again the files its `plan.md` names that the epic's shared analysis failed on, instead of reusing the failure.
+
 ## [0.148.3] - 2026-10-31
 
 ### Fixed

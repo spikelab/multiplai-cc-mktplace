@@ -227,6 +227,10 @@ async def _generate_all_artifacts(
         log.info("SKIP phase=UNKNOWNS_GATE reason=recorded-complete-in-state")
 
     reconcile_plan(config, state)
+    # A gate that rewrote unknowns.md leaves tasks stale too, and the rubric
+    # is written from the tasks.
+    if state.spec_gen and "tasks" in state.spec_gen.stale_artifacts:
+        await _generate_single_artifact(cm, change_dir, "tasks", config, state)
     if state.spec_gen and "rubric" in state.spec_gen.stale_artifacts:
         await _generate_rubric(change_dir, config, state)
         reconcile_plan(config, state, regenerated={"rubric"})
@@ -358,7 +362,8 @@ def read_research(state: BuildState) -> str:
     The checkpoint stores a path (`state.research_path`); the prompt's
     `## Research Findings` slot needs what the file says. Research is written
     from web pages and other external text, so it goes in an untrusted-content
-    fence: data for the proposal, never instructions to it. No path recorded
+    fence, after the notice that says fenced text is data, never instructions
+    (docs/untrusted-content.md rule 4). No path recorded
     returns "" (the prompt then says "(no research conducted)"); a recorded
     path that is not a readable file warns and returns "(none provided)".
     """
@@ -369,9 +374,17 @@ def read_research(state: BuildState) -> str:
     if not path.is_file():
         log.warning("Recorded research is not a readable file: %s", raw)
         return "(none provided)"
-    from multiplai_core.untrusted import fence
+    from multiplai_core.untrusted import fence, markdown_notice
 
-    return "\n".join(fence(path.read_text(), source=path.name)) or "(none provided)"
+    lines = fence(path.read_text(), source=path.name)
+    if not lines:
+        return "(none provided)"
+    notice = markdown_notice(
+        "research notes written from web pages and other outside sources",
+        "Research",
+        injection_marker=True,
+    )
+    return "\n".join([notice, "", *lines])
 
 
 def _dependency_list_text(deps: list[NewDependency]) -> str:
@@ -1556,6 +1569,7 @@ def _plan_hashes(config) -> dict[str, str]:
     files = {name: root / name for name in ("proposal.md", "use-cases.md")} | {
         name: config.change_dir / name
         for name in (
+            "plan.md",
             "specs.md",
             "unknowns.md",
             "tasks.md",
@@ -1663,6 +1677,10 @@ def reconcile_plan(
             stale.update({"design", "unknowns", "tasks", "rubric"})
         if "use-cases.md" in changed:
             stale.update({"tasks", "rubric"})
+        # pm-spec's plan.md; one first hashed (a build planned before it was)
+        # is recorded, not read as an edit.
+        if "plan.md" in changed and "plan.md" in previous:
+            stale.update({"design", "unknowns", "tasks", "rubric"})
         if PLAN_HASH_KEY in changed:
             stale.update({"unknowns", "tasks", "rubric"})
         if "unknowns.md" in changed:
@@ -1819,6 +1837,9 @@ async def rewrite_plan(
     from .tdd_engine import parse_blocks
 
     reconcile_plan(config, state)
+    # tasks.md is staged, scanned and given a new rubric with every rewrite,
+    # so a plan-only edit keeps it current unless it was stale already.
+    tasks_current = "tasks" not in state.spec_gen.stale_artifacts
     with tempfile.TemporaryDirectory(prefix="buildme-plan-") as directory:
         staged = copy.copy(config)
         staged.specs_dir = Path(directory) / "specs"
@@ -1932,7 +1953,8 @@ async def rewrite_plan(
             config.change_dir / ".plan-publication.json", json.dumps(publication)
         )
         _finish_plan_publication(config)
-    reconcile_plan(config, state, regenerated=set(names))
+    reviewed = {"tasks"} if tasks_current else set()
+    reconcile_plan(config, state, regenerated=set(names) | reviewed)
     # Reconciliation records the published unknowns evidence on the live state.
     state.checkpoint(config.state_file_path())
     _commit_change_dir(
@@ -1966,6 +1988,7 @@ def assert_plan_current(config, state: BuildState, *, archived: bool = False) ->
         for key in keys
         if not (archived and key.startswith("registry/"))
         and key != PLANNING_KEY
+        and not (key == "plan.md" and key not in expected)
         and current.get(key) != expected.get(key)
     ]
     if changed or state.spec_gen.stale_artifacts:
