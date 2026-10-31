@@ -192,6 +192,18 @@ class TestManifests:
         )
         assert detect_new_dependencies(change, project) == []
 
+    def test_go_module_named_by_full_path_is_new(self, tmp_path, project):
+        (project / "go.mod").write_text(
+            "module example.com/demo\n\ngo 1.22\n\nrequire (\n"
+            "\tgithub.com/stretchr/testify v1.9.0\n)\n"
+        )
+        change = _write_change(
+            tmp_path / "change", decisions="Commands via `github.com/spf13/cobra`."
+        )
+        assert [d.name for d in detect_new_dependencies(change, project)] == [
+            "github.com/spf13/cobra"
+        ]
+
     def test_package_swift_declarations(self, tmp_path, project):
         (project / "Package.swift").write_text(
             'let package = Package(name: "Demo", dependencies: [\n'
