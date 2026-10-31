@@ -1418,6 +1418,44 @@ class TestRunMutationStep:
         assert run.call_count == 2
 
     @pytest.mark.asyncio
+    async def test_survivor_round_git_refuses_to_commit_is_discarded(self, project):
+        """A pre-commit hook rejects the round's tests: the round is discarded
+        and the first-run score stands, rather than the build failing with
+        the round's edits left in the tree."""
+        repo = project[0]
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text(
+            "#!/bin/sh\n"
+            "git diff --cached --name-only | grep -q test_more.py && exit 1\n"
+            "exit 0\n"
+        )
+        hook.chmod(0o755)
+        config, state, progress = _setup(project)
+
+        async def _agent(**_kw):
+            (repo / "tests" / "test_more.py").write_text(
+                "def test_x():\n    assert 1 == 1\n"
+            )
+            return AgentResult(success=True, output="STATUS: DONE")
+
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_mutation",
+                side_effect=[_result(7, 3), _result(10, 0)],
+            ) as run,
+            patch(
+                "build_pipeline.tdd_engine.run_mutation_test_writer", side_effect=_agent
+            ),
+        ):
+            await _run_mutation(config, state, progress)
+        assert run.call_count == 1
+        assert not (repo / "tests" / "test_more.py").exists()
+        assert "could not be committed and were discarded" in (
+            config.change_dir / "mutation.md"
+        ).read_text()
+
+    @pytest.mark.asyncio
     async def test_survivor_round_that_rewrites_tracked_tool_caches_is_committed(
         self, project
     ):
