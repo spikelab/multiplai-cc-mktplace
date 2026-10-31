@@ -204,16 +204,26 @@ def _epic_lock(config) -> str | None:
     from .epic import CHILD_ENV, store
     from .epic import lock as epic_lock
 
-    epic, sep, _ = config.change_name.partition("/")
-    if not sep or os.environ.get(CHILD_ENV) == "1":
+    if os.environ.get(CHILD_ENV) == "1":
+        return None
+    # A child builds as `<epic>/<id>` when nested, `<epic>-<id>` when a
+    # sibling change (`phase.child_change`); the epic's name may hold a `-`.
+    name = config.change_name
+    epic, sep, _ = name.partition("/")
+    if sep:
+        epics = [epic]
+    else:
+        epics = [name[:i] for i, c in enumerate(name) if c == "-" and i]
+    if not epics:
         return None
     repo = git_ops.repo_root(config.project_dir)
     if repo is None:
         return None
-    holder = epic_lock.holder_elsewhere(store.epic_dir_for(repo, epic))
-    if holder is None:
-        return None
-    return f"epic {epic} is running now ({holder})"
+    for epic in epics:
+        holder = epic_lock.holder_elsewhere(store.epic_dir_for(repo, epic))
+        if holder is not None:
+            return f"epic {epic} is running now ({holder})"
+    return None
 
 
 def _last_line(res: git_ops.GitResult) -> str:
