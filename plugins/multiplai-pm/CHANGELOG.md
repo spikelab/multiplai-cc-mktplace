@@ -21,6 +21,17 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-31
+
+### Fixed
+- **pm-spec**: a format, table or registry finding accepted with `--accept` no longer blocks again as a new finding on the next check after an edit.
+- **pm-spec**: a spec table that copies any of several `ticket.md` tables with the same header row, cell for cell, no longer raises a critical format finding.
+- **pm-spec**: a `specs.md` or `plan.md` deleted since the last check counts as a change, and each spec naming the deleted component is read in full.
+- **pm-spec**: files a prototype agent left in `prototype/` when it was stopped (a budget, a kill) are checked with the prototype gate on the next run instead of being kept as the PM's own.
+- **pm-spec**: `new` refuses `--no-epic-split` with more than one `--ticket-child` (exit 2, nothing written); before, the components step failed on every run.
+- **pm-spec**: a resumed `revise` moves aside only the issues file it read, and only when its text is unchanged; an issues file written meanwhile stays open.
+- **pm-spec**: a second run on a change that is already running exits 5 before it fetches into, fast-forwards or writes the shared checkout.
+
 ## [0.15.0] - 2026-10-29
 
 ### Changed
