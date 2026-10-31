@@ -17,7 +17,9 @@ SummaryLevel = Literal["gist", "structured", "detailed"]
 Preset = Literal["micro", "quick", "standard", "thorough"]
 ResearchType = Literal["general", "company", "job-market", "fact-check", "theme"]
 
-from .env import load_multiplai_conf, pick_model
+from multiplai_core.env import pick_model_spec
+
+from .env import load_multiplai_conf
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +52,15 @@ def _conf_section_value(
 # [deep-research.parse] MODEL= for the parse nodes, [deep-research] MODEL= for
 # every node — and otherwise on None, which run_agent resolves through
 # multiplai_core.session.default_model(): MULTIPLAI_MODEL, then the Claude Code
-# session's model. pick_model expands a family alias to its current ID.
+# session's model. pick_model_spec expands a family alias to its current ID and
+# keeps a provider-qualified value (`pi:gpt-6.1-sol@openai-codex`) as written,
+# which run_agent sends to that provider's agent backend.
 def _conf_model(task: str, default: str | None) -> str | None:
     """``[task] MODEL=`` from multiplai.conf as a model ID, else *default*."""
     if not _conf_section_value(task, "MODEL"):
         return default
-    return pick_model(task=task)
+    spec = pick_model_spec(task=task)
+    return spec.model if spec.is_anthropic else spec.qualified
 
 
 DEFAULT_MODEL = _conf_model("deep-research", None)

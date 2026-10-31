@@ -18,6 +18,19 @@ dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-31
+
+### Fixed
+
+- **deep-research runs on a non-Claude model named in `multiplai.conf`.**
+  `[deep-research] MODEL=pi:<model>@<provider>` (or the same under
+  `[deep-research.parse]`) stopped at startup with "this call site is
+  provider-unaware". The value is now kept as written and each node's call goes
+  to that provider's agent backend; a bare or family name (`sonnet`) resolves
+  exactly as before. Search and fetch steps on a `pi:` model need a
+  multiplai-core whose pi backend maps `WebSearch` and `WebFetch` (the
+  pi-web-access extension's `web_search` and `fetch_content`).
+
 ## [0.10.0] - 2026-10-24
 
 ### Changed
