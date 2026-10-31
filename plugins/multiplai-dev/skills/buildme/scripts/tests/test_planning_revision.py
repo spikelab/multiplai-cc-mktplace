@@ -411,6 +411,26 @@ async def test_repaired_unknowns_keep_their_accepted_evidence_on_resume(
 
 
 @pytest.mark.asyncio
+async def test_a_plan_only_rewrite_leaves_the_reviewed_tasks_current(plan, monkeypatch):
+    """A rewrite that edits only the plan publishes it with the tasks.md the
+    edit call was given and kept, so tasks is not left stale."""
+    config, _, state = plan
+    (config.change_dir / "requirements").mkdir(exist_ok=True)
+    for cap in ("one", "two"):
+        (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
+    owner.reconcile_plan(config, state)
+    tasks = (config.change_dir / "tasks.md").read_bytes()
+    _rewrite_to(monkeypatch, design="# New design\nReturn values")
+    monkeypatch.setattr(
+        owner, "generate_rubric", AsyncMock(return_value="# New rubric")
+    )
+    monkeypatch.setattr(owner, "_commit_change_dir", lambda *a: None)
+    assert await owner.rewrite_plan(config, state, FIX) == 2
+    assert (config.change_dir / "tasks.md").read_bytes() == tasks
+    assert state.spec_gen.stale_artifacts == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["plan_review"])
 @pytest.mark.parametrize("failure", ["audit", "commit"])
 async def test_interrupted_post_repair_audit_resumes_on_the_new_revision(

@@ -1828,6 +1828,9 @@ async def rewrite_plan(
     from .tdd_engine import parse_blocks
 
     reconcile_plan(config, state)
+    # tasks.md is staged, scanned and given a new rubric with every rewrite,
+    # so a plan-only edit keeps it current unless it was stale already.
+    tasks_current = "tasks" not in state.spec_gen.stale_artifacts
     with tempfile.TemporaryDirectory(prefix="buildme-plan-") as directory:
         staged = copy.copy(config)
         staged.specs_dir = Path(directory) / "specs"
@@ -1941,7 +1944,8 @@ async def rewrite_plan(
             config.change_dir / ".plan-publication.json", json.dumps(publication)
         )
         _finish_plan_publication(config)
-    reconcile_plan(config, state, regenerated=set(names))
+    reviewed = {"tasks"} if tasks_current else set()
+    reconcile_plan(config, state, regenerated=set(names) | reviewed)
     # Reconciliation records the published unknowns evidence on the live state.
     state.checkpoint(config.state_file_path())
     _commit_change_dir(
