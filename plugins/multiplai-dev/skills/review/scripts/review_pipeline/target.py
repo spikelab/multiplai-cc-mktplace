@@ -28,7 +28,7 @@ from pathlib import Path
 import git_targets
 from multiplai_core.citations import GIT_ARGV, git_env
 
-from .models import GateResult, Need, TargetInfo
+from .models import CLASSIC_UNREAD, GateResult, Need, TargetInfo
 
 log = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ def _pr_view(repo: Path, number: int) -> dict:
 def branch_rules(
     repo: Path, branch: str, needs: list[Need] | None = None
 ) -> list[dict] | None:
-    """GitHub's rules on *branch* (rulesets and classic protection, merged by GitHub).
+    """GitHub's rules on *branch*: its rulesets, plus the checks classic protection requires.
 
     `gh api` fills `{owner}` and `{repo}` from the repository's origin. `[]`
     means GitHub reports no rules. A missing `gh`, a non-GitHub remote or an
@@ -251,9 +251,69 @@ def branch_rules(
         )
         need("gh api returned no JSON")
         return None
-    return (
-        [r for r in rules if isinstance(r, dict)] if isinstance(rules, list) else None
+    if not isinstance(rules, list):
+        return None
+    return [r for r in rules if isinstance(r, dict)] + _classic_checks(
+        gh, repo, branch, needs
     )
+
+
+def _classic_checks(
+    gh: str, repo: Path, branch: str, needs: list[Need] | None
+) -> list[dict]:
+    """The checks classic branch protection requires, as one `required_status_checks` rule.
+
+    `rules/branches` lists rulesets only, so a check required by classic protection is read
+    from the branch itself. When that read fails, a `CLASSIC_UNREAD` rule says so.
+    """
+    endpoint = f"repos/{{owner}}/{{repo}}/branches/{branch}"
+    proc = subprocess.run(
+        [gh, "api", endpoint],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        shell=False,
+        check=False,
+    )
+    try:
+        data = json.loads(proc.stdout) if proc.returncode == 0 else None
+    except ValueError:
+        data = None
+    if data is None:
+        log.warning("gh api %s failed; classic branch protection not read", endpoint)
+        if needs is not None:
+            needs.append(
+                Need(
+                    what=f"Whether classic branch protection on `{branch}` requires CI checks. Run the "
+                    f"command in `{repo}`. The review went on without it: "
+                    f"{_first_line(proc.stderr) or 'gh api returned no JSON'}",
+                    cause="lookup-failed",
+                    command=f"gh api {endpoint}",
+                    source="pipeline",
+                )
+            )
+        return [{"type": CLASSIC_UNREAD}]
+    required = (
+        ((data.get("protection") or {}).get("required_status_checks") or {})
+        if isinstance(data, dict)
+        else {}
+    )
+    contexts = list(required.get("contexts") or []) + [
+        c.get("context")
+        for c in required.get("checks") or []
+        if isinstance(c, dict) and c.get("context")
+    ]
+    names = list(dict.fromkeys(c for c in contexts if isinstance(c, str)))
+    if not names:
+        return []
+    return [
+        {
+            "type": "required_status_checks",
+            "source": "classic branch protection",
+            "parameters": {"required_status_checks": [{"context": c} for c in names]},
+        }
+    ]
 
 
 def normalise_path(path: str | None) -> str:
