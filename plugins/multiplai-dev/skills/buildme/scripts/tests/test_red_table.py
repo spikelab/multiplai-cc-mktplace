@@ -209,6 +209,13 @@ AssertionError: expected 1 to be 2 // Object.is equality
       Tests  1 failed (1)
 """
 
+VITEST_LOAD_ERROR = """\
+ FAIL  new.test.js [ new.test.js ]
+Error: Failed to load url ./missing (resolved id: ./missing) in /p/new.test.js. Does the file exist?
+ Test Files  1 failed (1)
+      Tests  no tests
+"""
+
 MAKE_MISSING_TARGET = "make: *** No rule to make target 'test'.  Stop.\n"
 
 JEST_FAILED = (
@@ -367,6 +374,8 @@ CASES = [
     ),
     Case("unittest_failure", UNITTEST_FAILURE, 1, runner=None),
     Case("vitest_failure", VITEST_FAILURE, 1, runner="node"),
+    Case("vitest_load_error", VITEST_LOAD_ERROR, 1, runner="node"),
+    Case("vitest_load_error_by_output", VITEST_LOAD_ERROR, 1, runner=None),
     Case(
         "cargo_failure",
         "test tests::answer ... FAILED\nfailures:\n    tests::answer\ntest result: FAILED. 0 passed; 1 failed",
@@ -816,6 +825,18 @@ VERDICTS: dict[str, tuple[bool, dict, str | None, str]] = {
         None,
         "Nonzero test-command exit accepted as unverified RED for this runner",
     ),
+    "vitest_load_error": (
+        False,
+        {"exit_code": 1},
+        "fix_tests",
+        "RED gate failed: tests error instead of failing (collection/syntax problem, exit 1): <tail>",
+    ),
+    "vitest_load_error_by_output": (
+        False,
+        {"exit_code": 1},
+        "fix_tests",
+        "RED gate failed: tests error instead of failing (collection/syntax problem, exit 1): <tail>",
+    ),
     "cargo_failure": (
         True,
         {"exit_code": 1, "classification": "unverified"},
@@ -865,16 +886,16 @@ VERDICTS: dict[str, tuple[bool, dict, str | None, str]] = {
         "Nonzero test-command exit accepted as unverified RED for this runner",
     ),
     "unparsed_runner_setup_diagnostics_vitest": (
-        True,
-        {"exit_code": 2, "classification": "unverified"},
-        None,
-        "Nonzero test-command exit accepted as unverified RED for this runner",
+        False,
+        {"exit_code": 2},
+        "fix_tests",
+        "RED gate failed: tests error instead of failing (collection/syntax problem, exit 2): <tail>",
     ),
     "unparsed_runner_setup_diagnostics_node": (
-        True,
-        {"exit_code": 2, "classification": "unverified"},
-        None,
-        "Nonzero test-command exit accepted as unverified RED for this runner",
+        False,
+        {"exit_code": 2},
+        "fix_tests",
+        "RED gate failed: tests error instead of failing (collection/syntax problem, exit 2): <tail>",
     ),
     "unparsed_runner_setup_diagnostics_None": (
         True,

@@ -179,12 +179,20 @@ def test_test_command_preserves_literal_argument_punctuation(
     assert code == 0 and repr([word]) in output
 
 
-@pytest.mark.parametrize("runner", ["cargo", "go", "swift", "vitest", "node", None])
+@pytest.mark.parametrize("runner", ["cargo", "go", "swift", None])
 def test_unparsed_runner_nonzero_is_unverified_even_for_setup_diagnostics(runner):
     gate = red_gate(
         "SyntaxError: invalid syntax\ncommand not found: compiler", 2, runner=runner
     )
     assert gate.passed and gate.metadata["classification"] == "unverified"
+
+
+@pytest.mark.parametrize("runner", ["vitest", "node"])
+def test_jest_or_vitest_tests_that_fail_to_load_are_rejected(runner):
+    gate = red_gate(
+        "SyntaxError: invalid syntax\ncommand not found: compiler", 2, runner=runner
+    )
+    assert not gate.passed and gate.action == "fix_tests"
 
 
 @pytest.mark.parametrize("prefix", ["", "cd api && ", "sh -c "])

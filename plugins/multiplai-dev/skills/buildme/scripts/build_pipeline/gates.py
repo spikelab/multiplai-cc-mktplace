@@ -22,6 +22,7 @@ from typing import NamedTuple
 
 from .models import GateResult, ImplementationNote, ReviewGatePolicy, ReviewResult
 from .narrow_tests import (
+    NODE,
     PYTEST,
     _pytest_config,
     _runner_of_tokens,
@@ -718,7 +719,8 @@ _RED_BROKEN_TESTS = re.compile(
     r"^(?:E\s+)?fixture .+ not found|"
     r"^.*\b\d+ errors? during collection\b|"
     r"^[ \t]*(?:Error: )?(?:Cannot find module|Cannot find package|command not found)\b|"
-    r"^[ \t]*(?:●[ \t]*)?Test suite failed to run\b",
+    r"^[ \t]*(?:●[ \t]*)?Test suite failed to run\b|"
+    r"^[ \t]*Error: Failed to load url\b",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -733,7 +735,8 @@ class _RedFacts(NamedTuple):
     # `cd DIR &&` and `sh -c` / `bash -c` / `zsh -c`, is pytest;
     # "pytest_output": the output is pytest's (a `FAILED <path>::` line or a
     # collection or setup error) from some other command; "jest": the runner
-    # is jest or the output has Jest's summary; "other": none of these.
+    # is jest or vitest (`narrow_tests.NODE`) or the output has Jest's or
+    # Vitest's summary; "other": none of these.
     runner_kind: str
     broken: bool  # the output matches `_RED_BROKEN_TESTS`
     failed_paths: frozenset[
@@ -745,7 +748,7 @@ class _RedFacts(NamedTuple):
     # "inside" when every path is one of the expected tests; else "outside".
     attribution: str | None
     right_reason: bool  # the output matches `_RED_RIGHT_REASON`
-    jest_failed: bool  # Jest's `FAIL <file>` and `Tests: N failed` lines, N > 0
+    jest_failed: bool  # Jest's or Vitest's `FAIL <file>` and `Tests N failed` lines, N > 0
     tail: str  # the output's last 1000 characters
 
 
@@ -785,8 +788,12 @@ def _red_facts(
             re.MULTILINE,
         )
     )
-    jest_output = runner == "jest" or bool(
-        re.search(r"^Test Suites:|Test suite failed to run", test_output, re.MULTILINE)
+    jest_output = runner in ("jest", "vitest", NODE) or bool(
+        re.search(
+            r"^Test Suites:|Test suite failed to run|^[ \t]*Test Files[ \t]+\d",
+            test_output,
+            re.MULTILINE,
+        )
     )
     kind = (
         "direct_pytest"
@@ -828,9 +835,11 @@ def _red_facts(
         attribution=attribution,
         right_reason=bool(_RED_RIGHT_REASON.search(test_output)),
         jest_failed=bool(
-            re.search(r"^FAIL\s+\S", test_output, re.MULTILINE)
+            re.search(r"^[ \t]*FAIL\s+\S", test_output, re.MULTILINE)
             and re.search(
-                r"^Tests:\s+[^\n]*\b[1-9]\d* failed\b", test_output, re.MULTILINE
+                r"^(?:Tests:|[ \t]*Tests[ \t])\s*[^\n]*\b[1-9]\d* failed\b",
+                test_output,
+                re.MULTILINE,
             )
         ),
         tail=test_output[-1000:],
