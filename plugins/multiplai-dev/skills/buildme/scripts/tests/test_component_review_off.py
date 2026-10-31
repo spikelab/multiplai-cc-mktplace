@@ -196,6 +196,9 @@ async def _capture(base: Path, settings: dict | None = None) -> dict:
 @pytest.fixture(autouse=True)
 def _trusted(monkeypatch):
     monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+    # The fix agent's effort falls back to the session's (`CLAUDE_EFFORT`),
+    # and the golden was captured at medium; pin it so the run matches anywhere.
+    monkeypatch.setenv("MULTIPLAI_EFFORT", "medium")
 
 
 @pytest.mark.asyncio

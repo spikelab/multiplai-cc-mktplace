@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,18 @@ log = logging.getLogger(__name__)
 CHECK_TIMEOUT = 30
 # The `viewerPermission` values that let gh push a branch and open a PR.
 _CAN_OPEN_PR = ("ADMIN", "MAINTAIN", "WRITE")
+# Shell builtins and keywords a `sh -c` / `bash -c` / `zsh -c` script may start
+# with. They are not programs on PATH, so the runner check looked up `set` in
+# DolceBot's `bash -c 'set -e; ...'` and failed a command that runs. A script
+# that starts with one of these (or with an assignment) is checked as its shell.
+_SHELL_BUILTINS = frozenset(
+    {
+        "set", "export", "unset", "cd", "source", ".", ":", "true", "false",
+        "exec", "eval", "trap", "ulimit", "umask", "if", "for", "while",
+        "until", "case", "{", "(", "[[", "!",
+    }
+)  # fmt: skip
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 @dataclass(frozen=True)
@@ -67,7 +80,9 @@ def _config_parses(config) -> str | None:
 def _program(command: str, project_dir: Path) -> tuple[str, Path]:
     """The program *command* runs and the directory it runs from, after its
     leading `cd DIR &&` clauses and any `sh -c` / `bash -c` / `zsh -c`
-    wrapper. Raises ValueError for a command `gates` would not run."""
+    wrapper. A wrapped script that starts with a shell builtin, keyword or
+    assignment gives the shell and the directory the shell runs from. Raises
+    ValueError for a command `gates` would not run."""
     from .gates import _test_invocation
 
     argv, directory = _test_invocation(command, project_dir)
@@ -76,7 +91,14 @@ def _program(command: str, project_dir: Path) -> tuple[str, Path]:
         and Path(argv[0]).name in {"sh", "bash", "zsh"}
         and argv[1] == "-c"
     ):
+        shell, outer = argv[0], directory
         argv, directory = _test_invocation(argv[2], directory)
+        if argv and (
+            argv[0].rstrip(";") in _SHELL_BUILTINS
+            or argv[0].startswith("(")
+            or _ASSIGNMENT_RE.match(argv[0])
+        ):
+            return shell, outer
     if not argv:
         raise ValueError("the command is empty")
     return argv[0], directory
