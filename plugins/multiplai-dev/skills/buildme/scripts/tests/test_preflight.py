@@ -103,6 +103,11 @@ DOLCEBOT_TEST_COMMAND = (
         "bash -c 'export X=1; true'",
         "bash -c 'X=1 true'",
         "bash -c 'if true; then true; fi'",
+        "bash -c 'source /dev/null && true'",
+        "sh -c 'DJANGO_SETTINGS_MODULE=app.settings true'",
+        # A `cd` the shell expands: gates runs the shell, not the `cd`.
+        "bash -c 'cd $HOME && true'",
+        "sh -c '(cd . && true) && (cd . && true)'",
     ],
 )
 def test_a_shell_script_that_starts_with_a_builtin_passes(repo, command):
@@ -198,8 +203,13 @@ def test_the_db_check_is_read_from_the_config(tmp_path):
     assert config.db_check == "pg_isready -h localhost"
 
 
+# A component nested in the epic, and a sibling child change pm-spec's split
+# writes (`phase.child_change`).
+@pytest.mark.parametrize(
+    "child", ["account-management/account-model", "account-management-account-model"]
+)
 def test_an_epic_held_by_another_process_fails_a_component_built_by_hand(
-    repo, tmp_path, monkeypatch
+    repo, tmp_path, monkeypatch, child
 ):
     use_workspace(monkeypatch, tmp_path)
     epic_dir = store.epic_dir_for(repo, "account-management")
@@ -222,7 +232,7 @@ def test_an_epic_held_by_another_process_fails_a_component_built_by_hand(
     )
     try:
         assert holder.stdout.readline().strip() == "held"
-        config = _config(repo, change_name="account-management/account-model")
+        config = _config(repo, change_name=child)
         (failed,) = preflight.run(config, publishes=False, target=None)
         assert failed.check == "epic-lock"
         assert failed.reason.startswith("epic account-management is running now (pid ")

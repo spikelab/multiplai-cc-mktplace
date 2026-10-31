@@ -84,6 +84,16 @@ class TestInspection:
         assert git_ops.current_branch(repo) == "main"
         assert git_ops.default_branch(repo) == "main"
 
+    def test_default_branch_keeps_a_slash_in_origins_head(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        _git(
+            repo,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/release/2026",
+        )
+        assert git_ops.default_branch(repo) == "release/2026"
+
     def test_is_dirty_ignores_untracked(self, tmp_path):
         repo = make_repo(tmp_path / "proj")
         (repo / "scratch.txt").write_text("noise")
@@ -831,6 +841,30 @@ class TestWholeTreeOperations:
         assert (repo / "build-progress.md").exists()
         assert (repo / "specs/changes/feat/.build-state.json").exists()
         assert (repo / "specs/changes/feat/.board.json").exists()
+
+    @pytest.mark.parametrize("commit", [False, True])
+    def test_discard_keeps_bookkeeping_an_agent_staged(self, tmp_path, commit):
+        """A refactorer holding Bash ran `git add -A` (and maybe committed):
+        the restore must not delete the bookkeeping it swept in."""
+        repo = make_repo(tmp_path / "proj")
+        change = repo / "specs" / "changes" / "feat"
+        change.mkdir(parents=True)
+        (change / "proposal.md").write_text("# proposal\n")
+        (repo / "module.py").write_text("x = 1\n")
+        base = git_ops.commit_tree(repo, "impl", "block=1")
+        assert base is not None
+
+        (repo / "module.py").write_text("x = 2\n")
+        self._bookkeeping(repo)
+        _git(repo, "add", "-A")
+        if commit:
+            _git(repo, "commit", "-qm", "refactor")
+
+        assert git_ops.discard_to(repo, base, "refactor") is True
+        assert (repo / "module.py").read_text() == "x = 1\n"
+        assert (repo / "build-progress.md").exists()
+        assert (change / ".build-state.json").exists()
+        assert (change / ".board.json").exists()
 
 
 class TestDiscardToAncestorGuard:

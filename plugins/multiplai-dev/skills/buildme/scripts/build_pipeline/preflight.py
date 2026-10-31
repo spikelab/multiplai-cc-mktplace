@@ -81,8 +81,9 @@ def _program(command: str, project_dir: Path) -> tuple[str, Path]:
     """The program *command* runs and the directory it runs from, after its
     leading `cd DIR &&` clauses and any `sh -c` / `bash -c` / `zsh -c`
     wrapper. A wrapped script that starts with a shell builtin, keyword or
-    assignment gives the shell and the directory the shell runs from. Raises
-    ValueError for a command `gates` would not run."""
+    assignment, or with a `cd` the shell expands, gives the shell and the
+    directory the shell runs from. Raises ValueError for a command `gates`
+    would not run."""
     from .gates import _test_invocation
 
     argv, directory = _test_invocation(command, project_dir)
@@ -92,7 +93,10 @@ def _program(command: str, project_dir: Path) -> tuple[str, Path]:
         and argv[1] == "-c"
     ):
         shell, outer = argv[0], directory
-        argv, directory = _test_invocation(argv[2], directory)
+        try:
+            argv, directory = _test_invocation(argv[2], directory)
+        except ValueError:
+            return shell, outer
         if argv and (
             argv[0].rstrip(";") in _SHELL_BUILTINS
             or argv[0].startswith("(")
@@ -200,16 +204,26 @@ def _epic_lock(config) -> str | None:
     from .epic import CHILD_ENV, store
     from .epic import lock as epic_lock
 
-    epic, sep, _ = config.change_name.partition("/")
-    if not sep or os.environ.get(CHILD_ENV) == "1":
+    if os.environ.get(CHILD_ENV) == "1":
+        return None
+    # A child builds as `<epic>/<id>` when nested, `<epic>-<id>` when a
+    # sibling change (`phase.child_change`); the epic's name may hold a `-`.
+    name = config.change_name
+    epic, sep, _ = name.partition("/")
+    if sep:
+        epics = [epic]
+    else:
+        epics = [name[:i] for i, c in enumerate(name) if c == "-" and i]
+    if not epics:
         return None
     repo = git_ops.repo_root(config.project_dir)
     if repo is None:
         return None
-    holder = epic_lock.holder_elsewhere(store.epic_dir_for(repo, epic))
-    if holder is None:
-        return None
-    return f"epic {epic} is running now ({holder})"
+    for epic in epics:
+        holder = epic_lock.holder_elsewhere(store.epic_dir_for(repo, epic))
+        if holder is not None:
+            return f"epic {epic} is running now ({holder})"
+    return None
 
 
 def _last_line(res: git_ops.GitResult) -> str:

@@ -132,14 +132,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     rc = _refuse_unless_ready(config, state_path)
     if rc is not None:
         return rc
-    if merging:
-        rc = _merge_into_feature_branch(config)
-        if rc is not None:
-            return rc
-
-    progress = ProgressWriter(config.progress_file_path())
-
     # A spec-only handoff reuses its revision-bound planning evidence and spend.
+    # Bound to its branch before the merge, which then merges there and pushes
+    # nothing (`_merge_into_feature_branch`).
     completed = completed_state_path(state_path)
     if not state_path.exists() and completed.exists():
         planned = BuildState.load(completed)
@@ -156,6 +151,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 planned.budget, accept_unknown_spend=config.accept_unknown_spend
             )
             planned.checkpoint(state_path)
+
+    if merging:
+        rc = _merge_into_feature_branch(config)
+        if rc is not None:
+            return rc
+
+    progress = ProgressWriter(config.progress_file_path())
 
     # Resume or create state
     if state_path.exists():

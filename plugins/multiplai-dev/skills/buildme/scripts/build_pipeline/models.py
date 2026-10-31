@@ -128,8 +128,12 @@ class ReviewGatePolicy(BaseModel):
 
     # Weighted average of effective scores below this fails the block.
     min_weighted_average: float = 3.5
-    # An effective dimension score at or below this is a hard fail on its own.
+    # An effective dimension score at or below this is a hard fail on its own,
+    # and so is a raw score at or below it held with at least
+    # `critical_min_confidence`: shrinking toward neutral puts a score of 1
+    # above 1.0 at any confidence below 1.0.
     critical_score: float = 1.0
+    critical_min_confidence: float = 0.5
     # The "no information" score confidence pulls toward — see
     # ReviewScore.effective_score. Sitting exactly at the pass threshold means
     # a zero-confidence dimension neither rescues nor sinks a block.
@@ -364,6 +368,10 @@ class ReviewResult(BaseModel):
             s.dimension
             for s in self.scores
             if s.effective_score(pol.neutral_score) <= pol.critical_score
+            or (
+                s.score <= pol.critical_score
+                and s.confidence >= pol.critical_min_confidence
+            )
         ]
 
     @property

@@ -15,6 +15,25 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.148.3] - 2026-10-31
+
+### Fixed
+
+- **buildme**: thirteen fixes from a code review of buildme's pipeline.
+  - A Vitest run with failing tests is a test failure, not a crashed runner: buildme reads Vitest's indented `Tests  1 failed (1)` summary and its `Failed to load url` error instead of retrying the suite three times.
+  - The RED gate rejects Vitest and Jest tests that fail to load (a syntax or import error) instead of passing them as unverified RED.
+  - Preflight passes a `sh`/`bash`/`zsh -c` test command whose script starts with a `cd` the shell expands (`bash -c 'cd $HOME/x && pytest'`).
+  - With `tdd.narrow_commands`, the block gate and the end gate run a change that touches two or more directories, instead of failing every time with "Test command failed to run".
+  - A default branch whose name has a slash (`release/2026`) keeps its full name as the build's base and the PR's base.
+  - Preflight refuses a hand-run sibling child change (`<epic>-<id>`) while its epic runs elsewhere, as it already did for a nested child (`<epic>/<id>`).
+  - Discarding a failed step keeps `.build-state.json`, `build-progress.md` and the other bookkeeping files an agent's `git add -A` staged, instead of deleting them.
+  - When git refuses the pre-refactor checkpoint commit or the mutation survivor round's commit (a failing pre-commit hook, say), refactor-all is skipped or the round is discarded, instead of the build ending FAILED with unverified edits in the tree.
+  - When git refuses the commit of a regenerated walkthrough, the walkthrough's note says so and publish goes on, instead of aborting.
+  - Continuing a `--spec-only` build merges origin's default branch into its local branch without pushing a separate merge, so its own push at publish is no longer rejected as non-fast-forward.
+  - The PR review and the component review hear what a kept fix on pass left open: findings it fixed are no longer listed as open, and that review's new open and rejected findings are included.
+  - A review dimension scored 1 with confidence of at least 0.5 fails the review gate on its own; before, any confidence below 1.0 lifted it above the critical score. The floor is `code_review.gate.critical_min_confidence`.
+  - A Python project found by `pytest.ini` or `setup.py` gets the Python reference docs, as one found by `pyproject.toml` does.
+
 ## [0.148.2] - 2026-10-31
 
 ### Fixed

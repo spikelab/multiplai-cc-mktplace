@@ -185,6 +185,16 @@ def _mark_block(
     )
 
 
+def _commit_tree_or_none(config: BuildConfig, message: str, label: str) -> str | None:
+    """`git_ops.commit_tree`, with a commit git refused or failed returned as
+    None, for the callers whose recovery path starts from None."""
+    try:
+        return git_ops.commit_tree(config.project_dir, message, label)
+    except git_ops.GitLifecycleError as e:
+        log.warning("Could not commit %s: %s", label, e)
+        return None
+
+
 def _git_commit_block_phase(
     config: BuildConfig, phase: str, block: BlockInfo
 ) -> str | None:
@@ -4435,8 +4445,8 @@ async def _run_refactor_all(
     # commit" is only a faithful pre-refactor snapshot once they are in it.
     # Without this, discarding a failed refactor would take the build's own
     # review fixes with it.
-    rewind_to = git_ops.commit_tree(
-        config.project_dir,
+    rewind_to = _commit_tree_or_none(
+        config,
         "chore: checkpoint before whole-change refactor",
         "pre-refactor checkpoint",
     )
@@ -4446,7 +4456,7 @@ async def _run_refactor_all(
         # per-block rewind).
         rewind_to = git_ops.rev_parse_head(config.project_dir)
     if rewind_to is None:
-        # `git_ops.commit_tree` returns None for "commit failed" too (failing
+        # `_commit_tree_or_none` returns None for "commit failed" too (failing
         # hook, missing identity) — with work still in the tree, possibly all
         # of it staged. Trusting HEAD then would let a failed verification
         # `reset --hard` + `clean -fd` over the uncommitted work and destroy
@@ -4984,7 +4994,9 @@ def _left_by_block_reviews(config: BuildConfig, state: BuildState) -> str:
     wanted = set(config.block_gate_severities)
     lines = []
     for b in state.tdd.blocks if state.tdd else []:
-        open_, _, _ = review_rounds.open_state(config.change_dir, b.number)
+        open_, _, _ = review_rounds.open_state(
+            config.change_dir, b.number, kept_fix_on_pass=True
+        )
         for f in open_:
             if f.severity.strip().lower() in wanted:
                 continue
@@ -5881,8 +5893,8 @@ async def _run_mutation_round(
             "NOT discarded.",
         )
 
-    sha = git_ops.commit_tree(
-        config.project_dir,
+    sha = _commit_tree_or_none(
+        config,
         "test(mutation): kill surviving mutants",
         "mutation survivor round",
     )

@@ -211,7 +211,8 @@ Resolution, in order:
 
 1. **Stack** — the manifest filename (`pyproject`, `package`, `Package`,
    `Cargo`, `go`), also when `tdd.test_command` in `specs/config.yaml` sets
-   the test command.
+   the test command. A Python project found by `pytest.ini` or `setup.py`
+   reads as `pyproject`.
 2. **Frameworks** — read out of the manifests, not their names, because a
    Django app and a plain library are both `pyproject.toml`: `manage.py` or a
    `django` dependency → `django`; a `fastapi` dependency → `fastapi`; a

@@ -55,6 +55,10 @@ _DEFAULT_REFERENCE_DOCS: dict[str, list[str]] = {
     "fastapi": ["fastapi-best-practices.md"],
 }
 
+# The other Python markers test-command discovery takes (`pytest.ini` first,
+# `setup.py` last) give a `stack` with no key above: they read as "pyproject".
+_REFERENCE_STACK_ALIASES = {"pytest": "pyproject", "setup": "pyproject"}
+
 # Per-document ceiling when reference docs are inlined into a spec-generation
 # prompt. The writer is not handed the docs' paths (and the unknowns pass has
 # no tools), so inlining is the only channel — and an unbounded standards doc would crowd out the specs it is
@@ -2412,7 +2416,7 @@ class BuildConfig:
         mapping.update(self.reference_docs)
 
         names: list[str] = []
-        for key in [self.stack, *self.detect_frameworks()]:
+        for key in self._reference_keys():
             for name in mapping.get(key, []):
                 if name not in names:
                     names.append(name)
@@ -2430,7 +2434,7 @@ class BuildConfig:
         raw = os.environ.get("BUILDME_REFERENCE_DOCS", "").strip()
         if raw:
             return _split_list(raw), "env"
-        keys = [self.stack, *self.detect_frameworks()]
+        keys = self._reference_keys()
         rank = "config" if any(k in self.reference_docs for k in keys) else "built-in"
         return self.reference_doc_names(), rank
 
@@ -2438,9 +2442,16 @@ class BuildConfig:
         """Names that specs/config.yaml's `reference_docs:` supplied."""
         return {
             name
-            for key in [self.stack, *self.detect_frameworks()]
+            for key in self._reference_keys()
             for name in self.reference_docs.get(key, [])
         }
+
+    def _reference_keys(self) -> list[str]:
+        """The `reference_docs` keys this project uses: its stack (an alias
+        in `_REFERENCE_STACK_ALIASES` read as what it names), then its
+        frameworks."""
+        stack = _REFERENCE_STACK_ALIASES.get(self.stack, self.stack)
+        return [stack, *self.detect_frameworks()]
 
     def stack_reference_docs(self) -> list[Path]:
         """Reference doc paths for the detected stack and frameworks.
