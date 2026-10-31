@@ -127,8 +127,9 @@ _sleep = time.sleep
 
 # Lines a runner prints only when tests ran: pytest's summary (`=== 1 failed,
 # 2 passed in 0.12s ===`, or `-q`'s bare `1 failed, 2 passed in 0.12s`, or
-# `no tests ran`), Jest's `Tests:` line, unittest's and Django's `Ran N tests`,
-# and pytest's `FAILED <id>` / `ERROR <id>` lines.
+# `no tests ran`), Jest's `Tests:` line, Vitest's indented `Tests  1 failed
+# (1)` line, unittest's and Django's `Ran N tests`, and pytest's `FAILED <id>` /
+# `ERROR <id>` lines.
 _TEST_RESULTS_RE = re.compile(
     r"^=+ .*\b(?:passed|failed|errors?|skipped|xfailed|xpassed|deselected|"
     r"no tests ran)\b.* in [\d.]+s\b|"
@@ -136,6 +137,7 @@ _TEST_RESULTS_RE = re.compile(
     r" in [\d.]+s\b|"
     r"^no tests ran\b|"
     r"^Tests:\s+\d|"
+    r"^[ \t]*Tests[ \t]+\d+ (?:passed|failed|skipped|todo)\b|"
     r"^Ran \d+ tests? in |"
     r"^(?:FAILED|ERROR)\s+\S+::",
     re.MULTILINE,
@@ -201,7 +203,7 @@ _COLLECTION_ERROR_RE = re.compile(
     r"ImportError while (?:loading conftest|importing test module)|"
     r"^E\s+(?:ModuleNotFoundError|ImportError|SyntaxError|IndentationError)\b|"
     r"^(?:ModuleNotFoundError|ImportError|SyntaxError|IndentationError):|"
-    r"Test suite failed to run|Cannot find module|"
+    r"Test suite failed to run|Cannot find module|Failed to load url|"
     r"^ERROR: usage: |: error: unrecognized arguments",
     re.MULTILINE,
 )

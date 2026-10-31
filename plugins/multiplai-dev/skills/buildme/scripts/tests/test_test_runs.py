@@ -141,6 +141,10 @@ def test_an_unknown_command_with_no_output_is_not_run_again(tmp_path, trusted, w
         (["npx", "jest"], 1, "Tests:       1 failed, 1 total", False),
         (["npx", "jest"], 1, "Cannot find module 'x'", False),
         (["npx", "jest"], 137, "", True),
+        # vitest's summary is indented and has no colon.
+        (["npx", "vitest", "run"], 1, "      Tests  1 failed (1)", False),
+        (["npx", "vitest", "run"], 1, "      Tests  1 failed | 2 passed (3)", False),
+        (["npx", "vitest", "run"], 1, "Error: Failed to load url ./x", False),
         (["make", "test"], 1, "", False),
     ],
 )
