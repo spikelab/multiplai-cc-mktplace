@@ -98,6 +98,69 @@ def test_rejected_with_its_reason_and_open_accepted_go_in(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("kept", [True, False])
+def test_a_kept_fix_on_pass_reviews_record_decides_what_is_open(tmp_path, kept):
+    """After a kept fix on pass, its `fix_on_pass_review` record holds what is
+    open: the finding it fixed is gone, and the review's new open and
+    rejected findings go in. A fix not kept was rolled back, so its review
+    record says nothing about the code."""
+    change = tmp_path / "change"
+    first = record(change, 1, accepted=[ReviewFinding(claim="fixed on pass")])
+    review_rounds.update_round(first, fix={"kept": kept})
+    review_rounds.record_round(
+        change,
+        block(1),
+        head_sha="b" * 40,
+        reviewed_sha="b" * 40,
+        review=ReviewResult(
+            scores=[],
+            findings=[ReviewFinding(claim="raised after the fix")],
+            rejected_findings=[rejected_finding("not a defect")],
+        ),
+        gate_passed=True,
+        gate_reason="ok",
+        weighted_average=8.0,
+        kind="fix_on_pass_review",
+        carried_open=[],
+        new_open=[0],
+    )
+    got = [(e["id"], e["claim"]) for e in review_rounds.earlier_decisions(change)]
+    if kept:
+        assert got == [
+            ("B01-R2-X1", "not a defect"),
+            ("B01-R2-F1", "raised after the fix"),
+        ]
+    else:
+        assert got == [("B01-R1-F1", "fixed on pass")]
+
+
+def test_the_component_review_hears_what_a_kept_fix_on_pass_left_open(tmp_path):
+    from build_pipeline.tdd_engine import _left_by_block_reviews
+
+    change = tmp_path / "change"
+    first = record(change, 1, accepted=[ReviewFinding(claim="fixed on pass")])
+    review_rounds.update_round(first, fix={"kept": True})
+    review_rounds.record_round(
+        change,
+        block(1),
+        head_sha="b" * 40,
+        review=ReviewResult(
+            scores=[], findings=[ReviewFinding(claim="raised after the fix")]
+        ),
+        gate_passed=True,
+        gate_reason="ok",
+        weighted_average=8.0,
+        kind="fix_on_pass_review",
+        carried_open=[],
+        new_open=[0],
+    )
+    config = SimpleNamespace(change_dir=change, block_gate_severities=["Critical"])
+    state = SimpleNamespace(tdd=SimpleNamespace(blocks=[block(1)]))
+    assert _left_by_block_reviews(config, state) == (
+        "- B01-R2-F1 [Minor] raised after the fix"
+    )
+
+
 def test_a_finding_closed_in_a_later_round_is_left_out(tmp_path):
     change = tmp_path / "change"
     record(change, 2, accepted=[ReviewFinding(claim="fixed later")])

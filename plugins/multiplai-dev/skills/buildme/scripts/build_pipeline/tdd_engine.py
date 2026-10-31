@@ -4994,7 +4994,9 @@ def _left_by_block_reviews(config: BuildConfig, state: BuildState) -> str:
     wanted = set(config.block_gate_severities)
     lines = []
     for b in state.tdd.blocks if state.tdd else []:
-        open_, _, _ = review_rounds.open_state(config.change_dir, b.number)
+        open_, _, _ = review_rounds.open_state(
+            config.change_dir, b.number, kept_fix_on_pass=True
+        )
         for f in open_:
             if f.severity.strip().lower() in wanted:
                 continue
