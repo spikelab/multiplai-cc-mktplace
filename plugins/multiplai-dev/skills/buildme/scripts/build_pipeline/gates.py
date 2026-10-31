@@ -748,7 +748,9 @@ class _RedFacts(NamedTuple):
     # "inside" when every path is one of the expected tests; else "outside".
     attribution: str | None
     right_reason: bool  # the output matches `_RED_RIGHT_REASON`
-    jest_failed: bool  # Jest's or Vitest's `FAIL <file>` and `Tests N failed` lines, N > 0
+    jest_failed: (
+        bool  # Jest's or Vitest's `FAIL <file>` and `Tests N failed` lines, N > 0
+    )
     tail: str  # the output's last 1000 characters
 
 

@@ -4116,9 +4116,7 @@ class TestWholeChangeRefactor:
         assert "# review fix" in (config.project_dir / "module.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_failed_checkpoint_commit_with_dirty_tree_skips_the_pass(
-        self, setup
-    ):
+    async def test_failed_checkpoint_commit_with_dirty_tree_skips_the_pass(self, setup):
         """`_git_commit_tree` returns None for "commit failed" too (failing
         hook, missing identity) — with the dirty work possibly all staged.
         HEAD is then NOT a faithful snapshot, and trusting it as the rewind

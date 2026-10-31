@@ -1451,9 +1451,10 @@ class TestRunMutationStep:
             await _run_mutation(config, state, progress)
         assert run.call_count == 1
         assert not (repo / "tests" / "test_more.py").exists()
-        assert "could not be committed and were discarded" in (
-            config.change_dir / "mutation.md"
-        ).read_text()
+        assert (
+            "could not be committed and were discarded"
+            in (config.change_dir / "mutation.md").read_text()
+        )
 
     @pytest.mark.asyncio
     async def test_survivor_round_that_rewrites_tracked_tool_caches_is_committed(

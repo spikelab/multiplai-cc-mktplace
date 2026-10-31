@@ -300,7 +300,11 @@ class TestCriticalDimension:
         r = ReviewResult(
             scores=[
                 ReviewScore(
-                    dimension="security", weight=3, score=1, evidence="e", confidence=0.9
+                    dimension="security",
+                    weight=3,
+                    score=1,
+                    evidence="e",
+                    confidence=0.9,
                 ),
                 *(
                     ReviewScore(dimension=d, weight=2, score=5, evidence="e")
