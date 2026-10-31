@@ -406,6 +406,28 @@ class TestReferenceDocs:
         assert out.count("REFERENCES(") == 1
         assert "REFERENCES(built-in):python-project-structure.md" in out
 
+    @pytest.mark.parametrize("marker", ["pytest.ini", "setup.py"])
+    def test_a_python_project_found_by_another_marker_gets_the_python_docs(
+        self, tmp_path, marker
+    ):
+        """Discovery checks pytest.ini first and also takes setup.py, which
+        give stack "pytest" and "setup"; the Python docs still apply."""
+        config = self._config_with_docs(
+            tmp_path,
+            "uv-python-best-practices.md",
+            "python-project-structure.md",
+            stack="",
+        )
+        (config.project_dir / marker).write_text("")
+        if marker == "pytest.ini":
+            (config.project_dir / "pyproject.toml").write_text("[project]\nname='x'\n")
+        config._discover_test_command()
+        assert config.stack == marker.split(".")[0]
+        assert config.reference_doc_names() == [
+            "uv-python-best-practices.md",
+            "python-project-structure.md",
+        ]
+
     def test_references_progress_line_says_none_when_empty(self, tmp_path, capsys):
         config = self._config_with_docs(tmp_path, stack="go")
         config.stack_reference_docs()
