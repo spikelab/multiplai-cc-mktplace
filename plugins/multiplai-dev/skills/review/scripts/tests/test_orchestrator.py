@@ -530,6 +530,27 @@ def test_a_budget_stop_during_merge_keeps_the_answers_and_resume_asks_only_the_r
 
 
 @pytest.mark.usefixtures("every_dimension")
+def test_plan_only_leaves_a_stopped_runs_target_files_and_rounds_alone(
+    fixture_repo, tmp_path, agents, capsys
+):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    agents(limit_at=8, cost=1.0)
+    assert main(_review_args(repo, base, head, out, "--no-deps")) == 6
+    target_dir = out / "booking-engine" / f"range-{base}..{head}"
+    names = ("diff.patch", "commits.txt", "files.txt")
+    before = {n: (target_dir / n).read_text() for n in names}
+    rounds_before = sorted(p.name for p in (target_dir / "rounds").glob("*"))
+
+    # Another diff of the same target: the stopped run's resume must still read its own.
+    args = _review_args(repo, base, head, out, "--no-deps", "--exclude", "settings.py")
+    assert main(args + ["--plan-only"]) == 0
+    assert {n: (target_dir / n).read_text() for n in names} == before
+    assert sorted(p.name for p in (target_dir / "rounds").glob("*")) == rounds_before
+    assert "settings.py" not in (target_dir / "plan.txt").read_text()
+
+
+@pytest.mark.usefixtures("every_dimension")
 def test_the_usage_limit_resume_command_carries_verify_low_and_model(
     fixture_repo, tmp_path, agents, capsys
 ):

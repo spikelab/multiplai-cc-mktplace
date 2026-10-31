@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -483,6 +484,7 @@ def prepare(
     check_interrupted: bool = False,
     lock: contextlib.ExitStack | None = None,
     incremental_on: bool = True,
+    plan: bool = False,
 ) -> tuple[ReviewState, Path]:
     """Resolve and gate the target, then write its directory. Raises ReviewError.
 
@@ -503,6 +505,10 @@ def prepare(
     starts over. While the chosen directory has no saved state yet, the
     directory multiplai-dev 0.46 used for this target (`<out>/<its slug>/`) is
     checked the same way, under its own lock.
+
+    With *plan* (`--plan-only`) on a directory holding a run `resume` can
+    continue, no round is kept and the diff and lists go to a temporary
+    directory held by *lock*, so that run's files stay as it wrote them.
     """
     repo, tree, name, src = spec.repo, spec.tree, None, None
     info = None
@@ -585,12 +591,21 @@ def prepare(
                     _hold(old_lock, old)
                 if _resumable(old, info.head_sha):
                     raise InterruptedRun(old)
-    # A directory an earlier round wrote: keep that round's findings before
-    # this run writes over them, also when this run is on the same head (a rerun).
-    kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
-    if kept is not None:
-        log.info("kept the earlier round of %s in %s", info.slug, kept)
-    info = target_mod.write_target_files(info, diff or "", target_dir)
+    files_dir = target_dir
+    if plan and _holds_stopped_run(target_dir):
+        # `--plan-only` must not change what a later `resume` of that run reads.
+        files_dir = Path(
+            (lock or contextlib.ExitStack()).enter_context(
+                tempfile.TemporaryDirectory(prefix="review-plan-")
+            )
+        )
+    else:
+        # A directory an earlier round wrote: keep that round's findings before
+        # this run writes over them, also when this run is on the same head (a rerun).
+        kept = rounds.keep_round(target_dir, info.slug, info.head_sha)
+        if kept is not None:
+            log.info("kept the earlier round of %s in %s", info.slug, kept)
+    info = target_mod.write_target_files(info, diff or "", files_dir)
     # What this round reviews, once, from the round just kept: `resume` reuses the stored scope.
     scope, carried = None, None
     if not info.is_tree:
@@ -717,6 +732,15 @@ def _choose_folder(
     if lock is not None:
         lock.enter_context(held.pop_all())
     return folder
+
+
+def _holds_stopped_run(target_dir: Path) -> bool:
+    """True when *target_dir* holds a run on its saved head that `resume` can continue."""
+    path = target_dir / STATE_FILE
+    saved = load_state(path) if path.is_file() else None
+    return saved is not None and review_ledger.resumable(
+        target_dir, saved.target.head_sha
+    )
 
 
 def _resumable(target_dir: Path, head_sha: str) -> bool:
@@ -876,7 +900,7 @@ def plan_only(
     """Resolve the target and write `plan.txt` beside `skipped.txt`; no model call, no ledger."""
     extra_finders_notice(config, spec)
     with contextlib.ExitStack() as lock:
-        state, target_dir = prepare(spec, out_dir, lock=lock)
+        state, target_dir = prepare(spec, out_dir, lock=lock, plan=True)
         change_review_dimensions(state, config)
         callers_split(state)
         print_cost_lines(state, config, resuming=False)
