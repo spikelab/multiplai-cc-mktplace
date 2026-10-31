@@ -84,6 +84,16 @@ class TestInspection:
         assert git_ops.current_branch(repo) == "main"
         assert git_ops.default_branch(repo) == "main"
 
+    def test_default_branch_keeps_a_slash_in_origins_head(self, tmp_path):
+        repo = make_repo(tmp_path / "proj")
+        _git(
+            repo,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/release/2026",
+        )
+        assert git_ops.default_branch(repo) == "release/2026"
+
     def test_is_dirty_ignores_untracked(self, tmp_path):
         repo = make_repo(tmp_path / "proj")
         (repo / "scratch.txt").write_text("noise")

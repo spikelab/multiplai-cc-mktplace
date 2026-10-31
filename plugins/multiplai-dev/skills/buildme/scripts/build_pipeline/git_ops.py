@@ -371,7 +371,7 @@ def default_branch(repo: Path | str) -> str:
     currently checked-out branch."""
     res = _run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd=repo)
     if res.ok and res.stdout.strip():
-        return res.stdout.strip().rsplit("/", 1)[-1]
+        return res.stdout.strip().removeprefix("refs/remotes/origin/")
     for candidate in ("main", "master"):
         if branch_exists(repo, candidate):
             return candidate
