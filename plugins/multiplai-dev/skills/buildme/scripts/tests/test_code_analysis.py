@@ -310,6 +310,26 @@ class TestRunCodebaseAnalysis:
         assert "add returns the sum of its operands." in md
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", ["budget", "trust"])
+    async def test_a_spent_budget_or_untrusted_repo_stops_the_analysis(
+        self, project, error
+    ):
+        from build_pipeline.budget import BudgetExceededError
+        from build_pipeline.sdk import RepoTrustError
+
+        raised = (
+            BudgetExceededError("Build budget exhausted")
+            if error == "budget"
+            else RepoTrustError("untrusted repo")
+        )
+
+        async def call(prompt, schema, **kwargs):
+            raise raised
+
+        with pytest.raises(type(raised)):
+            await run_codebase_analysis(project, _config(project), call=call)
+
+    @pytest.mark.asyncio
     async def test_the_default_call_runs_buildmes_structured_agent_under_one_budget_label(
         self, project
     ):

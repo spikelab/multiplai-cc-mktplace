@@ -64,6 +64,8 @@ from code_facts import (
 from multiplai_core.citations import check_quote, file_at
 
 from . import git_ops
+from .budget import BudgetExceededError
+from .sdk import RepoTrustError
 
 log = logging.getLogger(__name__)
 
@@ -619,6 +621,7 @@ async def analyse(
         ),
         errors=[],
         recoverable=(Exception,),
+        fatal=(BudgetExceededError, RepoTrustError),
     )
     keep = citation_keeper(git.resolver(), root=project_dir)
     gated = gate_answers(answers, keep, conventions=True)
