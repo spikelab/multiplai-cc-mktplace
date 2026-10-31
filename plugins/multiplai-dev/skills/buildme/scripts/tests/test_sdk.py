@@ -207,6 +207,7 @@ class TestExplainerPath:
 
         class Config:
             model = None
+            project_dir = "/project"
             project_description = "test project"
             model_for = staticmethod(lambda step: None)
             effort_for = staticmethod(lambda step: None)
@@ -226,6 +227,18 @@ class TestExplainerPath:
         assert "WebSearch" in allowed
         assert not {"Bash", "Write", "Edit"} & set(allowed)
         assert "disallowed_tools" not in run.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_tools_run_in_the_project(self, monkeypatch, tmp_path):
+        from build_pipeline.llm_steps.spec_steps import run_explainer
+
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        dep, config = self._dep_and_config()
+        config.project_dir = tmp_path
+        with patch("build_pipeline.sdk.run_agent", _mock_run_agent()) as run:
+            await run_explainer(dep, config)
+
+        assert run.call_args.kwargs["cwd"] == str(tmp_path)
 
     @pytest.mark.asyncio
     async def test_prompt_says_fetched_text_is_data(self, monkeypatch):

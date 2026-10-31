@@ -146,6 +146,7 @@ async def llm_call(
     max_turns: int = 1,
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
+    cwd: str | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
     budget_label: str = "",
 ) -> str:
@@ -181,6 +182,7 @@ async def llm_call(
                 max_turns=max_turns,
                 model=model,
                 effort=effort,
+                cwd=cwd,  # None → run_agent's isolated hook-sessions dir
                 timeout_s=call_timeout,
                 label="llm",
                 component="buildme",
