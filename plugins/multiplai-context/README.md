@@ -205,12 +205,12 @@ over the anchor:
 | Option | Default | Purpose |
 |--------|---------|---------|
 | `anthropic_api_key` | _(unset, sensitive)_ | API key fallback when the Agent SDK is unavailable. Marked sensitive — stored in the system keychain, never logged. |
-| `catalog_model` | `claude-sonnet-5` | Model for LLM catalog generation |
+| `catalog_model` | `claude-sonnet-5-5` | Model for LLM catalog generation |
 | `catalog_model_diary` | _(inherits)_ | Optional model override for the diary catalog |
 | `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid before the read path flags it stale (advisory warning only — never regenerates inline) |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |
 | `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, instant), `llm` (one model call per prompt — 2.4× better at finding the right file, worse at injecting nothing), or `llm_hybrid` (`llm` picks, then `token_overlap`'s breadth gate and `anti_domains` veto filter the picks — opt-in and unmeasured; it can only remove files, so it trades recall for precision). See [Router latency](#router-latency) before choosing either LLM strategy. |
-| `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
+| `router_model` | `claude-haiku-5-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
 | `router_thinking` | `false` | Extended thinking on router calls. Off by default and that is what makes LLM routing fit the hook budget: a cold call is 18.4 s with thinking on, 2.9 s with it off. Set `true`/`1`/`yes`/`on` to restore it. If the installed `multiplai-core` or `claude-agent-sdk` is too old to carry the setting, the plugin warns once, keeps thinking on, and keeps working. |
 | `extraction_thinking` | `false` | Extended thinking on the diary/learnings extraction call — structured parsing over a distilled transcript, so it gets the same 18.4 s → 2.9 s win as the router. Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
 | `checkpoint_thinking` | `false` | Extended thinking on the checkpoint writer's call (folds a transcript segment into the fixed six-section document). Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |

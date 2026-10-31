@@ -428,8 +428,8 @@ JOBS = [
         frozenset({HAIKU}),
         ("memory_doctor_effort",),
     ),
-    Job("memory router", _router, frozenset({"claude-haiku-4-5"}), ("router_effort",)),
-    Job("catalogs", _catalogs, frozenset({"claude-sonnet-5"}), ("catalog_effort",)),
+    Job("memory router", _router, frozenset({"claude-haiku-5-5"}), ("router_effort",)),
+    Job("catalogs", _catalogs, frozenset({"claude-sonnet-5-5"}), ("catalog_effort",)),
     Job(
         "checkpoint",
         _checkpoint,
@@ -446,7 +446,7 @@ JOBS = [
     Job(
         "backfill",
         _backfill,
-        frozenset({CLIENT_DEFAULT_MODEL, "claude-sonnet-5"}),
+        frozenset({CLIENT_DEFAULT_MODEL, "claude-sonnet-5-5"}),
         ("extraction_effort", "now_effort", "catalog_effort"),
     ),
 ]
