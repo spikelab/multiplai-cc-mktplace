@@ -1424,7 +1424,6 @@ class TestPluginValidationReadiness:
             "qmd-search",
             "costs",
             "config-audit",
-            "fleet-status",
             "memory-bank",
         }
         skill_files = list((PLUGIN_ROOT / "skills").glob("*/SKILL.md"))

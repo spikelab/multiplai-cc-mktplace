@@ -2125,8 +2125,8 @@ def _assemble_and_emit(input_data: dict, run: HookRun) -> None:
     )
     # Section-level attribution for the memory corpus — the only corpus
     # whose catalog carries section_anchors. Added alongside `files` and
-    # `files_by_corpus` rather than replacing them: the fleet and
-    # log-doctor tooling reads those two by name.
+    # `files_by_corpus` rather than replacing them: the log-doctor
+    # tooling reads those two by name.
     sections_by_file, bytes_by_file = _section_attribution(
         memory_content, pointers=memory_report.pointers
     )
