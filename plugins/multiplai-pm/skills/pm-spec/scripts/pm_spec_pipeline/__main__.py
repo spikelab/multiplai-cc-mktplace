@@ -268,6 +268,14 @@ async def _dispatch(args: argparse.Namespace) -> int:
     if why := _component_refusal(args.change, args.command):
         print(f"ERROR: {why}", flush=True)
         return EXIT_REFUSED
+    if args.command == "new" and args.no_epic_split and len(args.ticket_child) > 1:
+        print(
+            "ERROR: --no-epic-split keeps the work as one component, which can "
+            "deliver only one --ticket-child; give at most one, or drop "
+            "--no-epic-split. Nothing was written.",
+            flush=True,
+        )
+        return EXIT_REFUSED
     # Checked before anything is written (row S6).
     refs = _ticket_refs(args) if args.command == "resume" else {}
     if refs is None:
