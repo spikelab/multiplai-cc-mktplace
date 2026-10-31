@@ -9,8 +9,15 @@ approves.
 **Block count is the wrong primary metric.** Twelve independent blocks are
 twelve small reviews and one safe branch; six blocks where the sixth consumes
 signatures from the first five are one atomic thing that cannot be reviewed or
-reverted in pieces. Count is the *trigger*; the verdict comes from the other
-two checks.
+reverted in pieces. Count is the *trigger*; the other two checks say whether
+the work comes apart.
+
+**These checks inform; they do not decide.** Their result is rendered into
+the plan reviewer's prompt (``{split_context}``), and the size gate
+(``orchestrator._run_size_gate``) stops a build only on the reviewer's
+critical or major ``oversized-plan`` finding. ``should_split`` decides alone
+only when no reviewer answer is saved, so a keyword match (user management
+says "login" and "password" in every block) cannot park a plan by itself.
 
 1. :func:`check_atomicity` — a migration (or payments, auth, a contract
    change, an external-service integration, or more than N files) **plus
@@ -420,21 +427,30 @@ def normalize_signature(signature: str) -> str:
     return _WHITESPACE.sub(" ", text)
 
 
+# A label before a consumed signature saying where it comes from:
+# `Block 2: def f(...)`, `account-user-api: Service.call(...)`. Not part of
+# the signature, so it is cut before the defined name is read.
+_SOURCE_LABEL = re.compile(r"^(?:block\s+\d+|[A-Za-z][\w.-]*)\s*:\s+", re.IGNORECASE)
+
+
 def signature_keys(signature: str) -> frozenset[str]:
     """Keys a produced and a consumed signature are matched on.
 
     Two keys, because agents do not always copy a signature verbatim: the whole
-    normalized string, and the leading dotted symbol (``parse_tasks`` out of
-    ``parse_tasks(path: Path) -> list[BlockInfo]``). Matching on the symbol
-    alone would join two blocks that happen to both mention ``save``, so it is
-    a fallback, not the primary key — but it is the reason this matcher is
-    heuristic rather than exact.
+    normalized string, and the name the signature defines (``parse_tasks`` out
+    of ``def parse_tasks(path: Path) -> list[BlockInfo]``, ``TeamClient`` out
+    of ``Block 2: `export interface TeamClient { ... }```). The name is read
+    after any source label (``Block 2:``) and stops at the first character
+    that cannot be in an identifier, so prose after the signature does not
+    change it. Matching on the name alone would join two blocks that happen to
+    both define ``save``, so it is a fallback, not the primary key — but it is
+    the reason this matcher is heuristic rather than exact.
     """
     normalized = normalize_signature(signature)
     if not normalized:
         return frozenset()
     keys = {normalized.lower()}
-    symbol = _leading_symbol(normalized)
+    symbol = _leading_symbol(normalize_signature(_SOURCE_LABEL.sub("", normalized)))
     if symbol:
         keys.add(symbol)
     return frozenset(keys)
@@ -445,7 +461,9 @@ def _leading_symbol(normalized: str) -> str | None:
 
     Declaration keywords are skipped, so ``def export_job(...)`` keys on
     ``export_job`` and ``POST /jobs`` — whose next token is not an identifier —
-    gets no fallback key at all rather than keying on ``post``.
+    gets no fallback key at all rather than keying on ``post``. A token
+    followed by ``/`` is the start of a path, not a name, so ``POST api/jobs``
+    gets none either: every endpoint under ``api/`` would share it.
     """
     remainder = normalized
     while True:
@@ -453,6 +471,8 @@ def _leading_symbol(normalized: str) -> str | None:
         if not match:
             return None
         token = match.group(0)
+        if remainder[match.end() :].startswith("/"):
+            return None
         if token.lower() not in _DECLARATION_LEADS:
             return token.lower()
         remainder = remainder[match.end() :].lstrip()

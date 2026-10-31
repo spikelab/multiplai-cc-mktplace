@@ -390,7 +390,7 @@ class TestSizeGate:
         assert "SPLIT:REQUIRED:" in out
         proposal = (config.change_dir / "split-proposal.md").read_text()
         assert "chain-a" in proposal and "chain-b" in proposal
-        assert "## Proposed PRs — 2 group(s)" in proposal
+        assert "## Block groups — 2 group(s)" in proposal
         assert "--accept-size" in proposal
         state = BuildState.load(config.state_file_path())
         assert state.split_required is True

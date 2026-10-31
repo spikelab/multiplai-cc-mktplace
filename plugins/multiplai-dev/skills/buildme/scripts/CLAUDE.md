@@ -464,8 +464,10 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   out of the hash too and stored nowhere: no planning step reads them (`code_review.model` is the plan check's fallback model, which picks who checks, not what the plan says). `memory_files:` stays in: its `stacks` picks the reference docs the design and tasks prompts inline. A checkpoint's
   `tasks_audit` and `design_audit` entries are dropped on load
   (`state.RETIRED_STEPS`), and `models:`/`efforts:` keys naming them log a
-  warning and do nothing (`config.RETIRED_STEP_KEYS`). `oversized-plan` proposes a split for the size
-  gate and never silently restructures a plan.
+  warning and do nothing (`config.RETIRED_STEP_KEYS`). `oversized-plan` is the size
+  gate's verdict: a critical or major one parks the build with its
+  `proposed_cut` (saved as `StepOutcome.size_verdict`), and it never silently
+  restructures a plan.
 
 ## Adding a New Gate
 
@@ -551,7 +553,12 @@ it runs before the checkpoint is touched (see `readiness.py`).
 
 **Exit code 3 and the size gate are not phases.** A
 `RESEARCH:NEEDED` decision stops at the phase that must rerun. The size gate
-checks the final reviewed plan after audit repairs. It keeps
+runs after the plan check and stops only on the check's saved answer
+(`StepOutcome.size_verdict`, written by `plan_review_steps.save_size_verdict`
+when the check passes): a critical or major `oversized-plan` finding, whose
+`proposed_cut` `split-proposal.md` lists. `plan_split`'s checks feed the
+reviewer's `{split_context}` and decide alone only when no answer is saved
+for the current revision (`SIZE_GATE verdict=code-fallback`). It keeps
 stopping while `split_required` is set until `--accept-size`; a changed plan
 revision invalidates that acceptance.
 

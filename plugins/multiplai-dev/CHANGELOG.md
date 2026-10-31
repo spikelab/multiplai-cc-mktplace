@@ -15,6 +15,27 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.148.5] - 2026-10-31
+
+### Fixed
+
+- **buildme stops a build for size only when the plan reviewer says the plan
+  is oversized.** The size gate now parks a build with `SPLIT:REQUIRED` only
+  on a critical or major `oversized-plan` finding from the plan check, and
+  `split-proposal.md` lists the reviewer's proposed tickets. Before, buildme's
+  own keyword match decided: a user-management plan, where "login",
+  "password" and "permission" appear in nearly every block, stopped as an auth
+  change mixed with unrelated work even when the reviewer found nothing to
+  split. buildme's keyword and grouping checks still go to the reviewer, and
+  still decide alone when no reviewer answer is saved, such as on a build
+  resumed from a checkpoint written by an older version.
+- **The grouping links a block to the block whose function it consumes.** A
+  `Consumes:` line that starts with `Block 2:` or names its source
+  (`account-user-api:`) now matches the name the other block's `Produces:`
+  line defines, so blocks that depend on each other are no longer proposed as
+  separate PRs. Two endpoints under the same path (`POST api/a`, `POST api/b`)
+  are no longer joined because both start with `api`.
+
 ## [0.148.4] - 2026-10-31
 
 ### Fixed
