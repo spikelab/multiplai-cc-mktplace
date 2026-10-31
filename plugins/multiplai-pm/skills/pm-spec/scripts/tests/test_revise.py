@@ -7,6 +7,7 @@ import pytest
 from conftest import (
     CAPS,
     TWO,
+    Killed,
     change_dir,
     git,
     meta,
@@ -386,3 +387,30 @@ def test_a_rewrite_adding_text_above_the_first_capability_is_refused(
         capsys.readouterr().out
     )
     assert ui.read_bytes() == before
+
+
+def test_a_resumed_recheck_moves_aside_only_the_file_it_read(repo, model):
+    model["components"] = TWO
+    assert run(repo, "new", "throttle", "--auto") == 0
+    cdir = change_dir(repo)
+    ui = cdir / "components" / "ui"
+    write(
+        ui / "spec-issues.md", "# Spec issues\n\n## Vague\n\nThe wait is not stated.\n"
+    )
+    set_spec_issues(ui, ui / "spec-issues.md")
+
+    def killed(prompt, label, kw):
+        raise Killed(label)
+
+    model["consistency"] = killed
+    with pytest.raises(Killed):
+        run(repo, "revise", "throttle")
+    # buildme raises a new, change-level issue while the revise is stopped.
+    write(cdir / "spec-issues.md", ISSUES)
+    set_spec_issues(cdir, cdir / "spec-issues.md")
+    model["consistency"] = resolved()
+    run(repo, "revise", "throttle")
+    assert len(list(ui.glob("spec-issues.resolved-*.md"))) == 1
+    assert meta(ui)["spec_issues"] is None
+    assert (cdir / "spec-issues.md").read_text() == ISSUES
+    assert meta(cdir)["spec_issues"] is not None

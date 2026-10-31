@@ -166,15 +166,18 @@ def read_issues(run: Run, from_respec: bool) -> tuple[Path, str, list[str]]:
 
 
 async def finish(run: Run, from_respec: bool, checked: str) -> None:
-    """Every issue resolved at revision *checked*: clear `spec_issues`, move the
-    issues file aside, hand off (which checks again if the files changed since)."""
+    """Every issue resolved at revision *checked*: move aside the issues file the
+    step read (`source`: the same path and text), clear `spec_issues` where no
+    issues file is left open, hand off (which checks again if the files
+    changed since). Another or changed issues file stays for its own round."""
     change_dir = run.config.change_dir
-    path = issues_path(run, from_respec)
-    if path.is_file():
+    rel, _, digest = run.state.step(NAME).source.rpartition(":")
+    path = change_dir / rel if rel else issues_path(run, from_respec)
+    if path.is_file() and (not rel or sha(path.read_text()) == digest):
         os.replace(path, path.parent / f"{path.stem}.resolved-{checked[:12]}.md")
-    clear_spec_issues(change_dir)
-    if path.parent != change_dir:
-        clear_spec_issues(path.parent)
+    for d in dict.fromkeys([change_dir, path.parent]):
+        if not any((d / name).is_file() for name in (ISSUES_FILE, RESPEC_FILE)):
+            clear_spec_issues(d)
     # The recheck was the consistency agent over every spec file, at *checked*.
     F.record_passed(run, consistency.NAME, checked, "Checked by revise")
     run.progress("REVISE_PASSED", "Every issue resolved.")
