@@ -185,7 +185,9 @@ the finders see its whole patch.
   this round unchanged: the same id, verdict, severity and plain-language
   text, marked `carried_from` with the kept round's directory name. They make
   no agent call, and a decision made on one still applies, since decisions
-  are keyed by id.
+  are keyed by id. A finding is copied only when every file it cites is the
+  same at both heads; one citing a file that left the change, or that a moved
+  base rewrote, is rechecked instead.
 - Earlier findings on re-reviewed files are rechecked as before. An earlier
   finding whose file left the change is `resolved` ("file no longer in the
   change"), with no call.

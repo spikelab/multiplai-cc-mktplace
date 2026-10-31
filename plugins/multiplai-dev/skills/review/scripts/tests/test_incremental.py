@@ -286,6 +286,31 @@ def test_a_force_push_that_drops_a_file_resolves_its_findings(repo, tmp_path, ag
     )
 
 
+def test_a_finding_citing_a_file_that_left_the_change_is_rechecked_not_carried(
+    repo, tmp_path, agents, monkeypatch
+):
+    # FA's own file keeps its patch, but it also cites c.py, which the force-push reverts.
+    fac = FA.model_copy(
+        update={"citations": [FA.citations[0], cite("c.py", 1, "c1 = 1")]}
+    )
+    monkeypatch.setitem(globals(), "FA", fac)
+    out = tmp_path / "out"
+    assert main(_args(repo, out)) == 0
+    target_dir = out / "shop" / "branch-feature"
+    agents.labels.clear()
+    _branch(
+        repo,
+        "main",
+        {k: v for k, v in FEATURE.items() if k != "c.py"},
+        "feature without c",
+    )
+
+    assert main(_args(repo, out)) == 0
+    state = load_state(target_dir / "review-state.json")
+    assert state.scope.reviewed_files == [] and state.scope.carried_ids == [FB.id]
+    assert agents.labels.count("recheck") == 1  # FA, which cites the reverted c.py
+
+
 def test_full_reviews_every_file(repo, tmp_path, agents):
     out = tmp_path / "out"
     target_dir = _round_one(repo, out, agents)
