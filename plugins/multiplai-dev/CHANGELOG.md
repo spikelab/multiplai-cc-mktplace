@@ -15,7 +15,7 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.148.1] - 2026-10-30
+## [0.148.1] - 2026-10-31
 
 ### Fixed
 
