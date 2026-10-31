@@ -11,7 +11,7 @@ way.
 from __future__ import annotations
 
 from ..paths_io import PathView
-from .find import CLASS_AND_PLACES, REPORT_FORMAT, REVIEW_BRIEF
+from .find import CLASS_AND_PLACES, PRE_EXISTING_AND_NEEDS, REPORT_FORMAT, REVIEW_BRIEF
 from .untrusted import fenced
 
 NO_E2E = "No e2e test is listed for this path."
@@ -73,5 +73,6 @@ def build_path(view: PathView, *, workspace: str) -> str:
         ),
         REPORT_FORMAT,
         CLASS_AND_PLACES,
+        PRE_EXISTING_AND_NEEDS,
     ]
     return "\n\n".join(p for p in parts if p)

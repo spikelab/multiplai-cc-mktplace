@@ -536,7 +536,9 @@ The find stage runs two kinds of finder on a change review. A `--tree` or
   and follows it from the entry through every hop to the last, reading every
   function on it in every file. It reports defects on the path or in how the
   path uses changed code, every severity and advice, and cites a changed
-  line first when the defect involves one. A cut trace says where it stops,
+  line first when the defect involves one. Like a dimension finder, it marks
+  a defect in a file the change does not touch `Pre-existing: yes` and says
+  what it could not check (`Could not check:`). A cut trace says where it stops,
   and the finder reads on from there. No path finder runs when the mapping
   failed or found no path; the other finders run as usual.
 
