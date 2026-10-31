@@ -113,6 +113,16 @@ def test_settings_when_github_reports_no_rules_at_all(target_info):
     )
 
 
+def test_settings_do_not_rule_out_ci_when_classic_protection_was_not_read(target_info):
+    from review_pipeline.target import CLASSIC_UNREAD
+
+    block = settings_block(
+        pr_target(target_info, branch_rules=[{"type": CLASSIC_UNREAD}])
+    )
+    assert "a red run can be merged" not in block
+    assert "classic branch protection could not be read" in block
+
+
 def test_finders_and_verifier_get_both_blocks_and_the_web(target_info):
     t = pr_target(target_info)
     for dimension in find.DIMENSION_TASKS:

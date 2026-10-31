@@ -135,6 +135,54 @@ def test_branch_rules_that_read_fine_add_no_need(fixture_repo, monkeypatch):
     assert needs == []
 
 
+def _gh_by_endpoint(monkeypatch, answers: dict[str, tuple[int, str]]):
+    """`gh api <endpoint>` answers per endpoint suffix: (returncode, stdout)."""
+    monkeypatch.setattr(target.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(target, "remote_url", lambda repo: "https://github.com/o/r.git")
+
+    def run(argv, **kw):
+        code, out = next(v for k, v in answers.items() if argv[-1].endswith(k))
+        return sp.CompletedProcess(argv, code, stdout=out, stderr="HTTP 404: Not Found")
+
+    monkeypatch.setattr(target.subprocess, "run", run)
+
+
+def test_checks_required_by_classic_branch_protection_are_a_rule(
+    fixture_repo, monkeypatch
+):
+    # rules/branches lists rulesets only; classic protection is on the branch itself.
+    repo, base, head = fixture_repo
+    protection = {"protection": {"required_status_checks": {"contexts": ["ci"]}}}
+    _gh_by_endpoint(
+        monkeypatch,
+        {
+            "rules/branches/main": (0, "[]"),
+            "/branches/main": (0, json.dumps(protection)),
+        },
+    )
+    needs: list[Need] = []
+    rules = REAL_BRANCH_RULES(repo, "main", needs)
+    assert rules == [
+        {
+            "type": "required_status_checks",
+            "source": "classic branch protection",
+            "parameters": {"required_status_checks": [{"context": "ci"}]},
+        }
+    ]
+    assert needs == []
+
+
+def test_unreadable_classic_protection_is_marked_and_a_need(fixture_repo, monkeypatch):
+    repo, base, head = fixture_repo
+    _gh_by_endpoint(
+        monkeypatch,
+        {"rules/branches/main": (0, "[]"), "/branches/main": (1, "")},
+    )
+    needs: list[Need] = []
+    assert REAL_BRANCH_RULES(repo, "main", needs) == [{"type": target.CLASSIC_UNREAD}]
+    assert [n.command for n in needs] == ["gh api repos/{owner}/{repo}/branches/main"]
+
+
 def test_pr_view_with_empty_title_and_base_is_a_need(fixture_repo, monkeypatch):
     repo, base, head = fixture_repo
     monkeypatch.setattr(

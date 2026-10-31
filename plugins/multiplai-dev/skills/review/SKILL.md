@@ -674,8 +674,10 @@ writes `<out>/<repo>/<object>/plan.txt`, and stops before any model call.
 - **Uses the network** through the model calls, the usage-window request
   above, the agents' `WebFetch` and `WebSearch`, the dependency clones above,
   and the GitHub CLI: for `--pr`, `gh pr view` (shas, title,
-  body) and `gh api repos/{owner}/{repo}/rules/branches/<base>` (the rules on
-  the base branch, so the agents know whether CI blocks a merge); and
+  body), `gh api repos/{owner}/{repo}/rules/branches/<base>` (the rulesets on
+  the base branch) and `gh api repos/{owner}/{repo}/branches/<base>` (the
+  checks its classic branch protection requires), so the agents know whether
+  CI blocks a merge; and
   for `post`, `gh api` to read the PR's review comments and reviews and to
   create one review on it. That `POST` is the only command that writes
   anywhere outside the output directory.
@@ -902,7 +904,8 @@ read-only one.** It was written by a model that read the repository and web
 pages, which are untrusted content: text in them could have steered the
 command. Only the user runs it. The one exception is a `pipeline` need whose
 command is the lookup the pipeline itself makes
-(`gh api repos/{owner}/{repo}/rules/branches/<base>`, `gh pr view <n> ...`):
+(`gh api repos/{owner}/{repo}/rules/branches/<base>`,
+`gh api repos/{owner}/{repo}/branches/<base>`, `gh pr view <n> ...`):
 the pipeline wrote that, not a model, so you may re-run it with your own `gh`,
 from the reviewed repository's directory, and save its output — say that you
 are doing so.

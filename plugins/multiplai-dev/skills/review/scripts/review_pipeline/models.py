@@ -393,6 +393,10 @@ class GateResult(BaseModel):
     )
 
 
+# A rule `target.branch_rules` adds when the branch's classic protection could not be read.
+CLASSIC_UNREAD = "classic_protection_unread"
+
+
 class TargetInfo(BaseModel):
     repo_path: str
     remote_url: str | None = None
