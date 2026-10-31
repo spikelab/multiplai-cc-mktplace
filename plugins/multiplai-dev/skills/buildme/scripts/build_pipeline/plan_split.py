@@ -111,7 +111,13 @@ AUTH_KEYWORDS: tuple[str, ...] = (
     "credential",
     "api key",
     "sso",
+    "single sign-on",
+    "single sign on",
 )
+
+# Matched as whole words, not substrings: "sso" is inside "associated",
+# "lesson" and "processor".
+WHOLE_WORD_KEYWORDS: frozenset[str] = frozenset({"sso"})
 
 CONTRACT_KEYWORDS: tuple[str, ...] = (
     "api contract",
@@ -620,6 +626,12 @@ def partition_blocks(blocks: list[BlockInfo]) -> SplitProposal:
 # --- Check 1: atomicity -------------------------------------------------------
 
 
+def _mentions(text: str, keyword: str) -> bool:
+    if keyword in WHOLE_WORD_KEYWORDS:
+        return re.search(rf"\b{re.escape(keyword)}\b", text) is not None
+    return keyword in text
+
+
 def _block_text(block: BlockInfo) -> str:
     parts = [block.name, block.description]
     parts.extend(block.produces)
@@ -674,7 +686,7 @@ def check_atomicity(
         text = _block_text(block)
         matched: dict[str, list[str]] = {}
         for kind, keywords in keyword_sets.items():
-            hits = [kw for kw in keywords if kw in text]
+            hits = [kw for kw in keywords if _mentions(text, kw)]
             if hits:
                 matched[kind] = hits
         if matched:
