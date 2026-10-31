@@ -967,9 +967,14 @@ def narrow_test_command_multi(
 ) -> str:
     """The command a block's loop runs when `tdd.narrow_commands` is set: its
     parts (`narrow_parts`) joined with `&&`, or *test_command* when there are
-    none, so RED never passes on a run that selected nothing."""
+    none, so RED never passes on a run that selected nothing. Two or more
+    parts run through `sh -c`: the gates run a command as an argv, with no
+    shell, and the joined parts are shell code."""
     parts = narrow_parts(entries, project_dir, base, enabled=enabled)
-    return _join(parts) if parts else test_command
+    if not parts:
+        return test_command
+    joined = _join(parts)
+    return joined if len(parts) == 1 else f"sh -c {shlex.quote(joined)}"
 
 
 def _naming(runner: str | None) -> str:
