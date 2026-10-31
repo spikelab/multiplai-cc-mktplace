@@ -896,7 +896,7 @@ codebase analysis once at the feature branch, before the first child starts,
 into `codebase-analysis/` in the epic's directory, and counts its spend against
 `epic.max_usd`; each child reuses it, re-checks only the facts whose cited
 files changed since, and analyses only the files its `plan.md` names that the
-shared analysis did not read; a run stopped mid-analysis is analysed again from
+shared analysis did not read or failed to analyse; a run stopped mid-analysis is analysed again from
 the start, and a failed one leaves each child to analyse for itself; off, each
 child runs its own analysis, as before). `epic.board` with `epic.plane_script`
 ("Moving the Plane cards" below). `build` and `findings` print

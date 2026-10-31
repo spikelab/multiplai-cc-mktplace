@@ -380,6 +380,35 @@ def test_a_child_analyses_only_the_files_its_plan_names_that_were_not_read(
         assert "`src/cli.py`" not in md.split("## Not analysed")[-1]
 
 
+def test_a_child_analyses_again_the_failed_files_its_plan_names(tmp_path):
+    """Every slice of the shared analysis failed; the child's plan.md names
+    calc.py, so the child analyses it again instead of reusing the failure."""
+    project = _repo(tmp_path / "proj", {"src/calc.py": CALC})
+    directory = tmp_path / "shared"
+
+    async def down(prompt, schema, **kwargs):
+        raise RuntimeError("rate limited")
+
+    marker = asyncio.run(
+        code_analysis.run_shared(
+            directory,
+            project,
+            call=down,
+            settings=_settings(project),
+            name="calc",
+            named_text="",
+        )
+    )
+    assert marker["failed"]
+    config = _config(project, shared_analysis_dir=directory)
+    (config.change_dir / "plan.md").write_text("# Plan: x\n\nEdit `src/calc.py`.\n")
+    seen = []
+    md = asyncio.run(run_codebase_analysis(project, config, call=_fake_call(seen)))
+    assert len(seen) == 1 and "- src/calc.py" in seen[0][0]
+    assert "`src/calc.py:8`" in md
+    assert "rate limited" not in md
+
+
 def test_a_child_whose_settings_differ_analyses_for_itself(tmp_path):
     project = _repo(tmp_path / "proj", {"src/calc.py": CALC, "src/cli.py": CLI})
     directory = tmp_path / "shared"
