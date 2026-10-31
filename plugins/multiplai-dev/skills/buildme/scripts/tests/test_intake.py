@@ -324,6 +324,28 @@ def _one_group_tasks(blocks: int) -> str:
     return "\n".join(out)
 
 
+def _reviewer_calls_it_oversized(monkeypatch):
+    """The plan check's model reports a major `oversized-plan` finding: the
+    size gate parks on that finding, not on the code's grouping."""
+    from build_pipeline.llm_steps import plan_review_steps
+    from build_pipeline.models import PlanReviewCut, PlanReviewFinding
+
+    finding = PlanReviewFinding(
+        category="oversized-plan",
+        severity="major",
+        claim="Two chains that share nothing.",
+        proposed_cut=[
+            PlanReviewCut(ticket="chain-a", blocks=list(range(1, 7))),
+            PlanReviewCut(ticket="chain-b", blocks=list(range(7, 13))),
+        ],
+    )
+    monkeypatch.setattr(
+        plan_review_steps,
+        "run_plan_review",
+        AsyncMock(return_value=PlanReviewResult(findings=[finding])),
+    )
+
+
 class TestSizeGate:
     def _config(self, tmp_path, tasks: str):
         config = BuildConfig(
@@ -357,8 +379,9 @@ class TestSizeGate:
 
     @pytest.mark.asyncio
     async def test_two_groups_above_the_trigger_stop_with_a_proposal(
-        self, tmp_path, capsys
+        self, tmp_path, capsys, monkeypatch
     ):
+        _reviewer_calls_it_oversized(monkeypatch)
         config = self._config(tmp_path, _two_group_tasks(12))
         self._assert_fixture(config, groups=2)
         rc = await run_orchestrator(config, _args(tmp_path, "big", auto=True))
@@ -366,6 +389,7 @@ class TestSizeGate:
         assert rc == 3
         assert "SPLIT:REQUIRED:" in out
         proposal = (config.change_dir / "split-proposal.md").read_text()
+        assert "chain-a" in proposal and "chain-b" in proposal
         assert "## Proposed PRs — 2 group(s)" in proposal
         assert "--accept-size" in proposal
         state = BuildState.load(config.state_file_path())
@@ -377,7 +401,8 @@ class TestSizeGate:
         assert "SPLIT:REQUIRED:" in capsys.readouterr().out
 
     @pytest.mark.asyncio
-    async def test_accept_size_continues(self, tmp_path, capsys):
+    async def test_accept_size_continues(self, tmp_path, capsys, monkeypatch):
+        _reviewer_calls_it_oversized(monkeypatch)
         config = self._config(tmp_path, _two_group_tasks(12))
         rc = await run_orchestrator(
             config, _args(tmp_path, "big", auto=True, accept_size=True)
@@ -389,10 +414,11 @@ class TestSizeGate:
 
     @pytest.mark.asyncio
     async def test_accepted_size_holds_on_a_retry_without_the_flag(
-        self, tmp_path, capsys
+        self, tmp_path, capsys, monkeypatch
     ):
         """A build that accepted its size must not stop again on a re-run:
         the wrapper would post the split proposal a second time."""
+        _reviewer_calls_it_oversized(monkeypatch)
         config = self._config(tmp_path, _two_group_tasks(12))
         rc = await run_orchestrator(
             config, _args(tmp_path, "big", auto=True, accept_size=True)
