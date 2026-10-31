@@ -56,10 +56,19 @@ def _holder(fd: int) -> str:
     return f"pid {info.get('pid')} on {info.get('host') or '?'}, since {info.get('since') or '?'}"
 
 
+# Lock files this process holds for a whole command (`hold(..., command=True)`):
+# a `hold` of one of them inside that command takes it again at no cost.
+_COMMAND: set[Path] = set()
+
+
 @contextlib.contextmanager
-def hold(run_dir: Path) -> Iterator[None]:
-    """Hold the lock on *run_dir* for the body; raise Locked if another process holds it."""
+def hold(run_dir: Path, *, command: bool = False) -> Iterator[None]:
+    """Hold the lock on *run_dir* for the body; raise Locked if another process
+    holds it. With *command*, a `hold` of the same dir inside the body is free."""
     path = lock_path(run_dir)
+    if path.resolve() in _COMMAND:
+        yield
+        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
@@ -87,6 +96,9 @@ def hold(run_dir: Path) -> Iterator[None]:
                 os.pwrite(fd, json.dumps(info).encode("utf-8"), 0)
             except OSError as e:  # the lock holds without the note
                 log.warning("cannot write the holder into %s: %s", path, e)
+        if command:
+            _COMMAND.add(path.resolve())
         yield
     finally:
+        _COMMAND.discard(path.resolve())
         os.close(fd)

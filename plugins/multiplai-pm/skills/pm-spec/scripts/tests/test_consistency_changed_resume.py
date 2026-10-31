@@ -349,3 +349,44 @@ def test_a_wrong_copy_blocks_the_check_after_the_specs_review(repo, model):
     [blocking] = step["blocking_findings"]
     assert blocking["category"] == "format" and blocking["severity"] == "critical"
     assert blocking["places"][0]["file"] == UI
+
+
+def test_a_deleted_component_counts_as_changed_and_its_citers_are_read(tmp_path):
+    cdir = _two_components(tmp_path)
+    write(cdir / UI, specs(CAPS_OF["ui"]) + "\nThe page reads the api component.\n")
+    r = _run_for(cdir)
+    r.state.checked_digests = consistency.document_digests(r)
+    for name in ("specs.md", "plan.md", ".change.yaml"):
+        (cdir / "components" / "api" / name).unlink()
+    reading = consistency.what_to_read(r)
+    assert {API, "components/api/plan.md"} <= reading.changed
+    assert reading.full == {UI}
+
+
+def test_an_exact_copy_of_either_of_two_tables_with_one_header_is_no_finding(tmp_path):
+    second = TICKET_TABLE.replace("Dashboard", "Contratti")
+    cdir = _ticket_change(tmp_path, TICKET_TABLE)
+    write(cdir / "ticket.md", (cdir / "ticket.md").read_text() + "\n" + second)
+    assert consistency.table_findings(_run_for(cdir)) == []
+    write(cdir / "specs.md", specs(("rate-limit",)) + "\n" + second)
+    assert consistency.table_findings(_run_for(cdir)) == []
+
+
+def test_an_accepted_table_finding_does_not_block_after_another_edit(repo, model):
+    configure(model)
+    for argv, code in FLOW[:4]:
+        assert run(repo, *argv) == code, argv
+    mine = clone(repo, repo.parent / "reviewer")
+    cdir = mine / "specs" / "changes" / "throttle"
+    write(cdir / "ticket.md", "# Ticket ENG-1\n\n" + TICKET_TABLE)
+    with (cdir / UI).open("a") as fh:
+        fh.write("\n" + TICKET_TABLE.replace("Front Office", "Back Office"))
+    git(mine, "add", "-A")
+    git(mine, "commit", "-qm", "adapt the table on purpose")
+    git(mine, "push", "-q", "origin", BRANCH)
+    assert run(repo, *RESUME) == 4
+    accept = ["--accept", "CC-F1", "--accept-reason", "adapted on purpose"]
+    assert run(repo, *RESUME, *accept) == 0
+    push_edit(repo, repo.parent / "editor", API, specs(("quota-store",), rule="edited"))
+    assert run(repo, *RESUME) == 0
+    assert len(state(change_dir(repo))["accepted_findings"]) == 1

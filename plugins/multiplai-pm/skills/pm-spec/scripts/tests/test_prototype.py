@@ -4,8 +4,12 @@ write boundary)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from conftest import (
     TWO,
+    Killed,
     agent,
     change_dir,
     git,
@@ -140,3 +144,17 @@ def test_reviewer_notes_drops_every_status_line_and_its_empty_fence():
     assert P.reviewer_notes("a\n```\nSTATUS: DONE\n```\n\n") == "a\n"
     assert P.reviewer_notes("a\n```\ncode\n```\n") == "a\n```\ncode\n```\n"
     assert P.reviewer_notes("a\nThe status: fine\n") == "a\nThe status: fine\n"
+
+
+def test_files_a_killed_agent_left_are_checked_not_kept_as_the_pms(repo, model):
+    def notes_then_killed(prompt, label, kw):
+        write(Path(kw["cwd"]) / "NOTES.md", "- nothing yet\n")
+        raise Killed(label)
+
+    model["prototype"] = notes_then_killed
+    with pytest.raises(Killed):
+        run(repo, "new", "throttle", "--auto")
+    model["prototype"] = agent()
+    assert run(repo, "resume", "throttle") == 0
+    assert model.calls_to("prototype") == 2
+    assert (change_dir(repo) / "prototype" / "mockup.html").is_file()
