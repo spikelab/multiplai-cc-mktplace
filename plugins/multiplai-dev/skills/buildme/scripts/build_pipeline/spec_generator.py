@@ -358,7 +358,8 @@ def read_research(state: BuildState) -> str:
     The checkpoint stores a path (`state.research_path`); the prompt's
     `## Research Findings` slot needs what the file says. Research is written
     from web pages and other external text, so it goes in an untrusted-content
-    fence: data for the proposal, never instructions to it. No path recorded
+    fence, after the notice that says fenced text is data, never instructions
+    (docs/untrusted-content.md rule 4). No path recorded
     returns "" (the prompt then says "(no research conducted)"); a recorded
     path that is not a readable file warns and returns "(none provided)".
     """
@@ -369,9 +370,17 @@ def read_research(state: BuildState) -> str:
     if not path.is_file():
         log.warning("Recorded research is not a readable file: %s", raw)
         return "(none provided)"
-    from multiplai_core.untrusted import fence
+    from multiplai_core.untrusted import fence, markdown_notice
 
-    return "\n".join(fence(path.read_text(), source=path.name)) or "(none provided)"
+    lines = fence(path.read_text(), source=path.name)
+    if not lines:
+        return "(none provided)"
+    notice = markdown_notice(
+        "research notes written from web pages and other outside sources",
+        "Research",
+        injection_marker=True,
+    )
+    return "\n".join([notice, "", *lines])
 
 
 def _dependency_list_text(deps: list[NewDependency]) -> str:
