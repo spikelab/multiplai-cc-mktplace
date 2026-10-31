@@ -103,6 +103,11 @@ DOLCEBOT_TEST_COMMAND = (
         "bash -c 'export X=1; true'",
         "bash -c 'X=1 true'",
         "bash -c 'if true; then true; fi'",
+        "bash -c 'source /dev/null && true'",
+        "sh -c 'DJANGO_SETTINGS_MODULE=app.settings true'",
+        # A `cd` the shell expands: gates runs the shell, not the `cd`.
+        "bash -c 'cd $HOME && true'",
+        "sh -c '(cd . && true) && (cd . && true)'",
     ],
 )
 def test_a_shell_script_that_starts_with_a_builtin_passes(repo, command):

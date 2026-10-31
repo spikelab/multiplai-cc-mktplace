@@ -81,8 +81,9 @@ def _program(command: str, project_dir: Path) -> tuple[str, Path]:
     """The program *command* runs and the directory it runs from, after its
     leading `cd DIR &&` clauses and any `sh -c` / `bash -c` / `zsh -c`
     wrapper. A wrapped script that starts with a shell builtin, keyword or
-    assignment gives the shell and the directory the shell runs from. Raises
-    ValueError for a command `gates` would not run."""
+    assignment, or with a `cd` the shell expands, gives the shell and the
+    directory the shell runs from. Raises ValueError for a command `gates`
+    would not run."""
     from .gates import _test_invocation
 
     argv, directory = _test_invocation(command, project_dir)
@@ -92,7 +93,10 @@ def _program(command: str, project_dir: Path) -> tuple[str, Path]:
         and argv[1] == "-c"
     ):
         shell, outer = argv[0], directory
-        argv, directory = _test_invocation(argv[2], directory)
+        try:
+            argv, directory = _test_invocation(argv[2], directory)
+        except ValueError:
+            return shell, outer
         if argv and (
             argv[0].rstrip(";") in _SHELL_BUILTINS
             or argv[0].startswith("(")
