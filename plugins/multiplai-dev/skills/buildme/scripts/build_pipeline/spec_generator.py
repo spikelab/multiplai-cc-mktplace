@@ -227,6 +227,10 @@ async def _generate_all_artifacts(
         log.info("SKIP phase=UNKNOWNS_GATE reason=recorded-complete-in-state")
 
     reconcile_plan(config, state)
+    # A gate that rewrote unknowns.md leaves tasks stale too, and the rubric
+    # is written from the tasks.
+    if state.spec_gen and "tasks" in state.spec_gen.stale_artifacts:
+        await _generate_single_artifact(cm, change_dir, "tasks", config, state)
     if state.spec_gen and "rubric" in state.spec_gen.stale_artifacts:
         await _generate_rubric(change_dir, config, state)
         reconcile_plan(config, state, regenerated={"rubric"})
