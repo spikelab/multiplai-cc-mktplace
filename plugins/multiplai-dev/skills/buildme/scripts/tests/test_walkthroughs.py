@@ -402,6 +402,23 @@ class TestRegenerate:
             in capsys.readouterr().out
         )
 
+    def test_a_commit_git_refuses_is_reported_in_its_note(
+        self, stale, monkeypatch, tmp_path
+    ):
+        """A pre-commit hook rejects the regenerated files: the note says so
+        and the section is still written, rather than publish aborting."""
+        md = stale.project_dir / "docs" / "walkthroughs" / MD_NAME
+        hook = stale.project_dir / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text("#!/bin/sh\necho 'markdown lint failed' >&2\nexit 1\n")
+        hook.chmod(0o755)
+        _stub(monkeypatch, write=lambda: md.write_text(md.read_text() + "\nnew\n"))
+        path = walkthroughs.pr_section(stale, None, tmp_path / "docs")
+        text = path.read_text()
+        assert "## Stale walkthroughs" in text
+        assert "regenerated, not committed: git refused the commit" in text
+        assert "markdown lint failed" in text
+
     def test_a_run_stopped_by_its_spend_limit_leaves_the_old_file(
         self, stale, monkeypatch, tmp_path
     ):

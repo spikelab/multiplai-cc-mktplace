@@ -328,9 +328,16 @@ def regenerate(config, w: Walkthrough) -> str:
         ]
         if p.exists()
     ]
-    sha = git_ops.commit_stage(
-        config, f"docs(walkthroughs): regenerate {w.path.name}", paths
-    )
+    try:
+        sha = git_ops.commit_stage(
+            config, f"docs(walkthroughs): regenerate {w.path.name}", paths
+        )
+    except git_ops.GitLifecycleError as e:
+        reason = (str(e).strip().splitlines() or ["no reason given"])[-1]
+        return (
+            f"regenerated, not committed: git refused the commit ({reason}); "
+            "the new files are left uncommitted"
+        )
     return (
         "regenerated and committed"
         if sha
