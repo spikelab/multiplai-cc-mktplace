@@ -357,6 +357,14 @@ def post(target_dir: Path, decisions_path: Path | None, *, session_id: str = "")
     findings_file = json.loads(
         (target_dir / "findings.json").read_text(encoding="utf-8")
     )
+    reviewed = findings_file["target"]
+    if (reviewed.get("base_sha"), reviewed.get("head_sha")) != (t.base_sha, t.head_sha):
+        # A later run rewrote review-state.json and stopped before writing its findings.json.
+        raise PostError(
+            f"review-state.json ({t.head_sha[:12]}) and findings.json "
+            f"({str(reviewed.get('head_sha'))[:12]}) belong to different runs; "
+            f"finish the review with `resume {target_dir}` before posting"
+        )
     chosen = select(findings_file["findings"], decisions, findings_file.get("mode"))
     if not chosen:
         return f"nothing to post: no {'accepted ' if decisions is not None else ''}findings to post"

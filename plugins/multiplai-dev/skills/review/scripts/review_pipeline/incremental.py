@@ -8,7 +8,7 @@ re-reviewed when its patch differs or it is new to the change; the finders alway
 re-reviewed file's whole patch, never part of it.
 
 The findings that round left open (`rounds.open_findings`) on a file still in the change, none
-of whose citations is in a re-reviewed file, are copied into this round with their id, verdict,
+of whose citations is in a re-reviewed file and whose cited files are the same at both heads, are copied into this round with their id, verdict,
 severity and plain-language text, marked `carried_from`; they make no agent call. Decisions are
 keyed by id, so they keep theirs. An open finding on a re-reviewed file is rechecked as before,
 and one whose file left the change is `resolved` by the recheck stage with no call.
@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import rounds
+from . import target as target_mod
 from .chunks import diff_files
 from .models import Finding, ReviewState, Scope, TargetInfo, Verdict, WriteAnswer
 from .state import load_state
@@ -79,6 +80,24 @@ def latest_finished_round(target_dir: Path) -> Path | None:
         if best is None or key >= best[0]:
             best = (key, d)
     return best[1] if best else None
+
+
+def _unchanged(repo: str, old_head: str, new_head: str, paths: set[str]) -> bool:
+    """True when every one of *paths* is the same at both heads; False when git cannot tell.
+
+    A cited file can change outside the new diff: it left the change, or a moved base rewrote it.
+    """
+    proc = target_mod.git(
+        repo,
+        "diff",
+        "--name-only",
+        old_head,
+        new_head,
+        "--",
+        *sorted(paths),
+        check=False,
+    )
+    return proc.returncode == 0 and not proc.stdout.strip()
 
 
 @dataclass
@@ -135,8 +154,12 @@ def decide(
         f = by_id.get(o.id)
         if f is None or f.file not in in_change:
             continue  # the recheck stage gives it a status
-        cited = {f.file} | {c.path for c in f.citations if not c.is_web}
-        if cited & set(reviewed):
+        cited = {f.file} | {
+            c.path for c in f.citations if not c.is_web and not c.is_dependency
+        }
+        if cited & set(reviewed) or not _unchanged(
+            info.repo_path, earlier.target.head_sha, info.head_sha, cited
+        ):
             continue
         carried.findings.append(f.model_copy(update={"carried_from": since.name}))
         if o.id in earlier.verdicts:

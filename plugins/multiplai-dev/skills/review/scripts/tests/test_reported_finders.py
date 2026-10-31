@@ -1447,6 +1447,12 @@ def test_the_path_prompt_carries_the_whole_path_inside_one_fence_and_the_end_to_
     assert "The trace stops at hop" not in text
 
 
+def test_the_path_prompt_asks_for_pre_existing_marks_and_could_not_check_paragraphs():
+    # A path finder reads unchanged hops; without these instructions its defects there fail finding_gate.
+    text = new("prompts.path", "build_path")(view_of(traced_path(7)), workspace="")
+    assert "Pre-existing: yes" in text and "Could not check:" in text
+
+
 def test_a_broken_path_and_listed_tests_are_named_in_the_prompt():
     text = new("prompts.path", "build_path")(
         view_of(traced_path(3, stops_at=2, e2e=True)), workspace=""

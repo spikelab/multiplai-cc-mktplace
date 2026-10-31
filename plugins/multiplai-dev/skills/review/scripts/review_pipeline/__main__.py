@@ -841,6 +841,11 @@ def main(argv: list[str] | None = None) -> int:
                 if getattr(args, "earlier_decisions", None)
                 else ""
             )
+            # resume saves neither, so the command carries them
+            + {True: " --verify-low", "risky": " --verify-low risky"}.get(
+                getattr(args, "verify_low", False), ""
+            )
+            + (f" --model {args.model}" if getattr(args, "model", None) else "")
         )
         commands = "\n".join(
             f"  python -m review_pipeline resume {d} --trust-repo{flags}" for d in dirs
