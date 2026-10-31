@@ -15,6 +15,18 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.148.2] - 2026-10-31
+
+### Fixed
+
+- **review: resuming after a usage-limit stop keeps `--verify-low` and `--model`.** The `resume` command printed after the stop now carries both, so the resumed run still verifies the LOW findings and runs the verifier and merger on the same model.
+- **review: a re-pushed PR no longer carries a finding that cites changed lines.** A finding from the last round is copied unchanged only when every file it cites is the same at both heads. One citing a file that left the change, or that a moved base rewrote, is rechecked instead of being exported with lines that are not at the new head.
+- **review: `--plan-only` no longer breaks the resume of a stopped review.** On a directory holding a run that `resume` can continue, `--plan-only` keeps that run's `diff.patch`, `commits.txt`, `files.txt` and rounds as they were.
+- **review: `post` refuses to mix two runs.** When a later run rewrote `review-state.json` and stopped before writing its `findings.json`, `post` now exits 2 before any GitHub call and says to finish that run with `resume`. Before, it placed one run's findings on the other run's diff, and GitHub could refuse the whole review.
+- **review: a tree review whose every finder failed can be resumed.** `resume` now asks every finder again instead of failing the same way each time.
+- **review: the verifier is no longer told that CI blocks no merge when classic branch protection requires checks.** The review now also reads the base branch's classic protection. When that read fails, the verifier is told whether CI blocks a merge is unknown, and the review lists the `gh api` command that would settle it.
+- **review: defects a path finder finds in files the change does not touch are kept.** The path finder now marks them `Pre-existing: yes`, as the other finders do, and writes `Could not check:` for what it could not read, which becomes a need.
+
 ## [0.148.1] - 2026-10-31
 
 ### Fixed
