@@ -129,9 +129,9 @@ def _retire_checkpoint(
       incrementally merged ``checkpoint.md``) is live working state, not a
       leftover.
 
-    **A parked session is the deliberate exception.** ``AGENTS.md`` renders its
-    intent, next action and files-in-hand from the checkpoint, and a parked
-    session is precisely the one still being listed weeks later — deleting its
+    **A parked session is the deliberate exception.** The hub shows a session's
+    checkpoint, and a parked session is precisely the one still being listed
+    weeks later — deleting its
     checkpoint would leave the registry entry it deliberately kept alive with
     nothing to say. (The other two guards, an in-flight writer and an
     unconsumed rebuild marker, live in ``checkpoint.retire_checkpoint``: they
@@ -459,8 +459,8 @@ async def extract() -> bool:
                 disposition=state,
             )
         elif not recorded and state != DEFAULT_DISPOSITION:
-            # Losing a `parked`/`done` label is user-visible (the session
-            # vanishes from or lingers in AGENTS.md); a missing entry or a
+            # Losing a `parked`/`done` label is user-visible (the registry
+            # keeps or collects the wrong entry); a missing entry or a
             # lost lock must not be a debug-level shrug.
             logger.warning(
                 "Could not record %s disposition for session %s "

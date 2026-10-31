@@ -12,8 +12,7 @@ inspection. Entries live at ``<data_dir>/sessions/<session_id>.json``:
 ``hostname`` equals the container name in kit containers ($HOSTNAME) and the
 plain machine hostname otherwise — it is how the launcher wrapper maps a
 container back to its session. ``in_container`` says which of those two it is:
-the string alone cannot tell you, and the fleet view uses it to decide whether
-this entry may be judged against the host's live-container roster at all.
+the string alone cannot tell you.
 
 The hub additionally writes
 ``<session_id>.adopt`` markers beside the entries; this module never touches
@@ -90,11 +89,9 @@ def _in_container() -> bool:
     """Is this session running inside a container?
 
     Recorded so a reader can tell whether ``hostname`` is a *container name* or
-    a machine name. Both look like an identifier and neither says which it is,
-    and the fleet view now judges liveness by asking the host which containers
-    exist — so mistaking a laptop's hostname for a missing container would
-    declare a perfectly live bare session dead. ``--local`` mode and
-    `scripts/claude-wrapped` make that a real configuration, not a hypothetical.
+    a machine name. Both look like an identifier and neither says which it is.
+    ``--local`` mode and `scripts/claude-wrapped` make a bare session a real
+    configuration, not a hypothetical.
 
     ``/.dockerenv`` is the marker the runtime itself creates; a pure file check,
     which matters because this runs inside kill-within-seconds hooks. Entries
@@ -232,8 +229,7 @@ def record_event(data_dir: Path, hook_input: dict, kind: str) -> bool:
             else:
                 entry.setdefault("hostname", "")
             # Refreshed alongside hostname and for the same reason: a session
-            # resumed outside a container must stop being judged against the
-            # container roster.
+            # resumed outside a container must stop being recorded as in one.
             entry["in_container"] = _in_container()
             entry.setdefault("workspace", _workspace_root(data_dir))
             entry.setdefault("started_at", now)
@@ -292,8 +288,8 @@ def record_disposition(
 
         path = registry_dir(data_dir) / f"{session_id}.json"
         if not path.exists():
-            # A dropped `parked`/`done` is user-visible (the session vanishes
-            # from or lingers in AGENTS.md), so it warrants a warning; a
+            # A dropped `parked`/`done` is user-visible (the registry keeps or
+            # collects the wrong entry), so it warrants a warning; a
             # dropped `active` changes nothing — absent means active.
             if state != "active":
                 logger.warning(
@@ -348,8 +344,7 @@ def entry_disposition_block(entry: dict) -> tuple[str, str]:
     """``(state, reason)`` of a parsed entry; state defaults to ``active``.
 
     The one parse of the disposition block every consumer shares — state and
-    reason must come from the same read or they drift (the fleet view once
-    parsed the block twice with divergent logic). A reason is only meaningful
+    reason must come from the same read or they drift. A reason is only meaningful
     alongside a valid non-default state, so a malformed block yields
     ``("active", "")``, never a stray reason.
     """
@@ -370,8 +365,6 @@ def _entry_is_stale(
     path: Path,
     cutoff_ended: datetime,
     cutoff_live: datetime,
-    dead_sids: frozenset[str] | set[str] = frozenset(),
-    dead_before: datetime | None = None,
 ) -> bool:
     """Staleness of one registry entry (see :func:`gc_stale` for the policy).
 
@@ -393,22 +386,6 @@ def _entry_is_stale(
         ts = datetime.fromisoformat(str(last.get("ts") or ""))
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=UTC)
-        # Observation beats both clocks. *dead_sids* are entries whose container
-        # the host looked for and did not find (`lib.fleet.roster_dead_sids`);
-        # the two windows below exist only because nothing used to be able to
-        # tell a killed session from a quiet one.
-        #
-        # Two guards, both load-bearing. `parked` is checked first, above:
-        # parking outranks liveness, since a parked session's process being gone
-        # is the normal case. And the entry must not have spoken since the scan
-        # began (*dead_before*) — the deletion below happens under a lock this
-        # pass may have waited on, and a writer that refreshed the entry
-        # meanwhile is a session that came back. Without this the re-check under
-        # the lock would pass a set it can no longer contradict.
-        if str(entry.get("session_id") or path.stem) in dead_sids and (
-            dead_before is None or ts <= dead_before
-        ):
-            return True
         if last.get("kind") == "end":
             return ts < cutoff_ended
         return ts < cutoff_live
@@ -505,18 +482,8 @@ def gc_stale(
     data_dir: Path,
     days: int = GC_AFTER_DAYS,
     live_days: int = GC_LIVE_AFTER_DAYS,
-    dead_sids: frozenset[str] | set[str] | None = None,
 ) -> int:
     """Delete registry entries whose session ended more than *days* ago.
-
-    *dead_sids* are entries an outside observer has confirmed dead — the
-    caller passes what :func:`lib.fleet.roster_dead_sids` read off the host's
-    container roster. Those are collected on this pass regardless of age, and
-    the reason is that the age windows below are not really about age: they are
-    two guesses standing in for the fact that a session cannot report its own
-    death. Where that fact is available, a guess is not needed. Passed in rather
-    than read here so this module keeps no opinion about containers and no
-    import of the fleet view (which imports this one).
 
     Entries whose last event is anything other than ``end`` age out after
     *live_days* instead — a session killed without firing ``SessionEnd``
@@ -557,18 +524,17 @@ def gc_stale(
         cutoff_ended = now - timedelta(days=days)
         cutoff_live = now - timedelta(days=live_days)
         protected = _pending_extraction_sids(data_dir)
-        dead = frozenset(dead_sids or ())
         for path in list(rdir.glob("*.json")):
             try:
                 if path.stem in protected:
                     continue
-                if not _entry_is_stale(path, cutoff_ended, cutoff_live, dead, now):
+                if not _entry_is_stale(path, cutoff_ended, cutoff_live):
                     continue
                 lock_fd = _lock_entry(path)
                 try:
                     # Re-check under the lock — the writer we may have just
                     # waited on could have refreshed the entry.
-                    if not _entry_is_stale(path, cutoff_ended, cutoff_live, dead, now):
+                    if not _entry_is_stale(path, cutoff_ended, cutoff_live):
                         continue
                     path.unlink(missing_ok=True)
                     path.with_suffix(".adopt").unlink(missing_ok=True)

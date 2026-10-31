@@ -29,7 +29,6 @@ _EXPECTED_SKILLS = {
     "qmd-search",
     "costs",
     "config-audit",
-    "fleet-status",
     "memory-bank",
 }
 

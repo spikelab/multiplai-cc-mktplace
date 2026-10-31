@@ -2,9 +2,8 @@
 
 Every existing trigger is token-based, so a tab that sat at 40K tokens for
 three days has no checkpoint at all. That is the inversion this fixes: the
-session whose state you have most thoroughly lost track of was the one the
-fleet view had least to say about, because `AGENTS.md` renders intent, next
-action and files-in-hand from the checkpoint.
+session whose state you have most thoroughly lost track of was the one with
+no checkpoint for the hub to show.
 
 Criterion 12 has three parts, and the third is the one with teeth:
 
