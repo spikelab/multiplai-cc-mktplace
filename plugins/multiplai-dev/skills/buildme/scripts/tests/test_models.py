@@ -291,6 +291,31 @@ class TestReviewGatePolicy:
         assert not r.passed
 
 
+class TestCriticalDimension:
+    def test_a_score_of_1_held_with_high_confidence_fails_the_gate_on_its_own(self):
+        """Confidence 0.9 pulls a score of 1 to 1.25, above the critical 1.0;
+        the dimension must still fail the gate, even with the average met."""
+        from build_pipeline.gates import review_score_gate
+
+        r = ReviewResult(
+            scores=[
+                ReviewScore(
+                    dimension="security", weight=3, score=1, evidence="e", confidence=0.9
+                ),
+                *(
+                    ReviewScore(dimension=d, weight=2, score=5, evidence="e")
+                    for d in ("A", "B", "C")
+                ),
+            ]
+        )
+        assert r.failing_dimensions == ["security"]
+        assert review_score_gate(r).action == "fix_critical_dimension"
+
+    def test_an_unsure_score_of_1_does_not_fail_on_its_own(self):
+        s = ReviewScore(dimension="A", weight=1, score=1, evidence="e", confidence=0.3)
+        assert ReviewResult(scores=[s]).failing_dimensions == []
+
+
 class TestImplementationNote:
     def test_contradicts_property(self):
         note = ImplementationNote(
