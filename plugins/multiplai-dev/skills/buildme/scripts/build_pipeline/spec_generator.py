@@ -1569,6 +1569,7 @@ def _plan_hashes(config) -> dict[str, str]:
     files = {name: root / name for name in ("proposal.md", "use-cases.md")} | {
         name: config.change_dir / name
         for name in (
+            "plan.md",
             "specs.md",
             "unknowns.md",
             "tasks.md",
@@ -1676,6 +1677,10 @@ def reconcile_plan(
             stale.update({"design", "unknowns", "tasks", "rubric"})
         if "use-cases.md" in changed:
             stale.update({"tasks", "rubric"})
+        # pm-spec's plan.md; one first hashed (a build planned before it was)
+        # is recorded, not read as an edit.
+        if "plan.md" in changed and "plan.md" in previous:
+            stale.update({"design", "unknowns", "tasks", "rubric"})
         if PLAN_HASH_KEY in changed:
             stale.update({"unknowns", "tasks", "rubric"})
         if "unknowns.md" in changed:
@@ -1983,6 +1988,7 @@ def assert_plan_current(config, state: BuildState, *, archived: bool = False) ->
         for key in keys
         if not (archived and key.startswith("registry/"))
         and key != PLANNING_KEY
+        and not (key == "plan.md" and key not in expected)
         and current.get(key) != expected.get(key)
     ]
     if changed or state.spec_gen.stale_artifacts:

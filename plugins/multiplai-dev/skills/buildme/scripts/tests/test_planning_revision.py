@@ -108,6 +108,44 @@ def test_a_use_cases_edit_marks_only_tasks_and_rubric_stale(plan):
     assert set(state.spec_gen.stale_artifacts) == {"tasks", "rubric"}
 
 
+def test_a_plan_md_edit_marks_the_plan_stale_and_refuses_the_build(plan):
+    """pm-spec's plan.md feeds the design, tasks and plan check, so an edit
+    to it marks them stale and assert_plan_current refuses the old plan."""
+    config, cm, state = plan
+    (config.change_dir / "requirements").mkdir(exist_ok=True)
+    for cap in ("one", "two"):
+        (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
+    (config.change_dir / "plan.md").write_text("# Plan\nDone means one value")
+    owner.reconcile_plan(config, state)
+    state.spec_gen.record_step("plan_review", "passed")
+    (config.change_dir / "plan.md").write_text("# Plan\nDone means two values")
+    with pytest.raises(RuntimeError, match="plan.md"):
+        owner.assert_plan_current(config, state)
+    owner.reconcile_plan(config, state)
+    assert set(state.spec_gen.stale_artifacts) == {
+        "design",
+        "unknowns",
+        "tasks",
+        "rubric",
+    }
+
+
+def test_a_plan_md_first_hashed_on_resume_marks_nothing_stale(plan):
+    """A build planned before plan.md was hashed keeps its plan: the first
+    hash of plan.md is recorded, not read as an edit."""
+    config, cm, state = plan
+    (config.change_dir / "requirements").mkdir(exist_ok=True)
+    for cap in ("one", "two"):
+        (config.change_dir / f"requirements/{cap}.md").write_text(REQ)
+    (config.change_dir / "plan.md").write_text("# Plan\nDone means one value")
+    owner.reconcile_plan(config, state)
+    state.spec_gen.artifact_hashes.pop("plan.md", None)
+    state.spec_gen.record_step("plan_review", "passed")
+    owner.assert_plan_current(config, state)
+    owner.reconcile_plan(config, state)
+    assert state.spec_gen.stale_artifacts == []
+
+
 @pytest.mark.asyncio
 async def test_interrupted_publication_recovers_one_complete_revision(
     plan, monkeypatch

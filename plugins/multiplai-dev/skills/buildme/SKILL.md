@@ -762,6 +762,9 @@ characters (a file left out is named with its requirement names); a
 component with no dependency gets no such section. Those files are part of
 the plan revision: an edit to a dependency's `specs.md` marks the component's
 design, unknowns, tasks and rubric stale, as a `specs/registry/` edit does.
+So is the component's own `plan.md`: an edit to it marks the same four stale,
+and a build already planned before 0.148.2 records it on resume without
+planning again.
 After upgrading to 0.141.0, the plan of each component with a dependency gets
 a new revision once. A merged component's dir
 stays on the branch (the saved `epic.json` says it merged), and no component
