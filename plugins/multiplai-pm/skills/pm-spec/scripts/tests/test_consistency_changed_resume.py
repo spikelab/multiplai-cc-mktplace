@@ -361,3 +361,12 @@ def test_a_deleted_component_counts_as_changed_and_its_citers_are_read(tmp_path)
     reading = consistency.what_to_read(r)
     assert {API, "components/api/plan.md"} <= reading.changed
     assert reading.full == {UI}
+
+
+def test_an_exact_copy_of_either_of_two_tables_with_one_header_is_no_finding(tmp_path):
+    second = TICKET_TABLE.replace("Dashboard", "Contratti")
+    cdir = _ticket_change(tmp_path, TICKET_TABLE)
+    write(cdir / "ticket.md", (cdir / "ticket.md").read_text() + "\n" + second)
+    assert consistency.table_findings(_run_for(cdir)) == []
+    write(cdir / "specs.md", specs(("rate-limit",)) + "\n" + second)
+    assert consistency.table_findings(_run_for(cdir)) == []

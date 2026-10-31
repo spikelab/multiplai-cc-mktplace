@@ -507,20 +507,22 @@ def _row_text(row: tuple[str, ...]) -> str:
 
 def table_findings(run: Run) -> list[dict]:
     """A critical `format` finding for each table in a spec file whose header
-    row is a table's header row in `ticket.md` and whose cells differ from that
-    table's, whitespace aside: a table copied from the ticket must be copied
-    exactly (G14). Found in code, with no model call."""
+    row is a table's header row in `ticket.md` and whose cells differ from
+    every ticket table with that header, whitespace aside: a table copied from
+    the ticket must be copied exactly (G14). Found in code, with no model call."""
     change_dir = run.config.change_dir
     ticket = change_dir / TICKET_FILE
     if not ticket.is_file():
         return []
-    copied = {rows[0]: (n, rows) for n, rows in markdown_tables(ticket.read_text())}
+    copied: dict[tuple[str, ...], list[tuple[int, list]]] = {}
+    for n, rows in markdown_tables(ticket.read_text()):
+        copied.setdefault(rows[0], []).append((n, rows))
     found = []
     for unit in layout.units(change_dir):
         for n, rows in markdown_tables((change_dir / unit).read_text()):
-            if rows[0] not in copied or rows == copied[rows[0]][1]:
+            if rows[0] not in copied or any(rows == t for _, t in copied[rows[0]]):
                 continue
-            tn, expected = copied[rows[0]]
+            tn, expected = copied[rows[0]][0]
             found.append(
                 {
                     "category": "format",
