@@ -370,3 +370,23 @@ def test_an_exact_copy_of_either_of_two_tables_with_one_header_is_no_finding(tmp
     assert consistency.table_findings(_run_for(cdir)) == []
     write(cdir / "specs.md", specs(("rate-limit",)) + "\n" + second)
     assert consistency.table_findings(_run_for(cdir)) == []
+
+
+def test_an_accepted_table_finding_does_not_block_after_another_edit(repo, model):
+    configure(model)
+    for argv, code in FLOW[:4]:
+        assert run(repo, *argv) == code, argv
+    mine = clone(repo, repo.parent / "reviewer")
+    cdir = mine / "specs" / "changes" / "throttle"
+    write(cdir / "ticket.md", "# Ticket ENG-1\n\n" + TICKET_TABLE)
+    with (cdir / UI).open("a") as fh:
+        fh.write("\n" + TICKET_TABLE.replace("Front Office", "Back Office"))
+    git(mine, "add", "-A")
+    git(mine, "commit", "-qm", "adapt the table on purpose")
+    git(mine, "push", "-q", "origin", BRANCH)
+    assert run(repo, *RESUME) == 4
+    accept = ["--accept", "CC-F1", "--accept-reason", "adapted on purpose"]
+    assert run(repo, *RESUME, *accept) == 0
+    push_edit(repo, repo.parent / "editor", API, specs(("quota-store",), rule="edited"))
+    assert run(repo, *RESUME) == 0
+    assert len(state(change_dir(repo))["accepted_findings"]) == 1

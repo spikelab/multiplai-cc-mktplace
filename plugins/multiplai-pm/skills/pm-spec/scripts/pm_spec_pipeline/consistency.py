@@ -797,6 +797,17 @@ def refuse_at_round_cap(run: Run) -> None:
     raise Stop(EXIT_BLOCKED, "round cap")
 
 
+def _not_accepted(run: Run, found: list[dict]) -> list[dict]:
+    """*found* without each finding a person accepted: the same category and
+    the same text, as `--accept` saved it."""
+    accepted = {
+        (f.get("category", ""), F.finding_text(f)) for f in run.state.accepted_findings
+    }
+    return [
+        f for f in found if (f.get("category", ""), F.finding_text(f)) not in accepted
+    ]
+
+
 async def check_reviewed(run: Run, revision: str) -> None:
     """The check after the specs review: reports, rewrites nothing, and blocks
     (exit 4) on a critical or major finding (rows S13, S17). After a block it
@@ -805,7 +816,9 @@ async def check_reviewed(run: Run, revision: str) -> None:
     step = run.state.step(NAME)
     later = step.outcome == "blocked" and bool(step.blocking_findings)
     listed = _open(step) if later else []
-    in_code = format_findings(run) + table_findings(run) + registry_findings(run)
+    in_code = _not_accepted(
+        run, format_findings(run) + table_findings(run) + registry_findings(run)
+    )
     earlier = _earlier(run, NAME)
     reading = what_to_read(run, listed)
     answer = await check(run, prior=listed, edited=True, reading=reading)
@@ -875,7 +888,9 @@ async def run_consistency(run: Run) -> None:
         await recheck(run, NAME, BLOCK_REASON)
         return
     print("PHASE:CONSISTENCY", flush=True)
-    in_code = format_findings(run) + table_findings(run) + registry_findings(run)
+    in_code = _not_accepted(
+        run, format_findings(run) + table_findings(run) + registry_findings(run)
+    )
     earlier = _earlier(run, NAME)
     reading = what_to_read(run)
     answer = await check(run, reading=reading)
