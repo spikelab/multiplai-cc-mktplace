@@ -92,7 +92,7 @@ fixture runs establish harness behavior, not model quality.
 | `--skip-research` | Skip the research phase |
 | `--lenient-review` | Accept-and-continue when a block exhausts its review iterations without passing, instead of failing the build. Unattended overnight runs only — the default is to fail, so low-scoring work is never silently marked done. |
 | `--skip-explainers` | Skip the unknowns/edge-case explainer pass for dependencies new to this project. `unknowns.md` is still written, recording the skip. The pass is **off by default**: its dependency scan flags spec words such as `assert` or `followed` as dependencies (#375), so the flag only matters when `explainers: {enabled: true}` turns it on. |
-| `--accept-unknown-spend` | Resume after interrupted calls whose usage is unknown. Preserves the unknown records; the cap covers known spend only. Epic builds forward it to children and fixers for this invocation. Pass only when the user explicitly accepts that uncertainty. |
+| `--accept-unknown-spend` | Resume after interrupted or timed-out calls whose usage is unknown. Preserves the unknown records; the cap covers known spend only. Epic builds forward it to children and fixers for this invocation. Pass only when the user explicitly accepts that uncertainty. |
 | `--no-worktree` | Build in the project dir on the current branch instead of creating a worktree + branch. **Required when the calling session is already inside a worktree** — see [Git lifecycle](#git-lifecycle). Also disables push and PR (they only ever act on a branch the pipeline created). |
 | `--no-push` | Do not push the build's branch to `origin`. |
 | `--no-pr` | Do not open a pull request after pushing. |

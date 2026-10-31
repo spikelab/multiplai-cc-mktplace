@@ -157,6 +157,19 @@ class TestFailedCallBudgetAccounting:
         assert budget_mod.get_budget().total_tokens == 40_100
 
     @pytest.mark.asyncio
+    async def test_a_timeout_before_the_result_message_is_unknown_spend(self):
+        """A partial's usage is all zeros when the CLI's final ResultMessage
+        never arrived; that call's spend is unknown, not free."""
+        error = AgentRunTimeout(
+            "boom", reason="boom", stderr_tail="", partial=self._Partial(self._Usage())
+        )
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = error
+            with pytest.raises(LLMCallTimeoutError):
+                await llm_call("hello", budget_label="review")
+        assert budget_mod.get_budget().unaccounted_calls == ["review"]
+
+    @pytest.mark.asyncio
     async def test_a_failure_with_no_partial_is_not_fatal(self):
         """No usage recorded is fine; accounting must never mask the error."""
         with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:

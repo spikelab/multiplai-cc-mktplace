@@ -132,6 +132,19 @@ def _record_partial(error: BaseException, label: str) -> None:
     partial = getattr(error, "partial", None)
     if partial is not None:
         budget.record(partial.usage, label=label)
+        # All zeros means the CLI's final ResultMessage never arrived, so the
+        # call's spend is unknown, not nothing.
+        if not any(
+            getattr(partial.usage, name, 0)
+            for name in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+                "cost_usd",
+            )
+        ):
+            budget.record_unaccounted(label)
     elif isinstance(error, asyncio.CancelledError):
         # Core/providers do not always expose partial usage on cancellation.
         # Preserve that uncertainty rather than reporting the call as free.
