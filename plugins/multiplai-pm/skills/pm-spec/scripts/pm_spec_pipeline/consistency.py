@@ -231,8 +231,9 @@ def what_to_read(run: Run, prior: list[dict] | None = None) -> Reading:
     file. Otherwise, when the proposal or the use cases changed, every spec
     file too, as each spec may rest on them; else each spec file that changed,
     each one whose component's plan changed, each one a changed spec file names
-    (its component id or a capability name), and each one a finding in *prior*
-    cites. Every other spec file goes in by its capability names and
+    (its component id or a capability name), each one that names the id of a
+    component whose spec or plan was deleted, and each one a finding in *prior*
+    cites. A document deleted since the last check counts as changed. Every other spec file goes in by its capability names and
     requirement titles."""
     change_dir = run.config.change_dir
     digests = document_digests(run)
@@ -240,13 +241,20 @@ def what_to_read(run: Run, prior: list[dict] | None = None) -> Reading:
     saved = run.state.checked_digests
     if not saved:
         return Reading(digests, None, set(units))
-    changed = {k for k, v in digests.items() if saved.get(k) != v}
+    changed = {
+        k for k in digests.keys() | saved.keys() if saved.get(k) != digests.get(k)
+    }
     if changed & set(CHANGE_WIDE):
         return Reading(digests, changed, set(units))
     edited = [u for u in units if u in changed]
     full = set(edited) | {u for u in units if _plan_of(u) in changed}
     for unit in edited:
         full |= _cited_by(change_dir, (change_dir / unit).read_text(), units)
+    for gone in changed - digests.keys():
+        parent = PurePosixPath(_plan_of(gone)).parent
+        if parent.parent.name == "components":
+            word = _word(parent.name)
+            full |= {u for u in units if word.search((change_dir / u).read_text())}
     for finding in prior or []:
         full |= set(cited_units(change_dir, finding))
     return Reading(digests, changed, full)

@@ -349,3 +349,15 @@ def test_a_wrong_copy_blocks_the_check_after_the_specs_review(repo, model):
     [blocking] = step["blocking_findings"]
     assert blocking["category"] == "format" and blocking["severity"] == "critical"
     assert blocking["places"][0]["file"] == UI
+
+
+def test_a_deleted_component_counts_as_changed_and_its_citers_are_read(tmp_path):
+    cdir = _two_components(tmp_path)
+    write(cdir / UI, specs(CAPS_OF["ui"]) + "\nThe page reads the api component.\n")
+    r = _run_for(cdir)
+    r.state.checked_digests = consistency.document_digests(r)
+    for name in ("specs.md", "plan.md", ".change.yaml"):
+        (cdir / "components" / "api" / name).unlink()
+    reading = consistency.what_to_read(r)
+    assert {API, "components/api/plan.md"} <= reading.changed
+    assert reading.full == {UI}
