@@ -975,7 +975,9 @@ How it posts: one GitHub review on the PR's head commit, with event
   skipped findings and lists their ids. When nothing is left, it posts
   nothing and says so.
 - It also exits 2, posting nothing, when it cannot read the PR's existing
-  comments or reviews, or when GitHub refuses the review. It never retries
+  comments or reviews, when GitHub refuses the review, or when
+  `review-state.json` and `findings.json` name different commits (a later run
+  stopped before writing its findings; finish it with `resume`). It never retries
   comment by comment, so a review is never posted in part. It never edits,
   resolves or replies to a comment.
 
