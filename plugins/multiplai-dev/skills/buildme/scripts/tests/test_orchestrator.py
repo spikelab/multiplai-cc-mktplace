@@ -2170,3 +2170,54 @@ class TestPlanReviewPhase:
 
         assert result == 0
         mock_review.assert_awaited_once()  # ordinal progress is not review evidence
+
+
+@pytest.mark.asyncio
+async def test_a_spec_only_handoff_is_merged_on_its_own_branch_not_pushed(
+    tmp_path, monkeypatch
+):
+    """A run continuing a `--spec-only` handoff in its worktree merges origin's
+    default branch there (`merge_default_into`), which is chosen by a set
+    `pipeline_branch`. Set after the merge, the run pushed a merge to
+    origin/<branch> that its local branch lacked, and its own push was later
+    rejected as non-fast-forward."""
+    from build_pipeline import orchestrator
+    from build_pipeline.epic import phase as epic_phase
+    from build_pipeline.state import completed_state_path
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "feat/x", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "init"],
+        check=True,
+    )
+    config = BuildConfig(project_dir=repo, change_name="feat")
+    config.specs_dir = repo / "specs"
+    config.feature_branch = "feat/x"
+    planned = BuildState(
+        change_name="feat",
+        tier="advanced",
+        state_file=str(config.state_file_path()),
+        completion_kind="spec-only",
+        branch="feat/x",
+    )
+    config.change_dir.mkdir(parents=True)
+    planned.checkpoint(completed_state_path(config.state_file_path()))
+
+    seen: list[str | None] = []
+
+    def merge(cfg):
+        seen.append(cfg.pipeline_branch)
+        return 1
+
+    monkeypatch.setattr(orchestrator, "_as_epic_child", lambda c: None)
+    monkeypatch.setattr(orchestrator, "_find_feature_branch", lambda c: None)
+    monkeypatch.setattr(epic_phase, "is_epic", lambda c: False)
+    monkeypatch.setattr(orchestrator, "_rebind_to_existing_worktree", lambda c: None)
+    monkeypatch.setattr(orchestrator, "_merges_into_feature_branch", lambda c: True)
+    monkeypatch.setattr(orchestrator, "_refuse_unless_ready", lambda c, p: None)
+    monkeypatch.setattr(orchestrator, "_merge_into_feature_branch", merge)
+
+    assert await run_orchestrator(config, _args(repo, "feat")) == 1
+    assert seen == ["feat/x"]
