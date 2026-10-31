@@ -16,6 +16,21 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-10-31
+
+### Removed
+
+- **The fleet view and `/multiplai-context:fleet-status` are gone.** Session
+  start and the host drain no longer write `.multiplai/data/AGENTS.md` or
+  `.multiplai/data/fleet.json`, and the `fleet-status` skill no longer exists.
+  Files those left behind are not deleted for you; remove them by hand if you
+  want them gone.
+- **The session registry no longer reads `live_containers.json`.** An entry
+  whose container has exited is now collected by the age rules alone: 7 days
+  after a clean quit, 30 days otherwise, never while parked. The registry, the
+  `active | parked | done` label and checkpoints work as before, and the
+  multiplai hub reads them unchanged.
+
 ## [0.60.0] - 2026-10-31
 
 ### Changed
