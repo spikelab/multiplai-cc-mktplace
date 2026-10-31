@@ -842,6 +842,30 @@ class TestWholeTreeOperations:
         assert (repo / "specs/changes/feat/.build-state.json").exists()
         assert (repo / "specs/changes/feat/.board.json").exists()
 
+    @pytest.mark.parametrize("commit", [False, True])
+    def test_discard_keeps_bookkeeping_an_agent_staged(self, tmp_path, commit):
+        """A refactorer holding Bash ran `git add -A` (and maybe committed):
+        the restore must not delete the bookkeeping it swept in."""
+        repo = make_repo(tmp_path / "proj")
+        change = repo / "specs" / "changes" / "feat"
+        change.mkdir(parents=True)
+        (change / "proposal.md").write_text("# proposal\n")
+        (repo / "module.py").write_text("x = 1\n")
+        base = git_ops.commit_tree(repo, "impl", "block=1")
+        assert base is not None
+
+        (repo / "module.py").write_text("x = 2\n")
+        self._bookkeeping(repo)
+        _git(repo, "add", "-A")
+        if commit:
+            _git(repo, "commit", "-qm", "refactor")
+
+        assert git_ops.discard_to(repo, base, "refactor") is True
+        assert (repo / "module.py").read_text() == "x = 1\n"
+        assert (repo / "build-progress.md").exists()
+        assert (change / ".build-state.json").exists()
+        assert (change / ".board.json").exists()
+
 
 class TestDiscardToAncestorGuard:
     """`git_ops.discard_to` may only ever move backwards along the current
