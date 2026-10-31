@@ -16,6 +16,17 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-10-31
+
+### Changed
+
+- **Background model calls run on the 5.5 models.** Catalog generation now
+  defaults to `claude-sonnet-5-5` (was `claude-sonnet-5`) and the `llm` memory
+  router to `claude-haiku-5-5` (was `claude-haiku-4-5`). Extraction,
+  checkpoints, now-summaries and dream take their model from multiplai-core,
+  whose `sonnet`/`haiku`/`opus` aliases now resolve to the 5.5 IDs. A
+  `catalog_model` or `router_model` you set yourself is kept as written.
+
 ## [0.59.0] - 2026-10-24
 
 ### Changed

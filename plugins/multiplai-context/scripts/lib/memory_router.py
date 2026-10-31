@@ -61,7 +61,7 @@ ROUTER_ENV_VAR = option_var(ROUTER_OPTION)
 # the ``router_model`` option.
 ROUTER_MODEL_OPTION = "router_model"
 ROUTER_MODEL_ENV_VAR = option_var(ROUTER_MODEL_OPTION)
-DEFAULT_ROUTER_MODEL = "claude-haiku-4-5"
+DEFAULT_ROUTER_MODEL = "claude-haiku-5-5"
 
 # How long the llm router waits before giving up. A timeout injects **zero**
 # memory for that turn, so this ceiling is the single most consequential number
