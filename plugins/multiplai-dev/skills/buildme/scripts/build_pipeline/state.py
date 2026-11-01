@@ -26,6 +26,7 @@ from .models import (
     BuildPhase,
     ComponentReviewState,
     EndSuiteState,
+    PlanReviewFinding,
 )
 from .stop_record import StepStop  # moved; `from .state import StepStop` keeps working
 from .stop_record import record as record_stop
@@ -38,6 +39,15 @@ log = logging.getLogger(__name__)
 # rewrite. A step blocked under an older rule gets one fresh check
 # (`spec_generator.reopen_if_edited`).
 PLAN_RULES_VERSION = 1
+
+
+class SizeVerdict(BaseModel):
+    """The plan check's answer on the plan's size, saved when the check passes:
+    its most severe `oversized-plan` finding, or None when it reported none.
+    The size gate (`orchestrator._run_size_gate`) parks only on a critical or
+    major one."""
+
+    oversized: PlanReviewFinding | None = None
 
 
 class StepOutcome(BaseModel):
@@ -57,6 +67,10 @@ class StepOutcome(BaseModel):
     # The blocking count each admitted rewrite started from, one per
     # admission. A recheck that does not lower the last one blocks the step.
     blocking_counts: list[int] = Field(default_factory=list)
+    # The plan check's size answer, saved with its pass. None when the check
+    # did not pass, or for a checkpoint written before the field: the size
+    # gate then uses the code's verdict.
+    size_verdict: SizeVerdict | None = None
 
 
 class PlanApproval(BaseModel):

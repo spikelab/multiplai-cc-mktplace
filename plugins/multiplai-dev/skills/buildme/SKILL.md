@@ -1207,15 +1207,22 @@ if the merge fails again; every other parked child stays parked.
 
 ### The size gate (after plan review)
 
-After the plan review, the pipeline checks the final `tasks.md` again with the
-same split triggers (more than 10 blocks or more than 5 top-level packages by
-default; `[buildme.plan_review] PLAN_SPLIT_BLOCK_TRIGGER=` /
-`PLAN_SPLIT_PACKAGE_TRIGGER=` in `multiplai.conf` override them). A plan that
-should be split — it is over a trigger and its blocks come apart into
-independent groups, or it mixes high-risk work with unrelated features — stops
-the build: the pipeline writes `split-proposal.md` (the proposed PRs, the cuts,
-the reason) and exits `3` with `SPLIT:REQUIRED:<path>`. Re-running stops the
-same way until `--accept-size` is passed.
+After the plan review, the plan reviewer's own answer decides whether the plan
+should be split. The build stops only when the reviewer reported a critical or
+major `oversized-plan` finding: the pipeline writes `split-proposal.md` (the
+reviewer's proposed tickets, with buildme's grouping of the blocks below as
+context) and exits `3` with `SPLIT:REQUIRED:<path>`. Re-running stops the same
+way until `--accept-size` is passed. A minor `oversized-plan` finding, or none,
+lets the build go on, whatever words the blocks use.
+
+buildme's own checks of `tasks.md` (more than 10 blocks or more than 5
+top-level packages by default, high-risk keywords, blocks that share no
+interface; `[buildme.plan_review] PLAN_SPLIT_BLOCK_TRIGGER=` /
+`PLAN_SPLIT_PACKAGE_TRIGGER=` in `multiplai.conf` override the triggers) are
+handed to the reviewer as input. They decide the stop on their own only when
+no reviewer answer is saved for the current plan, for example a build resumed
+from a checkpoint written by an older version; the log then says
+`SIZE_GATE verdict=code-fallback`.
 
 ### The plan approval (stop 4)
 
