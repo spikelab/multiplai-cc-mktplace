@@ -2706,11 +2706,27 @@ def unfixed_findings_section(
     return path if path.is_file() else None
 
 
+def no_test_command_section(
+    config: BuildConfig, state: BuildState, docs_dir: Path
+) -> Path | None:
+    """A section saying no test gate ran, when the build had no test command
+    (`gates.NO_TEST_COMMAND_WARNING`); None when it had one."""
+    if config.test_command:
+        return None
+    from .gates import NO_TEST_COMMAND_WARNING
+
+    path = _pr_sections_dir(docs_dir) / "no-test-command.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"## Warning: no tests ran\n\n{NO_TEST_COMMAND_WARNING}\n")
+    return path
+
+
 PRE_PUBLISH_CONTRIBUTORS: list[
     Callable[[BuildConfig, BuildState, Path], Path | None]
 ] = [
     walkthroughs.pr_section,
     unfixed_findings_section,
+    no_test_command_section,
 ]
 
 

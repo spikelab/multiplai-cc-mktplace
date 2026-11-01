@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.151.2] - 2026-11-01
+
+### Fixed
+
+- **buildme**: a build of a feature branch (`--base-ref origin/<branch>`,
+  as every epic child is) started from a checkout with no
+  `specs/config.yaml`, while the branch has one, now stops with
+  `... Push it, or pull origin's, first.` It used to go on with no config,
+  so with no `tdd.test_command` its test gates ran nothing.
+- **buildme**: a build with no test command now says so. Every TDD run
+  writes a `WARNING` to `build-progress.md`, the baseline is logged
+  `SKIPPED` instead of `PASSED`, and the PR body gets a "Warning: no tests
+  ran" section.
+
 ## [0.151.0] - 2026-11-01
 
 ### Added

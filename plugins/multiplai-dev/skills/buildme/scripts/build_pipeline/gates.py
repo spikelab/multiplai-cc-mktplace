@@ -117,6 +117,17 @@ def _test_directory(test_command: str, project_dir: Path) -> Path:
 # Seconds a full test run gets when `tdd.test_timeout` sets nothing.
 DEFAULT_TEST_TIMEOUT = 300
 
+# What the TDD engine writes to build-progress.md, and publish to the PR body
+# (`orchestrator.no_test_command_section`), when the build has no test
+# command: every test gate below then passes without running anything.
+NO_TEST_COMMAND_WARNING = (
+    "No test command: specs/config.yaml sets no tdd.test_command and discovery "
+    "found no root file it knows (pytest.ini, pyproject.toml, setup.py, "
+    "Package.swift, Cargo.toml, go.mod, package.json). The baseline, RED, "
+    "integration and mutation gates ran no tests and passed. Set "
+    "tdd.test_command in specs/config.yaml to have them run."
+)
+
 # Runs of the test command that may end with no test results (the runner
 # crashed, the test database is down, the project failed to start) before the
 # block stops: the first run and two retries.

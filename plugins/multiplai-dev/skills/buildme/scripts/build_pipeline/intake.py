@@ -199,11 +199,13 @@ def config_yaml_off_ref(project_dir: Path, ref: str) -> bool:
     at *ref*: *ref* holds another version or none. The build reads the
     checkout's file and a worktree branched from *ref* holds *ref*'s, so the
     two would differ, whether HEAD's version was never pushed or origin has
-    changed the file since. No file at HEAD reads as False: the build reads
-    none. Untracked, or not a git repo, also reads as False
-    (`config_yaml_uncommitted` and the worktree preflight own those)."""
-    if not (Path(project_dir) / "specs" / "config.yaml").exists():
-        return False
+    changed the file since. No file in the checkout while *ref* holds one
+    reads as True too: the build would read no config (no `tdd.test_command`,
+    so test discovery runs on the checkout) while the worktree holds *ref*'s.
+    No file on either side reads as False. Untracked, or not a git repo,
+    also reads as False (`config_yaml_uncommitted` and the worktree preflight
+    own those)."""
+    present = (Path(project_dir) / "specs" / "config.yaml").exists()
     blobs = []
     for rev in ("HEAD", ref):
         try:
@@ -224,6 +226,8 @@ def config_yaml_off_ref(project_dir: Path, ref: str) -> bool:
         except (OSError, subprocess.SubprocessError):
             return False
         blobs.append(res.stdout.strip() if res.returncode == 0 else None)
+    if not present:
+        return blobs[1] is not None
     return blobs[0] is not None and blobs[0] != blobs[1]
 
 

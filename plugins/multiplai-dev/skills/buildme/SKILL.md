@@ -192,9 +192,20 @@ see it. Commit it first.` With `--base-ref` (every epic child, and every
 build of a change on a feature branch, which starts from
 `origin/<branch>`) the worktree branches from that commit instead, and the build still reads the checkout's
 file, so the version committed at `HEAD` must be the one at that commit:
-otherwise it stops with `... Push it, or pull origin's, first.` An epic checks
+otherwise it stops with `... Push it, or pull origin's, first.` A checkout
+with no `config.yaml` while that commit has one stops the same way (the build
+would read no config, so no `tdd.test_command`); no file on either side is
+fine. An epic checks
 this before each child's first launch and launches nothing for it, so the next
 run, after the push or pull, fetches again and goes on.
+
+**No test command.** When `specs/config.yaml` sets no `tdd.test_command` and
+discovery finds no root file it knows (`pytest.ini`, `pyproject.toml`,
+`setup.py`, `Package.swift`, `Cargo.toml`, `go.mod`, `package.json`), the
+baseline, RED, integration and mutation gates run nothing and pass. The build
+goes on, but every TDD run writes a `WARNING` saying so to
+`build-progress.md`, the baseline is logged `SKIPPED`, not `PASSED`, and the
+PR body gets a "Warning: no tests ran" section.
 
 ### Reference docs — the standards the specs are written against
 
