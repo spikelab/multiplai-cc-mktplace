@@ -226,6 +226,12 @@ move the card.
 
 Pipeline pauses for human review (unless `--auto`). You can iterate on specs/design before building.
 
+Then, after the plan check and the size gate, the build stops for an
+engineer's approval of `implementation-plan.md` (stop 4: `PLAN:WAITING:<path>`,
+exit 3) and builds once the approval commit is on its branch, or with
+`--approve-plan`. Only `--auto` skips it. See SKILL.md, "The plan approval
+(stop 4)".
+
 Paths are printed in a deliberate order: `REVIEW:READ_FIRST:<unknowns.md>` comes
 **first, above everything else** — reading it is the anti-slop step.
 Read `use-cases.md` before `tasks.md`: a use case no block delivers is the
@@ -466,7 +472,7 @@ specs/
 │       ├── use-cases.md           # Who it is for, and what they can observe (pm-spec's)
 │       ├── implementation-plan.md # How to implement (architecture decisions)
 │       ├── unknowns.md            # Explainer per dependency new to this project
-│       ├── tasks.md               # Block-by-block work breakdown
+│       ├── tasks.md               # Block-by-block work breakdown, each block ending with what its agents also get
 │       ├── rubric.md              # Evaluation criteria
 │       ├── implementation-notes.md # Agent SURPRISES/SPEC_IMPACT, appended live
 │       ├── respec.md              # Proposed spec delta (never auto-applied)
@@ -593,6 +599,13 @@ reads it when there is no `implementation-plan.md`, with the same plan revision,
 so the plan is not written again. A new or rewritten plan is written as
 `implementation-plan.md`; buildme never renames or removes `design.md`, and
 logs it once as unused when both files are there.
+
+A change with components has one `implementation-plan.md`, at
+`specs/changes/<change>/`, beside the proposal: `/buildme <change>` writes it
+for every component, pushes it to the feature branch, and launches no
+component until an engineer approves it. Each component then writes its own
+`tasks.md` from it and writes no plan. A change whose components were already
+planned one at a time keeps a plan per component.
 
 ```markdown
 ## Context

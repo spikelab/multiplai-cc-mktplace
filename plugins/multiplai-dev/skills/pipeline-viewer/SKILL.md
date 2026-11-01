@@ -22,7 +22,7 @@ The five stops:
 | 1 | pm-spec writes `proposal.md` | pm | reminder, then you decide |
 | 2 | pm-spec writes use cases and components | pm | reminder, then you decide |
 | 3 | pm-spec writes the specs | pm and engineer | reminder, then you decide |
-| 4 | buildme writes `implementation-plan.md` (`review.plan_approval: true`) | engineer | reminder, then you decide |
+| 4 | buildme writes `implementation-plan.md` (every build without `--auto`; a change with components has one plan, on its feature branch, which this page does not show yet) | engineer | reminder, then you decide |
 | 5 | buildme opens the PR | engineer, on the PR | nothing |
 
 ## What this skill does on the machine

@@ -99,7 +99,7 @@ fixture runs establish harness behavior, not model quality.
 | `--pr-ready` | Open the PR ready-for-review instead of the default draft. |
 | `--research-path <file>` | Research to build on. Its content is saved as `research.md` in the change dir and fed to the design (fenced as untrusted). Without it, the pipeline decides whether research is needed — see [Step 2](#step-2-research). |
 | `--accept-size` | Build a plan the size gate says should be split, as one PR. The build remembers it, so a later retry or resume does not stop on size again. |
-| `--approve-plan` | Under `review.plan_approval: true`: commit the user's approval of the implementation plan at its current revision (an empty commit on the build's branch with `Stop: 4`, `Revision: <plan revision>` and `Approved-by: <git user.name>` trailers) and go on. Pass it only after the user approved the plan; without the setting it does nothing. |
+| `--approve-plan` | Commit the user's approval of the implementation plan at its current revision (an empty commit with `Stop: 4`, `Revision: <plan revision>` and `Approved-by: <git user.name>` trailers) and go on: on the build's branch, or, for a change with components, on its feature branch, pushed. Pass it only after the user approved the plan; with `--auto` it does nothing. |
 | `--force` | Start a new build even if this change already published. The new build gets the next free branch (`<feature branch>-2`, …, cut where the published build started) and leaves the published one alone. Pass it only after the user said yes to the `BUILD:COMPLETE` question (below). A stopped build with a `.build-state.json` resumes with or without it. |
 | `--epic-child` | Build as an epic's child: no spec-extract, and the PR targets `--branch` (the epic's feature branch), else the default branch. The epic's build passes it to every child, so the child's saved command keeps it when run again by hand. `BUILDME_EPIC_CHILD=1` in the environment does the same: a child's command saved before 0.84.2 lacks the flag, so pass one of them when running it by hand. |
 | `--base-ref <sha>` | Branch a new worktree from this commit instead of the source checkout's HEAD; the change's feature branch is then not looked up. An epic's children get `origin/<feature branch>` (see [Epic builds](#epic-builds-a-parent-and-its-children)), and a build that finds its change's feature branch sets it to that itself; a build that re-binds to its worktree ignores it. With `--base-ref`, the change dir as that commit holds it must be ready, or the build refuses before the worktree is cut. With `--branch` and `--epic-child`, the PR targets that branch (a single change given `--branch` builds on that branch itself, ignoring `--base-ref`, and its PR goes to the default branch); otherwise, when the commit is not on the default branch, the PR targets the branch that holds it (`--base`), except under `--epic-child` (or `BUILDME_EPIC_CHILD=1`), where it targets the default branch. Exits `1` when the `specs/config.yaml` committed at HEAD is not the version at that commit (push yours, or pull origin's, first). |
@@ -134,7 +134,6 @@ buildme ignores them.
 | `tdd.context` | `full` / `sliced` | `full` | the TDD loop: what each block's test writer, implementer and refactorer get. `full` gives the whole design, every requirement, the rubric and the `memory_files` (core, stack, additional). `sliced` gives the design sections whose heading, or a heading inside them, the block's name or tasks name (the whole design when they name none), the requirements of the capabilities and requirements its `Satisfies:` line names (all of them when it names none), the rubric only to a reviewer role, and only the memory files in `memory_files.tdd`. Changing it between a stop and a resume changes no plan revision; the resumed block uses the new value |
 | `memory_files.tdd` | list of memory file names | `[]` | the TDD loop, with `tdd.context: sliced` only: the memory files its agents get. It sits under `memory_files`, so editing it after planning stops a build in TDD with `Planning inputs changed after implementation` |
 | `tdd.spec_tests` | `true` / `false` | `false` | the TDD loop: before a block's test writer, a second test writer writes tests for the block's scenarios marked security or permission (the word in the `#### Scenario:` heading or its `### Requirement:` heading, e.g. `[security]`), given only those scenarios and the block's public interfaces, not the design. The block's test writer is told those files, and one test commit holds both. Off, nothing changes |
-| `review.plan_approval` | bool | `false` | stop 4: after the plan check and the size gate, the build waits (`PLAN:WAITING`, exit `3`) until its branch holds an engineer's approval commit for the current plan revision (see [The plan approval](#the-plan-approval-stop-4)). Turning it on for a planned build changes no plan revision |
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
 | `findings.max_rounds` | int | `3` | `/multiplai-dev:buildme-findings`: fix-and-re-review rounds before it stops (`findings --max-rounds` overrides it) |
 | `findings.allow_bots` | list of bot logins | `[]` | `/multiplai-dev:buildme-findings`: bots whose comments are acted on; any other bot's are listed and skipped |
@@ -1226,19 +1225,62 @@ from a checkpoint written by an older version; the log then says
 
 ### The plan approval (stop 4)
 
-With `review.plan_approval: true` in `specs/config.yaml`, an engineer approves
-how the change will be implemented before any code is written. After the plan
-check and the size gate, the pipeline looks on the build's branch for a commit
-whose trailers are `Stop: 4`, `Revision: <plan revision>` and `Approved-by:`
-(or `Decided-by:`). With none, it writes `plan-approval.md` in the change dir
-(the file to approve, `implementation-plan.md`, or `design.md` for a change planned before the rename; `tasks.md` with its block count, to read;
-the plan check's outcome; the plan revision; and the commands that record the
-approval) and exits `3` with `PLAN:WAITING:<path>`. Re-running stops the same
-way, and keeps `plan-approval.md` as it is, until the approval commit is
-there; `--approve-plan` makes that commit in git `user.name`'s name. Any edit
-to the plan makes a new plan revision: an approval of the old one no longer
-counts, and the build asks again. An epic's child that stops here is `waiting`
-in the run's summary, and the next run of the epic launches it again.
+An engineer approves how the change will be implemented before any code is
+written, as the PM approves the proposal at pm-spec's first stop. Only
+`--auto` skips it. A `specs/config.yaml` that still sets
+`review.plan_approval` gets a warning that the key is no longer read.
+
+After the plan check and the size gate, the pipeline looks on the build's
+branch for a commit whose trailers are `Stop: 4`, `Revision: <plan revision>`
+and `Approved-by:` (or `Decided-by:`). With none, it writes `plan-approval.md`
+in the change dir (the file to approve, `implementation-plan.md`, or
+`design.md` for a change planned before the rename; `tasks.md` with its block
+count, to read; the plan check's outcome; the plan revision; and the commands
+that record the approval) and exits `3` with `PLAN:WAITING:<path>`.
+Re-running stops the same way, and keeps `plan-approval.md` as it is, until
+the approval commit is there; `--approve-plan` makes that commit in git
+`user.name`'s name. Any edit to the plan makes a new plan revision: an
+approval of the old one no longer counts, and the build asks again.
+
+**A change with components has one plan.** pm-spec writes one proposal for
+the change and one `specs.md` per component; buildme writes one
+`implementation-plan.md` for the change, beside the proposal, and one
+`tasks.md` per component. `/buildme <change>` writes the plan before it
+launches any component, on the feature branch as origin holds it: it runs
+the shared codebase analysis, writes the plan from the proposal,
+`components.md`, every component's `plan.md` and `specs.md` and the change's
+`research.md` (with a `## Component: <id>` section per component), and
+commits and pushes it. Writing it needs `--trust-repo`, as a single build's
+plan does. A `SPEC_ISSUE:` line in it writes `spec-issues.md` at the change,
+pushes it and exits `4` with `SPEC:ISSUES:<path>`, launching nothing. Unless
+the run has `--auto`, it then looks on the feature branch for the approval
+commit of the plan's revision (which hashes the plan and everything it was
+written from, so an edit to either asks again). With none it writes
+`plan-approval.md` beside the plan, pushes it, prints `PLAN:WAITING:<path>`,
+launches no component, and exits `3` once the components already running
+or under review are done. `--approve-plan` on the change's build commits the
+approval on the feature branch and pushes it. buildme never writes a plan
+that is there: delete `implementation-plan.md` to have it written again.
+
+Each component then reads the change's plan and writes no plan of its own:
+its `tasks.md`, `unknowns.md` and `rubric.md` are written from the change's
+plan and its own `specs.md`, and an edit to the change's plan makes them
+stale. Its plan check edits only `tasks.md`: a finding that needs the plan
+changed blocks the component, naming the plan to edit by hand. Components
+run with `--auto`, so they do not stop at stop 4. A change whose components
+were already planned one at a time (a component holds its own
+`implementation-plan.md` or `design.md` on the feature branch, and the change
+none) keeps building that way: each component writes its own plan, and none
+stops for an approval.
+
+**What each block's agents get.** Once the plan check passes, buildme adds a
+list to the end of every block's section of `tasks.md`, between
+`<!-- buildme:inputs ... -->` and `<!-- /buildme:inputs -->`, and commits it:
+the requirements, the parts of the implementation plan and the earlier
+blocks' signatures its agents get, and the rubric, `unknowns.md`, prototype,
+memory files and reference docs that go to which agent. It follows
+`tdd.context`. It is rewritten whole on every run, changes no plan revision,
+and is never part of the text the agents get as the block.
 
 ### The documentation phase (always on)
 
@@ -1402,7 +1444,7 @@ get past it), `4` with `SPEC:ISSUES` the requirements go back to pm-spec
 | Marker | What happened | What you do |
 |---|---|---|
 | `RESEARCH:NEEDED:<path>` | the research decision asked for research; topics in `<path>` | Run `/deep-research` on them and re-run with `--research-path <output>` — or, without `multiplai-research`, say so and re-run with `--skip-research`. |
-| `PLAN:WAITING:<path>` | stop 4 (`review.plan_approval: true`): the plan waits for an engineer's approval; `<path>` is `plan-approval.md` | When the `multiplai-dev:pipeline-viewer` skill is installed, run `pipeline-viewer notify --change <name> --stop 4`; otherwise show `<path>` to the user. Stop. Re-run the same build command once the approval commit is on the build's branch, or with `--approve-plan` when the user tells you here that they approve the plan. Never add `--approve-plan` without the user's approval. |
+| `PLAN:WAITING:<path>` | stop 4 (every build without `--auto`): the plan waits for an engineer's approval; `<path>` is `plan-approval.md`, beside the change's plan for a change with components | When the `multiplai-dev:pipeline-viewer` skill is installed, run `pipeline-viewer notify --change <name> --stop 4`; otherwise show `<path>` and the plan beside it to the user. Stop. Re-run the same build command once the approval commit is on the build's branch (the feature branch, for a change with components), or with `--approve-plan` when the user tells you here that they approve the plan. Never add `--approve-plan` without the user's approval. |
 | `SPLIT:REQUIRED:<path>` | the size gate wants the plan split; proposal in `<path>` | Show `<path>` to the user, or post it on the change's ticket (`ticket_refs` in its `.change.yaml`, which pm-spec wrote; plane `comment` / `gh issue comment --body-file`), and stop. Re-run with `--accept-size` only when the user chooses to build it as one PR. |
 | `BUILD:COMPLETE:<path>` | this change already published; `<path>` is its kept checkpoint, and stderr names its branch and PR. Nothing was written | Ask the user with AskUserQuestion whether to start a new build of it on a new branch. On yes, re-run the same command with `--force`; on no, stop. Never add `--force` without the user's yes. |
 | `EPIC:MERGE_WAITING:<urls>` | a child waits for a PR another child opened to merge, or a PR passed review and waits for a person to merge it under `epic.merge: manual`, or, under `epic.merge: auto`, buildme left a PR open itself: its checks were still pending after an hour, or a merge queue only queued it (comma-separated `<urls>`) | Tell the user which PRs wait for a merge, and any child the `EPIC: child` lines on stderr name, and stop. Under `manual`, re-run the same command once they are merged. Under `auto`, do not ask the user to merge by hand. Checks still pending: re-run the same command, which reads them again and merges. A queued PR: re-run once the queue has merged it, since a re-run while it is still queued runs the merge step again, which merges the feature branch in and pushes when that branch has moved (see [Merging the children's PRs](#epic-builds-a-parent-and-its-children)). A PR closed without a merge parks the children that wait on it. |

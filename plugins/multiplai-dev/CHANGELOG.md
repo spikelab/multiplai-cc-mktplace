@@ -15,6 +15,34 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.150.0] - 2026-11-01
+
+### Changed
+
+- **buildme**: every build now stops for an engineer to approve its
+  implementation plan before any code is written (stop 4, `PLAN:WAITING`,
+  exit 3), as pm-spec stops for the proposal. Approve with `--approve-plan`
+  or an approval commit on the build's branch. Only `--auto` skips it.
+  `review.plan_approval` in `specs/config.yaml` is no longer read; a config
+  that still sets it gets a warning.
+- **buildme**: a change with components now has one `implementation-plan.md`
+  for the whole change, beside its proposal, instead of one per component.
+  `/buildme <change>` writes it before launching any component, pushes it to
+  the feature branch, and waits for its approval there. Each component writes
+  its own `tasks.md` from that plan and its `specs.md`, and cannot edit the
+  plan. A change whose components were already planned one at a time keeps
+  building that way.
+
+### Added
+
+- **buildme**: each block in `tasks.md` now ends with a list of what its
+  agents also get: the requirements, the parts of the implementation plan,
+  the earlier blocks' signatures, and which agents get the rubric, unknowns,
+  prototype, memory files and reference docs. buildme writes it after the
+  plan check; it changes no plan revision.
+- **pipeline-viewer**: stop 4's row says it applies to every build without
+  `--auto`. The page does not yet show the stop for a change-level plan.
+
 ## [0.149.0] - 2026-11-01
 
 ### Added
