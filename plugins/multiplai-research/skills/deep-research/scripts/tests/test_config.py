@@ -84,6 +84,14 @@ class TestConfModel:
         skill = _conf_model("deep-research", None)
         assert _conf_model("deep-research.parse", skill) == "claude-test-skill"
 
+    def test_provider_qualified_model_is_kept_as_written(self, tmp_path, monkeypatch):
+        _write_conf(
+            tmp_path,
+            monkeypatch,
+            "[deep-research]\nMODEL=pi:gpt-6.1-sol@openai-codex\n",
+        )
+        assert _conf_model("deep-research", None) == "pi:gpt-6.1-sol@openai-codex"
+
     def test_parse_section_beats_the_skill_wide_model(self, tmp_path, monkeypatch):
         _write_conf(
             tmp_path,
