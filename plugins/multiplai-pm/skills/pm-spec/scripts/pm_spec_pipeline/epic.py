@@ -13,6 +13,13 @@ The answer is saved in the run state (`split`) before any file is written. A
 run that finds it makes no call: it writes the files that are missing and
 keeps the ones written (row S5).
 
+Until stage 3 starts, a run that finds the proposal, the ticket, the
+interview, the PRD or the ticket's child refs changed since the answer was
+saved (`proposal_hash`; a reviewer narrowed the proposal at the components
+stop) discards the answer and the files it wrote, and asks again
+(`reopen_if_proposal_changed`). An edit to the use cases or to a plan alone
+keeps the answer.
+
 Several components:
 
 - `components/<id>/plan.md`, and `components/<id>/.change.yaml` with
@@ -35,10 +42,11 @@ import logging
 import re
 from pathlib import Path
 
+import yaml
 from multiplai_core.specs import read_change_meta, write_change_meta
 from pydantic import BaseModel, Field
 
-from . import intake, sdk
+from . import artifacts, intake, sdk
 from .artifacts import plan_title, sha
 from .prompts import UNTRUSTED_NOTICE
 from .prompts.epic_split import (
@@ -92,6 +100,19 @@ def inputs_hash(run: Run) -> str:
     return sha(
         json.dumps({"inputs": split_inputs(run), "children": children}, sort_keys=True)
     )
+
+
+def proposal_hash(run: Run) -> str:
+    """What the components answer reads, but the use cases: the PRD, the
+    ticket, the interview, the proposal and the ticket's child refs."""
+    change_dir = run.config.change_dir
+    parts = {
+        name: (change_dir / name).read_text()
+        for name in ("prd.md", "ticket.md", "interview.md", "proposal.md")
+        if (change_dir / name).is_file()
+    }
+    parts["children"] = intake.ticket_refs(change_dir)["children"]
+    return sha(json.dumps(parts, sort_keys=True))
 
 
 def _cycle(graph: dict[str, list[str]]) -> list[str] | None:
@@ -296,6 +317,7 @@ async def run_components(run: Run) -> None:
         answer = await ask_split(run, ticket_children)
         split = SplitRecord(
             inputs=inputs_hash(run),
+            proposal_inputs=proposal_hash(run),
             single=len(answer.components) == 1,
             reason=answer.reason,
             children=answer.components,
@@ -313,6 +335,78 @@ async def run_components(run: Run) -> None:
         )
     write_files(run, split)
     print("PHASE:COMPONENTS", flush=True)
+
+
+STAGE_3_STEPS = ("prototype", "tickets", "specs")
+
+
+def proposal_changed(run: Run) -> bool:
+    """The saved answer was given before the proposal, the ticket or the
+    interview changed. A state saved before `proposal_inputs` existed holds
+    only `inputs`, which hashes the use cases too: it is compared only while
+    the use cases are as recorded, so an edit to them alone keeps the answer."""
+    split = run.state.split
+    if split.proposal_inputs:
+        return split.proposal_inputs != proposal_hash(run)
+    if not artifacts.unchanged_since_recorded(run, "use-cases"):
+        return False
+    return split.inputs != inputs_hash(run)
+
+
+def _remove_split_files(run: Run, split: SplitRecord) -> None:
+    change_dir = run.config.change_dir
+    if split.single:
+        (change_dir / "plan.md").unlink(missing_ok=True)
+        return
+    root = change_dir / COMPONENTS_DIR
+    for child in split.children:
+        comp = root / child.id
+        # The plan first: a component dir counts while its plan.md is there.
+        (comp / "plan.md").unlink(missing_ok=True)
+        (comp / ".change.yaml").unlink(missing_ok=True)
+        if comp.is_dir() and not any(comp.iterdir()):
+            comp.rmdir()
+    if root.is_dir() and not any(root.iterdir()):
+        root.rmdir()
+    (change_dir / COMPONENTS_FILE).unlink(missing_ok=True)
+    meta = read_change_meta(change_dir)
+    if "children" in meta:
+        del meta["children"]
+        atomic_write(
+            change_dir / ".change.yaml",
+            yaml.safe_dump(
+                meta, default_flow_style=False, sort_keys=False, allow_unicode=True
+            ),
+        )
+
+
+def reopen_if_proposal_changed(run: Run) -> bool:
+    """Before stage 3 starts, discard a components answer given before the
+    proposal, the ticket or the interview changed: the files written from it
+    (the plans, each component's `.change.yaml`, `components.md`, `children`),
+    the answer, the components step, and `use-cases.md` when nobody edited it
+    and its inputs changed. Stage 2 then asks again and stops for review
+    again. True when it discarded the answer."""
+    split = run.state.split
+    if split is None or any(s in run.state.steps for s in STAGE_3_STEPS):
+        return False
+    if not proposal_changed(run):
+        return False
+    # The files first, then the state: a kill in between finds the answer
+    # still saved and still stale, and discards it again.
+    _remove_split_files(run, split)
+    run.state.split = None
+    run.state.steps.pop("components", None)
+    run.save()
+    use_cases = artifacts.discard_if_inputs_changed(run, "use-cases")
+    text = (
+        "The proposal, the ticket or the interview changed since the components "
+        "were given: the components were discarded and are asked for again"
+        + (", with new use cases." if use_cases else ".")
+    )
+    run.progress("COMPONENTS", text)
+    print(text, flush=True)
+    return True
 
 
 def component_title(comp_dir: Path) -> str:

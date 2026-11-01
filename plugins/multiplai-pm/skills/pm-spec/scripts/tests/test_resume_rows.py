@@ -549,7 +549,9 @@ def test_a_proposal_edited_at_the_components_stop_is_split_again(
     assert (cdir / "plan.md").read_text().startswith("# Plan: Throttle the API")
     assert state(cdir)["split"]["single"] is True
     assert pushed(repo)[0] == "@ specs(throttle): components for review"
-    assert "specs/changes/throttle/components/api/plan.md" in pushed(repo)
+    tree = git(origin(repo), "ls-tree", "-r", "--name-only", BRANCH)
+    assert "specs/changes/throttle/plan.md" in tree.splitlines()
+    assert "components" not in tree
 
     # Approved this time: stage 3 runs from the new split.
     go(repo, [(RESUME, 3), ([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
@@ -610,9 +612,7 @@ def test_a_run_saved_before_the_proposal_hash_is_split_again_too(
     assert not (cdir / "components").exists()
 
 
-def test_a_proposal_edited_after_stage_3_started_keeps_the_split(
-    repo, model, tmp_path
-):
+def test_a_proposal_edited_after_stage_3_started_keeps_the_split(repo, model, tmp_path):
     two(model)
     go(repo, FLOW[:3])
     cdir = change_dir(repo)

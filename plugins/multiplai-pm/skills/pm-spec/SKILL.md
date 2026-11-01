@@ -90,6 +90,15 @@ after the third stop runs the consistency check and the handoff.
    it there pays the fixed cost twice.
 7. **Stop:** commit, push, `SPEC:REVIEW:components`, `SPEC:BRANCH:<branch>`,
    exit 3.
+   If a reviewer edits `proposal.md` (or `ticket.md`, `interview.md`,
+   `prd.md`) at this stop, the next `resume` does not go on to stage 3. It
+   deletes the components it wrote (each `plan.md` and component
+   `.change.yaml`, `components.md`, `children` in `.change.yaml`) and
+   `use-cases.md` unless someone edited it, asks for the components again
+   from the edited proposal, and stops at `SPEC:REVIEW:components` again.
+   The deleted files stay in the branch's history. An edit to `use-cases.md`
+   or to a plan alone keeps the components. Once stage 3 has started, an
+   edited proposal no longer changes the components.
 
 **Stage 3: the specs.**
 
@@ -293,7 +302,9 @@ skill, tell the user as below.
   `interview.md`) in `specs/changes/<name>/`. Reviewers comment and edit on
   the branch. When the user says it is approved, run `resume <name>`.
 - **`SPEC:REVIEW:components`.** Same, for `use-cases.md`, `components.md` and
-  each component's `plan.md`. Approved: `resume <name>`.
+  each component's `plan.md`. Approved: `resume <name>`. If the reviewers
+  changed the proposal instead, `resume <name>` too: it asks for the
+  components again and stops here again; show the user the new ones.
 - **`SPEC:TICKETS:<path>`.** Read `tickets.json` and show the user the
   tickets: each task's title, description and acceptance, under the change's
   ticket. Wait for their yes. Then create one ticket per task under the

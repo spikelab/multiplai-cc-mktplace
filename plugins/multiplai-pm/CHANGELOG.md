@@ -21,6 +21,11 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-01
+
+### Fixed
+- **pm-spec**: a proposal edited at the components review stop now gets new components. `resume` deletes the components pm-spec wrote (plans, `components.md`, `children`) and, unless someone edited it, `use-cases.md`, asks for the components again from the edited proposal, and stops for the components review again. Before, it went on to stage 3 with the old components, and the only way out was to edit `.pm-spec/state.json` by hand. An edit to the use cases or a plan alone still keeps the components.
+
 ## [0.15.1] - 2026-10-31
 
 ### Fixed

@@ -8,7 +8,9 @@ In order, each skipped when the run state or the files say it is done:
 4. stage 1: `proposal.md`, then the review stop (rows S1-S3): commit, push,
    `SPEC:REVIEW:proposal`, exit 3;
 5. stage 2: `use-cases.md`, the components and their plans, then the review
-   stop (rows S4, S5): `SPEC:REVIEW:components`, exit 3;
+   stop (rows S4, S5): `SPEC:REVIEW:components`, exit 3; until stage 3
+   starts, a proposal, ticket or interview edited since the components were
+   given discards them and runs stage 2 again (`epic.reopen_if_proposal_changed`);
 6. stage 3: the prototype, `tickets.json` and the ticket wait (row S6:
    `SPEC:TICKETS:<path>`, exit 3), then each component's `specs.md` (row S7),
    then the review stop (row S13): `SPEC:REVIEW:specs`, exit 3;
@@ -223,7 +225,8 @@ async def advance(
         if not stages.done(run, stages.PROPOSAL):
             await artifacts.generate_proposal(run)
         stages.review_stop(run, stages.PROPOSAL)
-        # Stage 2: the components.
+        # Stage 2: the components, asked again when the proposal changed.
+        epic.reopen_if_proposal_changed(run)
         if not stages.done(run, stages.COMPONENTS):
             await artifacts.generate_use_cases(run)
             await epic.run_components(run)
