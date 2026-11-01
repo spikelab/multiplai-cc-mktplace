@@ -143,7 +143,8 @@ The 409 messages, exactly:
   someone acknowledged (an acknowledgement holds the wait) and always `null`
   for stop 5.
 - `revision`: what an approval names. Stops 1-3: a hash of the stop's
-  documents as committed on the branch. Stop 4: buildme's plan revision.
+  documents as committed on the branch. Stop 4: buildme's plan revision
+  (for a change with components, the one its `plan-approval.md` names).
   `null` while not reached.
 - `docs`: paths relative to the change dir, in reading order. `approve: false`
   marks a document shown for reading only (`tasks.md` at stop 4). Read each

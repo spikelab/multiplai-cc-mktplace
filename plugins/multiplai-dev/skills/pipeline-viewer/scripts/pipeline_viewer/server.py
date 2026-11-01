@@ -332,7 +332,14 @@ def make_handler(viewer: Viewer):
         def _doc(self, q: dict) -> None:
             place = self._place(q.get("name"))
             rel = q.get("path") or ""
-            dirs = [place.read_dir()] + [c.change_dir(place.name) for c in place.copies]
+            # The plan of a change with components is read as buildme last
+            # pushed it, before the copy the other stops' documents come from.
+            plan_dir = status.change_plan_dir(place)
+            stop4 = {status.PLAN_DOC, status.OLD_PLAN_DOC, status.PLAN_REQUEST}
+            dirs = [plan_dir] if plan_dir is not None and rel in stop4 else []
+            dirs += [place.read_dir()] + [
+                c.change_dir(place.name) for c in place.copies
+            ]
             for d in dict.fromkeys(dirs):
                 target = _inside(d, rel)
                 if target.is_file():
