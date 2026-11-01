@@ -16,7 +16,7 @@ claims whose cited lines are at the commit. A page written from your own reading
 
 | Walkthrough section | Goes to |
 |---|---|
-| Overview / "What it is" | the question and the answer (layer 0) |
+| Overview / "What it is" | the headline and the answer (layer 0) |
 | Its flow picture and "How it works" stages | the picture and the stage cards (layer 1) |
 | Paths (`<name>-paths.json`) | pick one path as the worked example: one request, one command, one job, followed hop by hop |
 | The part that does the main job | a deeper section, "How it <does its job>" |

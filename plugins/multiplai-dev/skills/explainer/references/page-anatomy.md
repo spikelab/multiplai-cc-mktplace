@@ -9,11 +9,11 @@ add the deeper sections from the components below. Styles go in `<style id="page
 | Part | Markup | Holds |
 |---|---|---|
 | Header line | `.eyebrow` | subject · source or repo · "as of" date |
-| Question | `<h1>` (exactly one) | the question the page answers |
+| Headline | `<h1>` (exactly one) | a plain title naming what the page explains; not a question |
 | Answer | `p.lede` | one or two sentences that answer it |
 | Legend | `.legend` of `.chip` | the three or four status words the page uses |
 
-The `<title>` is a name of 2 to 4 words ("DataScrub Pipeline Map", "Release Pipeline"), not the question.
+The `<title>` is a name of 2 to 4 words ("DataScrub Pipeline Map", "Release Pipeline"), shorter than the headline.
 
 ## Layer 1 — the whole, then each stage
 
@@ -26,7 +26,7 @@ The `<title>` is a name of 2 to 4 words ("DataScrub Pipeline Map", "Release Pipe
 
 ## Layer 2 — deeper sections
 
-Each is a `<section>` with an `<h2>` that is a question. Pick what the reader needs:
+Each is a `<section>` with an `<h2>` that names its subject plainly, not as a question. Pick what the reader needs:
 
 | Component | Markup | Use for |
 |---|---|---|
@@ -45,7 +45,7 @@ Each is a `<section>` with an `<h2>` that is a question. Pick what the reader ne
 |---|---|
 | Fold-out | `<details class="more"><summary>…</summary><div class="body">…</div></details>` |
 | Citation | `<a class="cite" href="<link to the lines>" data-cite="<key>@<sha>:<path>:<start>-<end>" data-quote="<a few words from those lines>" title="<path>:<start>">1</a>` |
-| Glossary | the "Words used on this page" fold-out, a `<dl>` |
+| Glossary | the "Glossary" fold-out, a `<dl>` |
 | Sources | `footer`: what was read, at which commit or date; what could not be read |
 
 `href` of a citation points at the lines where the reader can open them: a GitHub blob URL at the sha

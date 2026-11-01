@@ -21,7 +21,7 @@ time, not derived from a tag.
 
 - **`explainer`**: builds an explainer page for a pull request, a process, a
   skill or pipeline, a concept, or a codebase, so every explainer looks and
-  reads the same way. The page opens with the question it answers and a
+  reads the same way. The page opens with a plain headline and a
   one-sentence answer, then one picture and one card per stage following a
   single worked example, then deeper sections, with detail in fold-outs. It is
   styled with your design system. For code, the facts come from

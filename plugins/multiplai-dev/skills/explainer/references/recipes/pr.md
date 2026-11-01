@@ -1,6 +1,6 @@
 # Recipe: a pull request
 
-The question is usually "What does PR N change, and why?". The reader is someone who has to review,
+The page says what PR N changes, and why. The reader is someone who has to review,
 approve, or build on it.
 
 ## Gather

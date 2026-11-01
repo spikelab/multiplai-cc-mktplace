@@ -1,7 +1,7 @@
 # Recipe: a concept or a plan
 
-An idea the user is working on, a design not built yet, a way of working. The question is "What is X
-and how would it work?".
+An idea the user is working on, a design not built yet, a way of working. The page says what X is
+and how it would work.
 
 ## Gather
 

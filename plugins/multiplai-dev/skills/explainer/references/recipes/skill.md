@@ -1,8 +1,8 @@
 # Recipe: a skill, a pipeline, or several used together
 
 A Claude Code skill, a CLI tool, or a chain of them, e.g. one skill writing the specs another builds from
-and a third reviews. The question is "What does X do?" or "How do X, Y and Z turn a request into
-shipped code?".
+and a third reviews. The page says what goes in, what
+comes out, and how each one hands on to the next.
 
 ## Gather
 

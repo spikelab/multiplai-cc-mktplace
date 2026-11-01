@@ -1,6 +1,6 @@
 ---
 name: explainer
-description: Builds an explainer page for a pull request, a process, a skill or pipeline, a concept or plan, or a codebase, so every explainer looks and reads the same way. The question the page answers comes first with a one-sentence answer, then one picture and one card per stage following a single worked example, then deeper sections, with detail in fold-outs. The page is styled with the user's design system. Code facts come from codebase-walkthrough's checked output. A script checks the page (words shown before a fold-out, colours, SVGs, outside resources, code citations at their commit) and draws its pictures to PNG so the session can look at them before the page is published as an Artifact or written locally.
+description: Builds an explainer page for a pull request, a process, a skill or pipeline, a concept or plan, or a codebase, so every explainer looks and reads the same way. A plain headline and a one-sentence answer come first, then one picture and one card per stage following a single worked example, then deeper sections, with detail in fold-outs. The page is styled with the user's design system. Code facts come from codebase-walkthrough's checked output. A script checks the page (words shown before a fold-out, colours, SVGs, outside resources, code citations at their commit) and draws its pictures to PNG so the session can look at them before the page is published as an Artifact or written locally.
 when_to_use: 'Triggers: explain this, make an explainer, explainer page, explain this PR, explain how X works, walk me through how X works, explain this process, explain this skill, /multiplai-dev:explainer'
 effort: medium
 ---
@@ -62,10 +62,10 @@ from your own reading. Tell the user which sources you read.
 Read `references/writing-guide.md`. Write `<out>/<name>-outline.md` and show it in the chat, in at most
 15 lines:
 
-- the question (the `<h1>`) and the one-sentence answer;
+- the headline (the `<h1>`, a plain title) and the one-sentence answer;
 - the worked example;
 - the stages, 3 to 7, each with its status word;
-- the deeper sections, each as a question;
+- the deeper sections, each with a plain title;
 - the legend's status words.
 
 Go on unless the user changes it. Changing the order here costs nothing; changing it on the page costs a

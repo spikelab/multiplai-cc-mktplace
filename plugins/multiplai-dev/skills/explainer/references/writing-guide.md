@@ -7,14 +7,13 @@ to look on the next.
 
 The reader decides how deep to go. Each layer must make sense without the layers below it.
 
-1. **The question and its answer.** The `<h1>` is the question the page answers, in the reader's words:
-   "How a guest's message becomes safe to analyse", "What happens when we tag a release", "What PR 463
-   changes in buildme". The sentence under it answers that question. A reader who stops here has the
-   answer.
+1. **The headline and the answer.** The `<h1>` names what the page explains, as a plain title, not a
+   question: "From tag to live", "The build pipeline", "PR #463: a cheaper refactor check". The sentence
+   under it says what happens or what changed. A reader who stops here has the answer.
 2. **One picture of the whole**, then **one card per stage**, in the order things happen. Three to seven
    stages. More than seven means some stages belong inside others.
-3. **Deeper sections**, each titled with the question it answers: "What happens inside one call", "What
-   it costs", "Where this week's PRs fit", "What's next". Only the ones this reader needs.
+3. **Deeper sections**, each with a plain title that names its subject: "Inside one switch", "Cost",
+   "Where this week's PRs fit", "What's next". No question marks. Only the sections this reader needs.
 4. **Fold-outs** for everything a reader looks up rather than reads: flags, paths, full commands,
    config tables, code snippets, citations, the glossary, the sources read.
 
@@ -46,7 +45,7 @@ became).
 These rules apply to every visible word, including SVG labels.
 
 - **Names.** Use a name only if the reader will meet it in the code, the docs, the UI or the command
-  line. Define each such name once, in the "Words used on this page" fold-out. Anything without a name
+  line. Define each such name once, in the "Glossary" fold-out. Anything without a name
   gets described by what it does, every time: "it checks only the text just written", not
   "diff-scoping".
 - **Verbs.** "It blocks the deploy", not "the blocking behaviour". Concrete subjects: "the script exits

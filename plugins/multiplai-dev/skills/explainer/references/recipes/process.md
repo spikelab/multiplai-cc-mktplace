@@ -1,7 +1,7 @@
 # Recipe: a process
 
 A deployment, a release, an on-call routine, an onboarding: something people and machines do in order.
-The question is "What happens when …" or "How do we …".
+The page says what happens, step by step, and who does each step.
 
 ## Gather
 
