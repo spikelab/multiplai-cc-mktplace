@@ -15,6 +15,23 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.149.0] - 2026-11-01
+
+### Added
+
+- **`explainer`**: builds an explainer page for a pull request, a process, a
+  skill or pipeline, a concept, or a codebase, so every explainer looks and
+  reads the same way. The page opens with the question it answers and a
+  one-sentence answer, then one picture and one card per stage following a
+  single worked example, then deeper sections, with detail in fold-outs. It is
+  styled with your design system. For code, the facts come from
+  codebase-walkthrough's checked Markdown. `explainer_check check` fails a
+  page that shows more than 2,000 words before a fold-out is opened, types a
+  colour instead of using a token, loads from a host it may not, holds an
+  unsafe or unlabelled SVG, or cites code lines that are not at their commit;
+  `render` draws its pictures to PNG so the session looks at them before you
+  do. Publish it as an Artifact or keep it as a local file.
+
 ## [0.148.5] - 2026-10-31
 
 ### Fixed

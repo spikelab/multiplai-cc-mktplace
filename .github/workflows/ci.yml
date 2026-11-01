@@ -330,6 +330,23 @@ jobs:
           uv run --project ../../../.. --package design-system-scripts \
             --extra dev python -m pytest tests/ -q -n auto
 
+  explainer-tests:
+    name: explainer tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # Offline; no model call. The citation tests build a fixture git repo;
+      # the render test draws PNGs with resvg-py's bundled wheel.
+      - name: Run tests
+        working-directory: plugins/multiplai-dev/skills/explainer/scripts
+        run: |
+          uv run --project ../../../../.. --package explainer-check \
+            --extra dev python -m pytest tests/ -q -n auto
+
   review-pipeline-tests:
     name: review pipeline tests
     runs-on: ubuntu-latest
