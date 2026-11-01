@@ -46,6 +46,13 @@ leaves a critical or major finding unfixed prints it under a loud banner and
 is for specs no review stop showed anyone: `--auto`, an adopted change, a run
 from before the staged flow.
 
+The component check (`component_check.py`) runs before the agent, one agent
+per component: its findings, tagged with their component, join the list the
+verdict reads and block like the agent's. A listed one gets its status from
+its component's next check, not from the agent. In `recheck` it runs on the
+components the rewrite was given and those that depend on them, and a new
+critical or major finding from it blocks, as the rewrite caused it.
+
 A table in a specs file whose header row is a table's header row in
 `ticket.md` must match that table cell for cell, whitespace aside; a mismatch
 is a critical `format` finding found in code (`table_findings`).
