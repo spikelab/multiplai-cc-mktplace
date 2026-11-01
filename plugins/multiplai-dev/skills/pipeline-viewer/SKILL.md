@@ -22,7 +22,7 @@ The five stops:
 | 1 | pm-spec writes `proposal.md` | pm | reminder, then you decide |
 | 2 | pm-spec writes use cases and components | pm | reminder, then you decide |
 | 3 | pm-spec writes the specs | pm and engineer | reminder, then you decide |
-| 4 | buildme writes `implementation-plan.md` (every build without `--auto`; a change with components has one plan, on its feature branch, which this page does not show yet) | engineer | reminder, then you decide |
+| 4 | buildme writes `implementation-plan.md` (every build without `--auto`; a change with components has one plan for the whole change, on its feature branch) | engineer | reminder, then you decide |
 | 5 | buildme opens the PR | engineer, on the PR | nothing |
 
 ## What this skill does on the machine
@@ -194,9 +194,9 @@ pv reply --repo /abs/path/to/repo --to <id> --file /abs/path/answer.md [--commit
 | `comment` | Already committed to `review/stop-<n>.md`. Reply only if it asks something. |
 | `ack` | Nothing to do; reply "noted" only if you want the page to show it. |
 | `approve`, stops 1-3 | When the stop is `approved` (every role approved; check `/api/change` or the page), run `/multiplai-pm:pm-spec resume <name>`. Then `notify` at its next stop. |
-| `approve`, stop 4 | Re-run the same buildme command (or the epic): the approval commit is on the build's branch, and buildme's gate finds it. |
+| `approve`, stop 4 | Re-run the same buildme command (or the epic): the approval commit is on the build's branch (the feature branch, for a change with components), and buildme's gate finds it. |
 | `rework`, stops 1-3 | The request is in `spec-issues.md`. Run `/multiplai-pm:pm-spec revise <name>`. |
-| `rework`, stop 4 | The request is in `review/stop-4.md`. Edit `implementation-plan.md` (or `design.md` in an older build) as asked, commit, push, reply with the commit, then re-run the build: the new plan revision asks for approval again. |
+| `rework`, stop 4 | The request is in `review/stop-4.md`. Edit `implementation-plan.md` (or `design.md` in an older build) as asked, commit, push, reply with the commit, then re-run the build: the new plan revision asks for approval again. For a change with components the plan is at the change, on the feature branch, and the build to re-run is `/multiplai-dev:buildme <change>`. |
 | `timeout` | Nobody acknowledged the stop in time. Decide its open questions yourself, write the decisions into the stop's documents if they change them (commit, push), then `pv record decided --repo … --change <name> --stop <n> --reason "no reply in <m> minutes"`, then resume as for `approve`. |
 
 After a final answer to an `ask`, `reply` also prints one line per answer

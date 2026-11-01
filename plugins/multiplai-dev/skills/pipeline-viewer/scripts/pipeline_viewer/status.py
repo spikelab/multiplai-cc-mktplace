@@ -8,13 +8,19 @@ Where each stop's state comes from (all for the stop's current `revision`):
   `components`, `specs` recorded `passed` (pm-spec records a review stop once
   pushed). Without a run state (pm-spec ran elsewhere), the stop's documents
   being committed. Stop 4: buildme's `plan-approval.md` in the build's copy,
-  or a saved `plan_approval`. Stop 5: the build has a `pr_url`.
+  or a saved `plan_approval`. For a change with components (no build copy
+  at the change, a `components/` dir), stop 4 is the change's one plan:
+  `plan-approval.md` at the change in `change_plan_dir`, and its revision
+  is the one that file names (`Plan revision:`). Stop 5: the build has a
+  `pr_url`.
 - **Passed without a commit here.** Stops 1-3: a later pm-spec step or the
   handoff exists. Stop 4: `plan_approval` for the current plan revision, or
-  the build reached TDD (the gate is off). Such a stop is `approved` with
-  `approved_by: []`.
+  the build reached TDD (`--auto`). For a change with components: the plan
+  is there with no `plan-approval.md` (written under `--auto`). Such a stop
+  is `approved` with `approved_by: []`.
 - **Decisions.** The trailers of the change's `review(<name>): …` commits on
-  the write checkout's HEAD (`record.py` writes them; buildme's
+  the write checkout's HEAD (and on buildme's feature worktree's HEAD, where
+  `--approve-plan` commits the approval of a change's plan) (`record.py` writes them; buildme's
   `--approve-plan` too): `Approved-by`, `Decided-by`, `Rework-requested-by`,
   `Acknowledged-by`, `Commented-by`, each with `Stop` and `Revision`.
 """
@@ -51,6 +57,7 @@ from .places import BUILD_STATE, BUILD_STATE_DONE, CHANGES, PM_SPEC_DIR, Place
 PLAN_DOC = "implementation-plan.md"
 OLD_PLAN_DOC = "design.md"
 PLAN_REQUEST = "plan-approval.md"
+PLAN_REVISION_LINE = "Plan revision:"
 TAIL_LINES = 20
 # Build phases at or past TDD: stop 4 is behind the build.
 PAST_PLAN_PHASES = {"tdd_build", "docs_update", "respec", "publish", "complete"}
@@ -221,6 +228,32 @@ def plan_doc(change_dir: Path) -> str:
     return PLAN_DOC
 
 
+def change_plan_dir(place: Place) -> Path | None:
+    """The change dir holding the plan of a change with components: buildme's
+    feature worktree's copy (what buildme last pushed), else the copy
+    documents are read from. None for a single build, or a change with no
+    `components/`."""
+    if place.build() is not None:
+        return None
+    feature = place.feature()
+    d = feature.change_dir(place.name) if feature is not None else place.read_dir()
+    return d if (d / "components").is_dir() else None
+
+
+def plan_request_revision(change_dir: Path) -> str | None:
+    """The revision `plan-approval.md` asks to approve (its `Plan revision:`
+    line, as buildme's `epic.change_plan.request_text` writes it)."""
+    try:
+        text = (change_dir / PLAN_REQUEST).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith(PLAN_REVISION_LINE):
+            rev = line[len(PLAN_REVISION_LINE) :].strip().strip("`").strip()
+            return rev or None
+    return None
+
+
 def stop_docs(n: int, change_dir: Path) -> list[DocRef]:
     def ref(path: str, approve: bool = True) -> DocRef:
         return DocRef(path=path, approve=approve, exists=(change_dir / path).is_file())
@@ -242,9 +275,17 @@ def stop_docs(n: int, change_dir: Path) -> list[DocRef]:
         names += _files(change_dir, "prototype/**/*")
         return [ref(p) for p in names or ["specs.md"]]
     if n == 4:
+        # The plan of a change with components has no tasks.md beside it:
+        # each component writes its own once the plan is approved.
+        second = (
+            "components.md"
+            if not (change_dir / "tasks.md").is_file()
+            and (change_dir / "components.md").is_file()
+            else "tasks.md"
+        )
         return [
             ref(plan_doc(change_dir)),
-            ref("tasks.md", approve=False),
+            ref(second, approve=False),
             ref(PLAN_REQUEST, approve=False),
         ]
     return []
@@ -449,20 +490,23 @@ def _record(c: gitio.Commit) -> Record | None:
 
 
 def records(place: Place) -> list[Record]:
-    if place.write is None:
-        return []
-    out = []
-    for c in gitio.review_commits(place.write.checkout, place.name):
-        r = _record(c)
-        if r is not None:
-            out.append(r)
-    return out
+    checkouts = [c.checkout for c in (place.write, place.feature()) if c is not None]
+    out: dict[str, Record] = {}
+    for cwd in dict.fromkeys(checkouts):
+        for c in gitio.review_commits(cwd, place.name):
+            r = _record(c)
+            if r is not None:
+                out.setdefault(r.sha, r)
+    return list(out.values())
 
 
 def stop_revision(
     n: int, place: Place, docs: list[DocRef], build: dict | None
 ) -> str | None:
     if n == 4:
+        plan_dir = change_plan_dir(place)
+        if plan_dir is not None:
+            return plan_request_revision(plan_dir)
         sg = (build or {}).get("spec_gen") or {}
         return sg.get("revision") or None
     if n == 5 or place.write is None:
@@ -507,6 +551,11 @@ def _reached_and_past(
         )
         return reached or past, past
     if n == 4:
+        plan_dir = change_plan_dir(place)
+        if plan_dir is not None:
+            request = (plan_dir / PLAN_REQUEST).is_file()
+            plan = (plan_dir / plan_doc(plan_dir)).is_file()
+            return request or plan, plan and not request
         if build is None:
             return False, False
         approval = build.get("plan_approval")
@@ -534,9 +583,11 @@ def _waiting_since(
             )
         )
     b = place.build()
-    if n == 4 and b is not None:
+    plan_dir = change_plan_dir(place) if n == 4 else None
+    if n == 4 and (b is not None or plan_dir is not None):
+        d = plan_dir if plan_dir is not None else b.change_dir(place.name)
         try:
-            return iso_utc((b.change_dir(place.name) / PLAN_REQUEST).stat().st_mtime)
+            return iso_utc((d / PLAN_REQUEST).stat().st_mtime)
         except OSError:
             pass
     return iso_utc((build or {}).get("updated_at"))
@@ -566,6 +617,8 @@ def stop_status(
     change_dir = place.read_dir()
     if n == 4 and place.build() is not None:
         change_dir = place.build().change_dir(place.name)
+    elif n == 4 and (plan_dir := change_plan_dir(place)) is not None:
+        change_dir = plan_dir
     docs = stop_docs(n, change_dir)
     revision = stop_revision(n, place, docs, build)
     reached, past = _reached_and_past(n, place, pm, build, change_dir, revision)

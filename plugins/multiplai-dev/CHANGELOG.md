@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.151.0] - 2026-11-01
+
+### Added
+
+- **pipeline-viewer**: shows stop 4 for a change with components, whose one
+  implementation plan buildme writes on the feature branch. The page shows
+  the plan, `components.md` and `plan-approval.md`. An engineer can approve
+  it or ask for rework there; the decision is committed on the feature
+  branch and pushed, naming the plan revision `plan-approval.md` asks for.
+  An approval made with buildme's `--approve-plan` shows as well.
+
 ## [0.150.0] - 2026-11-01
 
 ### Changed

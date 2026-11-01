@@ -152,6 +152,52 @@ def _build_change(
     return wt
 
 
+CHANGE_PLAN = (
+    "# Implementation plan: billing\n\n## Component: api\n\nAn invoices endpoint.\n"
+)
+
+
+def change_plan_change(fx: dict, *, request: bool = True) -> Path:
+    """Change `billing`, with components, after pm-spec's handoff: pm-spec's
+    worktree as pm-spec left it, then buildme's change plan pushed (with
+    `plan-approval.md` unless *request* is false, as under --auto) and
+    buildme's feature worktree at that commit. Not in `build`: only the
+    tests of the change plan's stop 4 add it. Returns the feature worktree."""
+    repo, wt_root = fx["repo"], fx["wt"]
+    pm = _pm_spec_change(repo, wt_root, "billing", 3)
+    branch = "TCK-3-billing"
+    # pm-spec's handoff: the specs are ready, so buildme may build them.
+    write(
+        pm / "specs" / "changes" / "billing" / ".change.yaml",
+        f"branch: {branch}\nspec_status: ready\n",
+    )
+    git(pm, "commit", "-q", "-am", "specs(billing): ready")
+    git(pm, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")
+    d = repo / "specs" / "changes" / "billing"
+    git(repo, "checkout", "-q", branch)
+    git(repo, "pull", "-q", "--ff-only")
+    write(d / "implementation-plan.md", CHANGE_PLAN)
+    if request:
+        write(
+            d / "plan-approval.md",
+            "# Approve the implementation plan: billing\n\n"
+            "Plan revision: `changerev1`\n",
+        )
+    git(repo, "add", "-A")
+    git(
+        repo,
+        "commit",
+        "-q",
+        "-m",
+        "docs(specs): billing — the change's implementation plan",
+    )
+    git(repo, "push", "-q", "origin", branch)
+    git(repo, "checkout", "-q", "main")
+    wt = wt_root / f"buildme-feature-{branch}"
+    git(repo, "worktree", "add", "-q", "--detach", str(wt), f"origin/{branch}")
+    return wt
+
+
 def build(root: Path) -> dict:
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
