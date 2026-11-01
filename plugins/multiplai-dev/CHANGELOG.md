@@ -24,6 +24,10 @@ time, not derived from a tag.
   every character that is not a letter, digit or space"). Its acceptance test
   and reference solution kept only ASCII letters, so a build that followed the
   requirement was scored as a failure buildme claimed as a success.
+- **buildme**: every notes-forward benchmark fixture's starting repo now has a
+  `.gitignore` for `__pycache__/` and `.pytest_cache/`. Without it, a build
+  committed Python bytecode, and a later fix stopped on the test-integrity
+  gate or a commit check over `.pyc` files: 6 of 30 runs in the first sweep.
 
 ## [0.151.0] - 2026-11-01
 
