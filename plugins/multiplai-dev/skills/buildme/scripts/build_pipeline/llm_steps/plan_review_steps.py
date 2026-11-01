@@ -19,7 +19,13 @@ from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
 
-from ..change_manager import plan_path, requirement_sources, spec_issue_ref
+from .. import block_inputs
+from ..change_manager import (
+    plan_path,
+    reads_change_plan,
+    requirement_sources,
+    spec_issue_ref,
+)
 from ..models import PlanEdits, PlanReviewFinding, PlanReviewResult
 from ..prompts.plan_review import (
     MAX_PLAN_FINDINGS,
@@ -29,7 +35,7 @@ from ..prompts.plan_review import (
     plan_section,
     prior_findings_section,
 )
-from ..prompts.spec_generation import PLAN_EDIT_PROMPT
+from ..prompts.spec_generation import CHANGE_PLAN_EDIT_RULE, PLAN_EDIT_PROMPT
 from ..sdk import agent_call_structured
 from .spec_steps import dependency_specs_section
 
@@ -523,6 +529,7 @@ async def run_plan_edit(change_dir: Path, config, findings: list[dict]) -> PlanE
         ),
         use_cases_content=_read(root / "use-cases.md", NO_USE_CASES),
         specs_content=specs or "(no specs)",
+        plan_rule=CHANGE_PLAN_EDIT_RULE if reads_change_plan(change_dir) else "",
     )
     log.info("Running plan edit on %s", change_dir.name)
     return await agent_call_structured(
@@ -860,7 +867,9 @@ def _scan_findings(change_dir: Path) -> list[PlanReviewFinding]:
             claim=f["description"],
             suggestion=f["suggestion"],
         )
-        for f in scan_placeholders(tasks.read_text() if tasks.exists() else "")
+        for f in scan_placeholders(
+            block_inputs.strip(tasks.read_text()) if tasks.exists() else ""
+        )
     ]
     return placeholders + [
         PlanReviewFinding(

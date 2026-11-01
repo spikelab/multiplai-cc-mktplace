@@ -1263,13 +1263,6 @@ class BuildConfig:
     # `component_review` is on.
     block_gate_severities: tuple[str, ...] = ("critical", "major")
 
-    # Stop 4: an engineer approves the implementation plan before TDD starts
-    # (`review.plan_approval`). The build stops after the plan check and the
-    # size gate until the build's branch holds an approval commit for the
-    # current plan revision (`orchestrator._plan_approval_gate`). Off by
-    # default, so a build without the key runs as before.
-    plan_approval: bool = False
-
     # Per-build ceilings from `budget:` in specs/config.yaml. None = unlimited
     # (the pre-budget behavior).
     budget_max_tokens: int | None = None
@@ -1742,14 +1735,12 @@ class BuildConfig:
         self._load_epic(_cfg_mapping(data.get("epic"), "epic"))
 
         review_cfg = _cfg_mapping(data.get("review"), "review")
-        approval = review_cfg.get("plan_approval", False)
-        if not isinstance(approval, bool):
+        if "plan_approval" in review_cfg:
             log.warning(
-                "Invalid review.plan_approval value %r in config.yaml — want true | false; using false",
-                approval,
+                "review.plan_approval in config.yaml is no longer read: every build "
+                "waits for an engineer to approve its implementation plan unless "
+                "it runs with --auto"
             )
-            approval = False
-        self.plan_approval = approval
 
         specs: dict[str, str] = {}
         for key, spec in _cfg_mapping(data.get("models"), "models").items():

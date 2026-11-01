@@ -164,6 +164,9 @@ def pytest_configure(config):
         "no_handoff: the build sees the change dir as the test left it; "
         "pm_spec_handoff does not mark its specs ready",
     )
+    config.addinivalue_line(
+        "markers", "plan_gate: the test meets stop 4's real approval gate"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -222,3 +225,17 @@ def pm_spec_handoff(monkeypatch, request):
         return setup(config, state)
 
     monkeypatch.setattr(orchestrator, "_setup_worktree", with_ticket)
+
+
+@pytest.fixture(autouse=True)
+def plan_already_approved(request, monkeypatch):
+    """Stop 4 waits for an engineer's approval on every build without --auto.
+    It used to be off unless `review.plan_approval` turned it on, and the
+    tests written then build past it. They still do: the gate finds an
+    approval. A test about the gate marks itself `plan_gate` and meets the
+    real one."""
+    if request.node.get_closest_marker("plan_gate"):
+        return
+    from build_pipeline import orchestrator
+
+    monkeypatch.setattr(orchestrator, "_plan_approval_gate", lambda *a, **k: None)

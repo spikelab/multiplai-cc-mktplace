@@ -162,6 +162,87 @@ async def generate_artifact(
     return result
 
 
+# Added to the design prompt's instructions when the plan is a change's, for
+# all of its components (`generate_change_plan`).
+CHANGE_PLAN_RULE = """\
+This is the plan for the whole change. Every component in components.md builds
+from it, and no component writes a plan of its own. Give each component a
+`## Component: <id>` section that says what it builds and which of its
+requirements each part delivers. State each contract between components
+(names, signatures, formats) once, in the section of the component that
+provides it."""
+
+
+def _components_text(change_dir: Path) -> tuple[str, str, list[str]]:
+    """What a change's plan is written from, beside its proposal: components.md
+    and each component's plan.md; each component's requirements, one section
+    per capability, `### <id>: <capability>`; and every capability name."""
+    from multiplai_core.specs import component_dirs
+
+    plans = [_read_file(change_dir / "components.md", "(no components.md)")]
+    specs: list[str] = []
+    capabilities: list[str] = []
+    for d in component_dirs(change_dir):
+        plans.append(f"### Component {d.name}\n{_plan_at(d)}")
+        for cap, text in requirement_texts(d).items():
+            specs.append(f"### {d.name}: {cap}\n{text}")
+            capabilities.append(cap)
+    return "\n\n".join(plans), "\n\n".join(specs), sorted(set(capabilities))
+
+
+def _read_file(path: Path, missing: str) -> str:
+    return path.read_text() if path.is_file() else missing
+
+
+async def generate_change_plan(
+    change_dir: Path,
+    config,
+    *,
+    codebase_analysis: str = "",
+    research: str = "",
+    reference_docs: str = "",
+) -> str:
+    """The implementation plan of a change of several components, for all of
+    them (`epic.change_plan`): the design prompt, given the change's proposal,
+    components.md and every component's plan.md and specs.md, written by the
+    read-only writer `generate_artifact` uses, in *config*'s project dir.
+
+    Raises LLMCallError as `generate_artifact` does."""
+    from ..change_manager import ChangeManager
+
+    change_dir = Path(change_dir)
+    context = ChangeManager(config.specs_dir).artifact_context(change_dir, "design")
+    plans, specs, capabilities = _components_text(change_dir)
+    prompt = DESIGN_PROMPT.format(
+        project_context=context.get("context", ""),
+        proposal_content=_read_file(change_dir / "proposal.md", "(not available)"),
+        plan_content=plans,
+        specs_content=specs or "(no specs yet)",
+        spec_ref="components/<id>/specs.md#<capability>",
+        codebase_analysis=codebase_analysis or "(new project)",
+        research=research or "(no research conducted)",
+        reference_docs=reference_docs or "(none available)",
+        audit_findings="(none — first pass)",
+        instruction=f"{context.get('instruction', '')}\n\n{CHANGE_PLAN_RULE}".strip(),
+        template=context.get("template", ""),
+    ) + _registry_section(config, context, capabilities, REGISTRY_PLAN_RULE)
+    log.info("Generating the change's implementation plan: %s", change_dir.name)
+    agent = await agent_call(
+        WRITER_INSTRUCTIONS + prompt,
+        allowed_tools=AUDITOR_TOOLS,
+        model=config.model_for("spec_artifact"),
+        effort=config.effort_for("spec_artifact"),
+        max_turns=WRITER_MAX_TURNS,
+        cwd=str(config.project_dir),
+        budget_label="spec:design",
+    )
+    if not agent.success:
+        raise LLMCallError(f"design writer failed: {agent.error or agent.output}")
+    result = _from_first_heading(agent.output or "", "design")
+    log.info("Change plan generated (%d chars)", len(result))
+    return result
+
+
 def _from_first_heading(text: str, artifact_id: str) -> str:
     """The writer's document: its text from the first line starting with `#`.
 

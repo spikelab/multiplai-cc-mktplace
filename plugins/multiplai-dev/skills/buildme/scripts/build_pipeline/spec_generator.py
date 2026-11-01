@@ -35,7 +35,7 @@ from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
 
-from . import budget
+from . import block_inputs, budget
 from .change_manager import (
     ARTIFACT_DAG,
     OLD_PLAN_FILE,
@@ -43,6 +43,7 @@ from .change_manager import (
     PLAN_HASH_KEY,
     ChangeManager,
     plan_path,
+    reads_change_plan,
     requirement_texts,
 )
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
@@ -253,6 +254,14 @@ async def _generate_single_artifact(
     state: BuildState,
 ) -> None:
     """Generate a single artifact: design, unknowns, tasks or rubric."""
+    if artifact_id == "design" and reads_change_plan(change_dir):
+        # The change's build writes that plan, and an engineer approves it,
+        # before any component builds (`epic.change_plan`).
+        raise RuntimeError(
+            f"{config.change_name} builds from its change's implementation plan, "
+            f"{plan_path(change_dir)}, which is not there. Run /buildme "
+            f"{change_root(change_dir).name} to write it and have it approved"
+        )
     context = cm.artifact_context(change_dir, artifact_id)
 
     # Thread the explainers into the task breakdown: the edge cases are only
@@ -893,7 +902,7 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
 
     if not tasks_path.exists():
         return []
-    bodies = _block_bodies(tasks_path.read_text())
+    bodies = _block_bodies(block_inputs.strip(tasks_path.read_text()))
     findings = []
     for block in parse_blocks(tasks_path):
         if block.produces:
@@ -1476,7 +1485,7 @@ PLANNING_KEY = "planning"
 
 # Top-level config.yaml sections no planning step reads: how the TDD loop runs
 # its tests, how an epic runs its children, the git switches, `review:`
-# (`review.plan_approval`, stop 4), and the settings of the steps after
+# (whose `plan_approval` key is no longer read), and the settings of the steps after
 # planning: the fixer of PR comments (`findings:`), the per-block code review
 # (`code_review:`; its `model` is also the planning check's fallback model,
 # which picks who checks the plan, not what the plan says) and the test
@@ -1484,9 +1493,7 @@ PLANNING_KEY = "planning"
 # `stacks` sets the stack that picks the reference docs the design and tasks
 # prompts inline (`BuildConfig.reference_docs_text`). They are cut out of the plan's hash and
 # stored nowhere, so editing one mid-build changes no plan revision and marks
-# nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md):
-# turning stop 4 on for a planned build asks for an approval of that plan
-# instead of writing a new one.
+# nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md).
 UNPLANNED_SECTIONS = (
     "tdd",
     "epic",
@@ -1602,7 +1609,7 @@ def _plan_hashes(config) -> dict[str, str]:
         }
     )
     hashes = {
-        name: hashlib.sha256(p.read_bytes()).hexdigest()
+        name: hashlib.sha256(_planned_bytes(name, p)).hexdigest()
         for name, p in files.items()
         if p.is_file()
     }
@@ -1612,6 +1619,17 @@ def _plan_hashes(config) -> dict[str, str]:
     ).hexdigest()
     hashes["granularity"] = hashlib.sha256(config.task_granularity.encode()).hexdigest()
     return hashes
+
+
+def _planned_bytes(name: str, path: Path) -> bytes:
+    """What *path* hashes as: its bytes, but tasks.md without the input lists
+    buildme writes into it after the plan check (`block_inputs`), so writing
+    them changes no revision."""
+    data = path.read_bytes()
+    if name != "tasks.md" or block_inputs.START.encode() not in data:
+        return data
+    text = data.decode("utf-8", "surrogateescape")
+    return block_inputs.strip(text).encode("utf-8", "surrogateescape")
 
 
 def _revision(hashes: dict[str, str]) -> str:
@@ -1700,6 +1718,11 @@ def reconcile_plan(
         config.change_dir, "requirements/*.md"
     ):
         stale.update({"tasks", "rubric"})
+    if reads_change_plan(config.change_dir):
+        # The change's plan is this component's input, never written here: what
+        # would make it stale makes the component's own documents stale, which
+        # every rule above that names "design" marks too.
+        stale.discard("design")
     stale -= (regenerated or set()) | recovered
     sg.stale_artifacts = sorted(stale)
     revision = _revision(current)
@@ -1769,6 +1792,12 @@ def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
     texts: dict[str, str] = {}
     originals: dict[str, str] = {}
     for index, edit in enumerate(edits, 1):
+        if edit.file == PLAN_FILE and reads_change_plan(staged_dir):
+            _reject_edits(
+                f"Plan edit {index} changes the change's approved implementation plan, "
+                f"{plan_path(staged_dir).name}; a component edits only tasks.md. "
+                "Edit the change's plan by hand and run the change's build again"
+            )
         if edit.file not in texts:
             path = (
                 plan_path(staged_dir)
@@ -1851,7 +1880,7 @@ async def rewrite_plan(
         # A component's proposal and use cases are its change's.
         root = change_root(config.change_dir)
         if root != config.change_dir:
-            for name in ("proposal.md", "use-cases.md"):
+            for name in ("proposal.md", "use-cases.md", PLAN_FILE, OLD_PLAN_FILE):
                 if (root / name).is_file():
                     shutil.copy2(root / name, change_root(staged.change_dir) / name)
         registry = config.specs_dir / "registry"
@@ -1899,7 +1928,7 @@ async def rewrite_plan(
                     }
                 ],
             )
-        if found := scan_placeholders(tasks_path.read_text()):
+        if found := scan_placeholders(block_inputs.strip(tasks_path.read_text())):
             reject("Rewritten tasks still contain placeholder findings", found)
         if found := scan_no_behaviour_blocks(tasks_path):
             reject("Rewritten tasks still contain blocks with no behavior", found)

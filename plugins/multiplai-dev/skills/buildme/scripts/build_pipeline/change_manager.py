@@ -181,7 +181,12 @@ _UNUSED_REPORTED: set[Path] = set()
 def plan_path(change_dir: Path) -> Path:
     """The change's implementation plan: `PLAN_FILE`, or `OLD_PLAN_FILE` when
     only that is there. With both, `PLAN_FILE` is used and the old file is
-    logged once as unused. buildme never renames or removes the old file."""
+    logged once as unused. buildme never renames or removes the old file.
+
+    A component that reads its change's plan (`reads_change_plan`) gets the
+    change's plan file instead, whether it is written yet or not."""
+    if reads_change_plan(change_dir):
+        return plan_path(_change_of(Path(change_dir)))
     new = Path(change_dir) / PLAN_FILE
     old = Path(change_dir) / OLD_PLAN_FILE
     if new.is_file():
@@ -190,6 +195,36 @@ def plan_path(change_dir: Path) -> Path:
             log.warning("%s is unused: the plan is %s", old, new)
         return new
     return old if old.is_file() else new
+
+
+def _change_of(change_dir: Path) -> Path:
+    """The change a component dir (`.../<change>/components/<id>`) belongs
+    to, in `changes/` or in `archive/`; any other dir is its own change."""
+    if change_dir.parent.name == "components":
+        return change_dir.parent.parent
+    return change_dir
+
+
+def _has_own_plan(change_dir: Path) -> bool:
+    return (change_dir / PLAN_FILE).is_file() or (change_dir / OLD_PLAN_FILE).is_file()
+
+
+def reads_change_plan(change_dir: Path) -> bool:
+    """Whether *change_dir* is a component that reads its change's plan
+    instead of writing one: the change's build writes one plan for every
+    component, and an engineer approves it before any component builds.
+
+    True for a component with no plan of its own when its change has a plan,
+    or when no component of the change has one. A change whose components
+    were each planned on their own (one holds its plan, the change none)
+    keeps building that way: each component writes and reads its own."""
+    change_dir = Path(change_dir)
+    root = _change_of(change_dir)
+    if root == change_dir or _has_own_plan(change_dir):
+        return False
+    if _has_own_plan(root):
+        return True
+    return not any(_has_own_plan(d) for d in component_dirs(root))
 
 
 # buildme's planning artifacts. Insertion order is load-bearing:
@@ -457,7 +492,8 @@ class ChangeManager:
                     str(m.relative_to(change_dir)) for m in matches
                 )
             elif dep_id == "design":
-                dep_paths[dep_id] = plan_path(change_dir).name
+                # A component's plan may be its change's (`reads_change_plan`).
+                dep_paths[dep_id] = os.path.relpath(plan_path(change_dir), change_dir)
             else:
                 dep_paths[dep_id] = dep_generates
 

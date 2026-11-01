@@ -169,6 +169,14 @@ Output ONLY the markdown content. No commentary.
 """
 
 
+# PLAN_EDIT_PROMPT's `{plan_rule}` for a component that reads its change's
+# approved plan (`change_manager.reads_change_plan`); "" for every other build.
+CHANGE_PLAN_EDIT_RULE = """\
+- implementation-plan.md is the change's plan, which an engineer approved
+  for every component. Edit only tasks.md. A finding that needs the plan
+  changed gets no edit; put its id in `not_fixed`.
+"""
+
 PLAN_EDIT_PROMPT = """\
 You are fixing findings in a change's plan: its implementation-plan.md and tasks.md. Fix
 them by editing the documents in place. Do not rewrite them.
@@ -208,7 +216,7 @@ them by editing the documents in place. Do not rewrite them.
   `Satisfies:` lines, and every block adds behaviour its tests can show.
 - When you cannot fix a finding by editing these documents, make no edit for
   it and put its finding id in `not_fixed`.
-
+{plan_rule}
 Return one JSON object:
 
 ```json

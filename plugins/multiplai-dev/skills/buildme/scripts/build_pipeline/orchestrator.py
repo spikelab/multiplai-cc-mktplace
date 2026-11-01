@@ -349,6 +349,17 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                     state.advance_to(phase, state_path)
                 print(f"PHASE:{phase.name}:COMPLETE", flush=True)
                 board.record(config, state, phase, progress=progress)
+            # What each block's agents get besides its text, listed in its
+            # section of tasks.md for whoever reads the plan; no revision moves.
+            from . import block_inputs
+            from .spec_generator import _commit_change_dir
+
+            if block_inputs.write_inputs(config):
+                _commit_change_dir(
+                    config,
+                    config.change_dir,
+                    f"docs(specs): {config.change_name} — list each block's inputs",
+                )
 
         # Reassess size after every plan rewrite. A plan that should be split
         # stops here (exit 3) with split-proposal.md, until --accept-size.
@@ -363,9 +374,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             if rc is not None:
                 return rc
 
-        # Stop 4 (`review.plan_approval`): an engineer approves the plan before
-        # any code is written. Exit 3 with plan-approval.md until the build's
-        # branch holds an approval commit for this plan revision.
+        # Stop 4: an engineer approves the plan before any code is written,
+        # unless the build runs with --auto. Exit 3 with plan-approval.md until
+        # the build's branch holds an approval commit for this plan revision.
         if state.phase != BuildPhase.PUBLISH:
             rc = _plan_approval_gate(
                 config,
@@ -2160,7 +2171,7 @@ def _plan_approval_gate(
     approve: bool,
 ) -> int | None:
     """Stop 4: wait for an engineer's approval of the implementation plan,
-    after the size gate, under `review.plan_approval`.
+    after the size gate. A build with `--auto` (every epic child's) skips it.
 
     The approval is a commit on the build's branch with `Stop: 4`,
     `Revision: <state.spec_gen.revision>` and `Approved-by:` or `Decided-by:`
@@ -2172,9 +2183,9 @@ def _plan_approval_gate(
     """
     from .intake import MARKER_PLAN_WAITING, WAITING_EXIT
 
-    if not config.plan_approval:
+    if config.auto:
         if approve:
-            log.info("SKIP --approve-plan reason=review.plan_approval is off")
+            log.info("SKIP --approve-plan reason=--auto")
         return None
     log.info("START phase=PLAN_APPROVAL")
     revision = state.spec_gen.revision if state.spec_gen else ""

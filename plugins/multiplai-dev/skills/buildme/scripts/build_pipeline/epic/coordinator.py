@@ -105,7 +105,7 @@ from build_pipeline.budget import BudgetExceededError
 from .. import budget, feature_branch, git_ops, intake, readiness, stop_record
 from ..config import git_toggles
 from ..models import AgentResult
-from . import CHILD_ENV, fix, merge, outbox, records, review, spend, store
+from . import CHILD_ENV, change_plan, fix, merge, outbox, records, review, spend, store
 from .fix import write_decisions
 
 log = logging.getLogger(__name__)
@@ -499,6 +499,9 @@ class Coordinator:
     tickets: dict[str, str | None] = field(
         default_factory=dict
     )  # each child's own ticket ref, read once per run
+    plan_waiting: Path | None = (
+        None  # the change's plan waits for its approval: launch no component
+    )
 
     def change(self, cid: str) -> str:
         """The `--change` the child *cid* builds as (`phase.child_change`)."""
@@ -2870,6 +2873,18 @@ class Coordinator:
         self._resolve()
         self._save()
         self._board()  # S52: what an earlier run left unsent goes first
+        if self.nested:  # one plan for every component, approved first
+            planned = await change_plan.ensure(
+                self.config,
+                self.repo,
+                self.branch,
+                approve=bool(getattr(self.args, "approve_plan", False)),
+                analysis=self._shared_analysis,
+            )
+            if planned.exit is not None:
+                self._summary(run_dir)
+                return planned.exit
+            self.plan_waiting = planned.waiting
         loop = asyncio.get_running_loop()
         task = asyncio.current_task()
 
@@ -2949,6 +2964,8 @@ class Coordinator:
             )
         if self.conflict is not None:  # nothing more was launched
             return feature_branch.conflict_exit(self.branch, self.conflict)
+        if self.plan_waiting is not None and not bad:  # PLAN:WAITING was printed
+            return 3
         if self.nested and all(c.status == "merged" for c in self.children.values()):
             return self._archive()
         if (
@@ -3024,8 +3041,8 @@ class Coordinator:
             self._reap_reviews()
             ready = self._resolve()
             if (
-                self.conflict is not None
-            ):  # a merge of main conflicted: launch nothing more
+                self.conflict is not None or self.plan_waiting is not None
+            ):  # a merge of main conflicted, or the plan waits: launch nothing more
                 ready = []
             running = sum(
                 c.status in ("running", "reviewing") for c in self.children.values()
@@ -3070,7 +3087,9 @@ class Coordinator:
             # Nothing runs and nothing is ready: read once more (item 15a).
             self._read_prs(self._waited_on())
             again = self._resolve()
-            if (again and self.conflict is None) or self._review_due():
+            if (
+                again and self.conflict is None and self.plan_waiting is None
+            ) or self._review_due():
                 continue
             self._save()
             return 0
