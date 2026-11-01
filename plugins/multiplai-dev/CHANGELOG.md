@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.151.1] - 2026-11-01
+
+### Fixed
+
+- **pipeline-viewer**: lists only the changes of the repository given with
+  `--repo`. When the worktrees root (`$WORKSPACE/.worktrees` by default) held
+  worktrees of several repositories, the page listed their changes too, and
+  approving one could commit to another repository's branch. A worktree under
+  the root now counts only when it is a worktree of the same repository.
+
 ## [0.151.0] - 2026-11-01
 
 ### Added
