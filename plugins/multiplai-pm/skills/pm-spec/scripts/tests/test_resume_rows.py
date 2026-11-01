@@ -412,7 +412,12 @@ def test_S7_killed_during_the_specs(repo, model, tmp_path, monkeypatch, capsys):
     assert model.labels()[calls:] == ["spec:specs:ui"]
     assert "SPEC:REVIEW:specs" in capsys.readouterr().out
     assert run(repo, *RESUME) == 0
-    assert model.labels()[calls:] == ["spec:specs:ui", "component_check:api", "component_check:ui", "consistency"]
+    assert model.labels()[calls:] == [
+        "spec:specs:ui",
+        "component_check:api",
+        "component_check:ui",
+        "consistency",
+    ]
     assert (
         ready_line(capsys.readouterr().out)
         == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
@@ -615,7 +620,11 @@ def test_S13_the_review_stop_after_the_specs(
     # Resume pulls, then runs the check and the handoff only.
     calls = len(model.calls)
     assert run(repo, *RESUME) == 0
-    assert model.labels()[calls:] == ["component_check:api", "component_check:ui", "consistency"]
+    assert model.labels()[calls:] == [
+        "component_check:api",
+        "component_check:ui",
+        "consistency",
+    ]
     assert (
         ready_line(capsys.readouterr().out)
         == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
@@ -681,7 +690,11 @@ def test_S13_after_the_review_a_major_finding_blocks_and_rewrites_nothing(
     calls = len(model.calls)
     assert run(repo, *RESUME) == 4
     out = capsys.readouterr().out
-    assert model.labels()[calls:] == ["component_check:api", "component_check:ui", "consistency"]
+    assert model.labels()[calls:] == [
+        "component_check:api",
+        "component_check:ui",
+        "consistency",
+    ]
     assert f"SPEC:BLOCKED:{cdir}" in out and "SPEC:READY" not in out
     assert "api says 60 a minute, ui says 100" in out
     assert "no file was rewritten" in out
