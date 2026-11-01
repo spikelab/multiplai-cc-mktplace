@@ -2663,6 +2663,38 @@ class TestRunTDDEngineEntryPoint:
         assert result == EXIT_BUILD_FAILURE
 
     @pytest.mark.asyncio
+    async def test_no_test_command_warns_in_progress(self, tdd_setup):
+        """With no test command every test gate passes without running
+        anything (`baseline_test_gate`, `_red_gate`, `integration_gate`), so
+        the run says so in build-progress.md instead of a bare PASSED."""
+        from build_pipeline.gates import NO_TEST_COMMAND_WARNING
+
+        config, args = tdd_setup
+        config.test_command = ""
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=AgentResult(success=False, error="fail"),
+        ):
+            await run_tdd_engine(config, args)
+        text = config.progress_file_path().read_text()
+        assert "WARNING" in text and NO_TEST_COMMAND_WARNING in text
+        assert "BASELINE\nPASSED" not in text
+
+    @pytest.mark.asyncio
+    async def test_a_test_command_gives_no_warning(self, tdd_setup):
+        from build_pipeline.gates import NO_TEST_COMMAND_WARNING
+
+        config, args = tdd_setup
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=AgentResult(success=False, error="fail"),
+        ):
+            await run_tdd_engine(config, args)
+        assert NO_TEST_COMMAND_WARNING not in config.progress_file_path().read_text()
+
+    @pytest.mark.asyncio
     async def test_baseline_gate_failure(self, tdd_setup):
         config, args = tdd_setup
         config.test_command = "false"  # always fails

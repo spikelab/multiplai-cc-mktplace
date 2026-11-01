@@ -2881,3 +2881,27 @@ class TestRefactorDiscardedOnRedGate:
         fixer.assert_called_once()
         assert _git(p.dir, "rev-parse", "HEAD") != p.baseline
         assert "impl" in _git(p.dir, "log", "--format=%s").splitlines()
+
+
+# --- PUBLISH says in the PR body when no test gate ran ---------------------
+
+
+class TestNoTestCommandSection:
+    def test_no_test_command_is_a_pr_section(self, tmp_path):
+        from build_pipeline.gates import NO_TEST_COMMAND_WARNING
+
+        assert (
+            orchestrator.no_test_command_section
+            in orchestrator.PRE_PUBLISH_CONTRIBUTORS
+        )
+        config = SimpleNamespace(test_command="")
+        path = orchestrator.no_test_command_section(config, None, tmp_path)
+        assert path is not None
+        text = path.read_text()
+        assert text.splitlines()[0].startswith("## ")
+        assert NO_TEST_COMMAND_WARNING in text
+
+    def test_a_test_command_writes_no_section(self, tmp_path):
+        config = SimpleNamespace(test_command="pytest -q")
+        assert orchestrator.no_test_command_section(config, None, tmp_path) is None
+        assert not list(tmp_path.rglob("*.md"))
