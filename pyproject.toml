@@ -35,6 +35,7 @@ members = [
     "plugins/multiplai-dev/skills/codebase-walkthrough/scripts",
     "plugins/multiplai-dev/skills/deepen/scripts",
     "plugins/multiplai-dev/skills/design-system/scripts",
+    "plugins/multiplai-dev/skills/explainer/scripts",
     "plugins/multiplai-dev/skills/pipeline-viewer/scripts",
     "plugins/multiplai-dev/skills/pr/scripts",
     "plugins/multiplai-dev/skills/review-viewer/scripts",

@@ -1,0 +1,36 @@
+[project]
+name = "explainer-check"
+version = "0.1.0"
+description = "Checks an explainer page (visible words, SVGs, colours, outside resources, code citations) and draws its SVGs to PNG. No model calls."
+requires-python = ">=3.12"
+dependencies = [
+    # The token blocks of the page's design system, read to draw its SVGs in each theme.
+    "design-system",
+    # Draws the SVGs to PNG so the session can look at them; bundled wheels, no system library.
+    "resvg-py>=0.5,<0.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+# The same as the `dev` extra, as a dependency group: `uv run` installs the
+# default group without being asked. CI uses `--package explainer-check
+# --extra dev` like the other members.
+[dependency-groups]
+dev = ["pytest", "pytest-xdist>=3.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["explainer_check"]
+
+# Member-local source so this directory also resolves standalone — an
+# installed plugin is a copy of the plugin subtree only (no workspace root
+# above it). In-repo, uv resolves through the workspace root and the single
+# uv.lock. An editable path source, not `workspace = true`: lib/ sits inside
+# the installed plugin's copy, and uv rejects a member that is also a path
+# source.
+[tool.uv.sources]
+design-system = { path = "../../../lib/design_system", editable = true }
