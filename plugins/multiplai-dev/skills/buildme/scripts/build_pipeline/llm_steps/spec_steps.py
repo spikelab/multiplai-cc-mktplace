@@ -472,6 +472,7 @@ async def run_explainer(dep, config, usage_context: str = "") -> str:
         effort=config.effort_for("explainer"),
         allowed_tools=["WebSearch", "WebFetch", "Read", "Glob", "Grep"],
         max_turns=12,
+        cwd=str(config.project_dir),
         budget_label="explainer",
     )
 

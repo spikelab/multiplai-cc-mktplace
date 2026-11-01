@@ -380,7 +380,7 @@ from the skill's `scripts/` folder; other relative paths are read from
 | `--interview-replies FILE` | new, resume | The ticket replies to the questions. |
 | `--auto` | new | No person in the loop: no review stop, no ticket wait. |
 | `--prototype`, `--no-prototype` | new | Force the prototype on or off (default: on, unless `prototype: {enabled: false}` in `specs/config.yaml`). |
-| `--no-epic-split` | new | Keep the work as one component. |
+| `--no-epic-split` | new | Keep the work as one component. Refused (exit 2) with more than one `--ticket-child`. |
 | `--ticket COMPONENT=REF` | resume | At the ticket wait: a component's ticket; once per component. |
 | `--tickets-later` | resume | At the ticket wait: go on with the components' tickets pending. |
 | `--accept ID` | resume | At a consistency block after the specs review: leave this finding (`CC-F<n>`) as it is; repeatable or comma-separated. Needs `--accept-reason`. |

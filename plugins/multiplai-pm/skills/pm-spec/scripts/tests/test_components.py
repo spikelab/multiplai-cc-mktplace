@@ -205,3 +205,14 @@ def test_components_table_pads_each_column():
         "| token-retry      |              | pending  |\n"
         "| timeout-setting  | token-retry  | pending  |"
     )
+
+
+def test_no_epic_split_with_two_ticket_children_is_refused_before_any_write(
+    repo, model, capsys
+):
+    argv = ["new", "throttle", "--auto", "--no-epic-split"]
+    code = run(repo, *argv, "--ticket-child", "T-1", "--ticket-child", "T-2")
+    assert code == 2
+    assert "--no-epic-split" in capsys.readouterr().out
+    assert model.calls == []
+    assert not (repo / "specs" / "changes" / "throttle").exists()

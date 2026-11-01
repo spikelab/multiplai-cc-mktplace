@@ -601,3 +601,17 @@ def test_a_remote_not_on_github_is_refused_before_any_gh_call(
     assert _post(target_dir, _accept(target_dir, state.findings[0].id)) == 2
     assert fake_gh == []
     assert "not on GitHub" in capsys.readouterr().err
+
+
+def test_a_state_from_a_later_run_than_the_findings_is_refused_before_any_gh_call(
+    pr_review, fake_gh, capsys
+):
+    # A newer run on another head rewrote review-state.json and stopped before its findings.json.
+    state, target_dir = pr_review
+    path = target_dir / "review-state.json"
+    data = json.loads(path.read_text())
+    data["target"]["head_sha"] = "f" * 40
+    path.write_text(json.dumps(data))
+    assert _post(target_dir, _accept(target_dir, state.findings[0].id)) == 2
+    assert fake_gh == []
+    assert "different runs" in capsys.readouterr().err

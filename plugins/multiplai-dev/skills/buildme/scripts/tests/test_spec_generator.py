@@ -748,6 +748,33 @@ class TestUnknownsGateResumeDurability:
         assert mock_audit.await_count == 0
 
     @pytest.mark.asyncio
+    async def test_a_gate_that_rewrites_unknowns_regenerates_tasks_and_rubric(
+        self, tmp_path
+    ):
+        """The resumed gate rewrites unknowns.md after tasks.md was written
+        from the first pass: tasks and then the rubric are written again,
+        and the artifacts are complete."""
+        cm, change_dir, config, state = self._setup(tmp_path, explainers_done=False)
+
+        async def rewrite(change_dir, context, config, path, deps):
+            path.write_text("# Unknowns\n\n## polars\nLazy frames only.\n")
+
+        tasks = AsyncMock(return_value="## 1. Slice\nUse lazy frames")
+        with (
+            patch("build_pipeline.spec_generator._audit_unknowns", rewrite),
+            patch("build_pipeline.llm_steps.spec_steps.generate_artifact", tasks),
+            patch(
+                "build_pipeline.spec_generator.generate_rubric",
+                AsyncMock(return_value="# Rubric\nLazy"),
+            ),
+        ):
+            await _generate_all_artifacts(cm, change_dir, config, state)
+
+        assert tasks.await_args.args[0] == "tasks"
+        assert "Use lazy frames" in (change_dir / "tasks.md").read_text()
+        assert state.spec_gen.stale_artifacts == []
+
+    @pytest.mark.asyncio
     async def test_resume_honors_skip_explainers(self, tmp_path):
         """--skip-explainers on a resumed build must not run detection or the
         gate's LLM regeneration — that is what the flag exists to prevent."""

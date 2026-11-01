@@ -39,9 +39,8 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib import extraction, fleet
+from lib import extraction
 from lib import session_registry as sr
-from test_fleet import NOW, make_checkpoint, make_session
 
 
 def _response(units_xml="<no-units/>", disposition=None):
@@ -85,9 +84,8 @@ class TestPromptContract:
             assert f"`{state}`" in section
 
     def test_the_prompt_tells_it_to_default_to_active_when_unsure(self):
-        """The asymmetry matters: labelling live work `done` hides it from the
-        fleet view and drops the registry's protection; the reverse costs a
-        line."""
+        """The asymmetry matters: labelling live work `done` drops the
+        registry's protection; the reverse costs a line."""
         assert "When unsure, emit `active`" in extraction.EXTRACTION_PROMPT
 
     def test_the_prompt_distinguishes_parked_from_merely_unfinished(self):
@@ -351,8 +349,8 @@ class TestEntryDisposition:
         assert sr.entry_disposition({"disposition": {"state": "done"}}) == "done"
 
     def test_the_block_helper_returns_state_and_reason_from_one_parse(self):
-        """The single shared parse — the fleet view once read the same block
-        twice with divergent logic, and the two reads could drift."""
+        """The single shared parse — two reads of the same block could
+        drift."""
         assert sr.entry_disposition_block(
             {"disposition": {"state": "parked", "reason": "tomorrow"}}
         ) == ("parked", "tomorrow")
@@ -369,9 +367,7 @@ class TestEntryDisposition:
 
 class TestResumeClearsDisposition:
     """A resume is the user picking the session back up — the old departure
-    label is by definition obsolete (review finding: a resumed parked session
-    rendered under Parked while working, and was excluded from "Needs you";
-    a resumed done session was invisible entirely)."""
+    label is by definition obsolete."""
 
     def _resume(self, data_dir, sid):
         return sr.record_event(data_dir, {"session_id": sid, "cwd": "/work"}, "start")
@@ -392,32 +388,6 @@ class TestResumeClearsDisposition:
         for kind in ("stop", "notification", "end"):
             sr.record_event(tmp_path, {"session_id": "s1", "cwd": "/work"}, kind)
             assert json.loads(path.read_text())["disposition"]["state"] == "parked"
-
-    def test_a_resumed_parked_session_groups_by_live_status(self, tmp_path):
-        now = datetime.now(UTC)
-        make_session(tmp_path, "p", kind="end", now=now)
-        _add_disposition(tmp_path, "p", "parked", "tomorrow")
-
-        self._resume(tmp_path, "p")
-        # It hits waiting_input: it must re-enter "Needs you", not sit
-        # under Parked where nobody acts on it.
-        sr.record_event(tmp_path, {"session_id": "p", "cwd": "/work"}, "notification")
-
-        f = fleet.collect(tmp_path, now)
-        assert f.agents[0].group == "Needs you"
-        assert "## Parked" not in fleet.render_agents_md(f, now)
-
-    def test_a_resumed_done_session_is_visible_again(self, tmp_path):
-        now = datetime.now(UTC)
-        make_session(tmp_path, "d", kind="end", now=now)
-        _add_disposition(tmp_path, "d", "done", "shipped")
-
-        self._resume(tmp_path, "d")
-
-        f = fleet.collect(tmp_path, now)
-        assert f.agents[0].live is True
-        assert f.agents[0].group == "Working"
-        assert "## Working (1)" in fleet.render_agents_md(f, now)
 
 
 # ---------------------------------------------------------------------------
@@ -702,8 +672,8 @@ class TestExtractLearningsWiring:
         assert self._run(tmp_path, [([], {"state": "parked", "reason": "x"})]) is True
 
     def test_a_lost_parked_label_warns(self, tmp_path, caplog):
-        """A dropped `parked` is user-visible — the session vanishes from
-        AGENTS.md — so it must not be a debug-level shrug."""
+        """A dropped `parked` is user-visible — the registry may collect the
+        entry — so it must not be a debug-level shrug."""
         import logging
 
         (tmp_path / "sessions").mkdir()
@@ -715,119 +685,3 @@ class TestExtractLearningsWiring:
             "parked" in r.getMessage() and r.levelno == logging.WARNING
             for r in caplog.records
         )
-
-
-# ---------------------------------------------------------------------------
-# 4d — how it reads in AGENTS.md
-# ---------------------------------------------------------------------------
-
-
-class TestFleetView:
-    def test_a_parked_session_reads_as_parked_not_idle(self, tmp_path):
-        make_session(tmp_path, "p", kind="stop", ago=timedelta(days=3))
-        _add_disposition(tmp_path, "p", "parked", "picking this up after the release")
-
-        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
-
-        assert "## Parked (1)" in md
-        assert "## Idle" not in md
-        assert "picking this up after the release" in md
-
-    def test_a_parked_session_survives_its_container_ending(self, tmp_path):
-        """The whole point: you closed the tab, and it is still on the list."""
-        make_session(tmp_path, "p", kind="end")
-        _add_disposition(tmp_path, "p", "parked", "tomorrow")
-
-        f = fleet.collect(tmp_path, NOW)
-
-        assert f.agents[0].live is True
-        assert "## Parked (1)" in fleet.render_agents_md(f, NOW)
-
-    def test_a_done_session_drops_off_even_while_running(self, tmp_path):
-        make_session(tmp_path, "d", kind="stop", ago=timedelta(minutes=2))
-        _add_disposition(tmp_path, "d", "done", "shipped it")
-
-        f = fleet.collect(tmp_path, NOW)
-        md = fleet.render_agents_md(f, NOW)
-
-        assert f.agents[0].live is False
-        assert "## Working" not in md
-        assert "1 finished, not listed" in md
-
-    def test_an_active_session_is_unaffected(self, tmp_path):
-        make_session(tmp_path, "a", kind="stop", ago=timedelta(minutes=2))
-        _add_disposition(tmp_path, "a", "active", "still going")
-
-        assert "## Working (1)" in fleet.render_agents_md(
-            fleet.collect(tmp_path, NOW), NOW
-        )
-
-    def test_a_parked_session_still_collides(self, tmp_path):
-        """Parked work holds its files just as much as running work — arguably
-        more, since nobody is watching it."""
-        make_session(tmp_path, "p", kind="end", project="alpha")
-        make_session(tmp_path, "b", project="beta")
-        make_checkpoint(tmp_path, "p", files=("src/shared.py",))
-        make_checkpoint(tmp_path, "b", files=("src/shared.py",))
-        _add_disposition(tmp_path, "p", "parked")
-
-        assert len(fleet.collect(tmp_path, NOW).collisions) == 1
-
-    def test_a_parked_session_counts_as_a_front(self, tmp_path):
-        make_session(tmp_path, "p", kind="end")
-        _add_disposition(tmp_path, "p", "parked")
-
-        assert len(fleet.collect(tmp_path, NOW).fronts) == 1
-
-    def test_the_header_and_the_body_agree(self, tmp_path):
-        """Deriving both from `Agent.group` is what stops the count drifting
-        from what is actually listed."""
-        make_session(tmp_path, "w", ago=timedelta(minutes=2))
-        make_session(tmp_path, "n", kind="notification", ago=timedelta(minutes=2))
-        make_session(tmp_path, "i", ago=timedelta(days=2))
-        make_session(tmp_path, "p", kind="end")
-        make_session(tmp_path, "e", kind="end")
-        _add_disposition(tmp_path, "p", "parked")
-
-        f = fleet.collect(tmp_path, NOW)
-        md = fleet.render_agents_md(f, NOW)
-        listed = sum(
-            len(f.in_group(g)) for g in ("Needs you", "Working", "Parked", "Idle")
-        )
-
-        assert listed == len(f.live) == 4
-        # Four listed, but the headline counts the three that want something
-        # from you; the idle one is named separately rather than folded in.
-        assert len(f.fronts) == 3
-        assert "3 front(s)" in md
-        assert "1 idle" in md
-        assert "1 finished, not listed" in md
-
-    def test_a_hostile_reason_cannot_break_the_markdown(self, tmp_path):
-        """The reason is LLM-quoted text; a leading `#` would open a new
-        heading and `|` reads as a table cell. Stripped at render time —
-        the registry keeps the raw value."""
-        make_session(tmp_path, "p", kind="end")
-        _add_disposition(tmp_path, "p", "parked", "## fake heading | cell")
-
-        md = fleet.render_agents_md(fleet.collect(tmp_path, NOW), NOW)
-
-        assert "## fake heading" not in md
-        assert "|" not in md.split("- **Parked**", 1)[1].splitlines()[0]
-        assert "fake heading / cell" in md
-
-    def test_a_malformed_disposition_reads_as_active(self, tmp_path):
-        make_session(tmp_path, "a", ago=timedelta(minutes=2))
-        path = tmp_path / "sessions" / "a.json"
-        entry = json.loads(path.read_text())
-        entry["disposition"] = "parked"  # a string, not the block
-        path.write_text(json.dumps(entry))
-
-        assert fleet.collect(tmp_path, NOW).agents[0].disposition == "active"
-
-
-def _add_disposition(data_dir, sid, state, reason=""):
-    path = data_dir / "sessions" / f"{sid}.json"
-    entry = json.loads(path.read_text())
-    entry["disposition"] = {"state": state, "reason": reason, "ts": NOW.isoformat()}
-    path.write_text(json.dumps(entry))

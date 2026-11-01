@@ -108,7 +108,7 @@ _DEFAULT_HARD_STOP = 0
 # ("the cadence stays well under one write per hour per session") is no longer
 # true — 0.5 hours is deliberately about two writes per hour per session.
 #
-# What changed the trade-off, measured on 2026-08-08: at 3.0 hours the fleet
+# What changed the trade-off, measured on 2026-08-08: at 3.0 hours sessions
 # averaged roughly one write per session (28 writes across 21 sessions on
 # Aug 7), and the one session that fell behind could never catch up. The
 # writer distills only the segment newer than ``last_checkpoint_ts``, and that
@@ -562,10 +562,9 @@ def staleness_trigger(
 
     The gap this closes: the existing triggers are token-based, so a tab that
     sat at 40K tokens for three days has no checkpoint at all — and that is
-    exactly the tab whose state you have lost track of. ``AGENTS.md`` renders
-    intent, next action and files-in-hand from the checkpoint, so a dormant
-    session was the least visible one in the fleet view precisely when it
-    needed to be the most.
+    exactly the tab whose state you have lost track of. The hub shows a
+    session's checkpoint, so a dormant session with none had nothing to show
+    precisely when it needed it most.
 
     Fires when the session is at least ``min_session_minutes`` old AND either
     it has never checkpointed, or its last checkpoint is ``stale_hours`` old.

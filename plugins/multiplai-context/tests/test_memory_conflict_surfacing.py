@@ -261,7 +261,7 @@ def test_e2e_memory_document_disagreement_is_surfaced(env_setup):
         "Which database engine does production run on?"
     )
     result = subprocess.run(
-        [CLAUDE_CLI, "-p", "--model", "claude-haiku-4-5", user_message],
+        [CLAUDE_CLI, "-p", "--model", "claude-haiku-5-5", user_message],
         capture_output=True,
         text=True,
         timeout=180,

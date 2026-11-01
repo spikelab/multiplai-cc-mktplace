@@ -210,9 +210,13 @@ def record_round(
     return None
 
 
-def _review_records(change_dir: Path, block_number: int) -> list[dict]:
+def _review_records(
+    change_dir: Path, block_number: int, *, kept_fix_on_pass: bool = False
+) -> list[dict]:
     """The block's records with ``kind == "review"``, by round number. A
-    record that cannot be read is logged and left out."""
+    record that cannot be read is logged and left out. With
+    *kept_fix_on_pass*, a ``fix_on_pass_review`` record counts too when the
+    review record before it says its fix was kept."""
     records = []
     for k in round_numbers(change_dir, block_number):
         path = reviews_dir(change_dir) / f"block-{block_number:02d}-round-{k}.json"
@@ -221,7 +225,15 @@ def _review_records(change_dir: Path, block_number: int) -> list[dict]:
         except (OSError, ValueError) as e:
             log.warning("Could not read review round record %s: %s", path, e)
             continue
-        if isinstance(record, dict) and record.get("kind") == "review":
+        if not isinstance(record, dict):
+            continue
+        kind = record.get("kind")
+        if kind == "review" or (
+            kept_fix_on_pass
+            and kind == "fix_on_pass_review"
+            and records
+            and (records[-1].get("fix") or {}).get("kept") is True
+        ):
             records.append({**record, "round": record.get("round", k)})
     return records
 
@@ -245,6 +257,8 @@ def _findings(entries, block_number: int, round_number: int) -> list[ReviewFindi
 def open_state(
     change_dir: Path,
     block_number: int,
+    *,
+    kept_fix_on_pass: bool = False,
 ) -> tuple[list[ReviewFinding], list[dict], dict | None]:
     """What the block's earlier review rounds left: ``(open, rejected, last)``.
 
@@ -253,8 +267,12 @@ def open_state(
     ``open_findings``; a record written before that field existed gives its
     ``accepted`` instead, with ids by `finding_id`'s rule. *rejected* is
     every finding any of the block's review records rejected, each with its
-    ``judge_reason`` and an id (``X`` for rejected)."""
-    records = _review_records(change_dir, block_number)
+    ``judge_reason`` and an id (``X`` for rejected). *kept_fix_on_pass*
+    reads a kept fix on pass's review record as the latest
+    (`_review_records`): what the block left once its review loop ended."""
+    records = _review_records(
+        change_dir, block_number, kept_fix_on_pass=kept_fix_on_pass
+    )
     if not records:
         return [], [], None
     rejected: list[dict] = []
@@ -293,10 +311,11 @@ def earlier_decisions(change_dir: Path) -> list[dict]:
     """The review skill's `--earlier-decisions` entries for the change: every finding a block
     review rejected, with the judge's reason (`judge_reason`, else the ``REJECTED:`` text in
     its evidence), and every accepted finding still open in its block's latest record
-    (`open_state`), as `accepted-unfixed`. A finding with no claim is left out."""
+    (`open_state`, a kept fix on pass's review included), as `accepted-unfixed`. A finding
+    with no claim is left out."""
     out: list[dict] = []
     for block in block_numbers(change_dir):
-        open_, rejected, last = open_state(change_dir, block)
+        open_, rejected, last = open_state(change_dir, block, kept_fix_on_pass=True)
         for entry in rejected:
             reason = str(entry.get("judge_reason") or "").strip()
             if not reason:

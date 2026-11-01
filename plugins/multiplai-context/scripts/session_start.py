@@ -40,7 +40,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 # the same code. Two copies of a marker-move loop is how one of them quietly
 # stops matching the other.
 from lib.extraction_drain import process_deferred_extractions
-from lib.fleet import roster_dead_sids, write_fleet_view
 from lib.hook_input import read_hook_input
 from lib.runtime import uv_run_argv
 from multiplai_core.config import (
@@ -578,7 +577,7 @@ def main() -> None:
     hook_input = read_hook_input()
 
     # A subagent / nested hook session must not run any of this: it would
-    # register itself in the fleet, launch four detached children and drain
+    # register itself in the session registry, launch four detached children and drain
     # the extraction queues on every SDK child spawn (M7).
     from lib.checkpoint import is_child_session
 
@@ -609,23 +608,17 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # Hub session registry (hub input contract): GC week-old ended entries,
     # then stamp this session's "start" event. Best-effort — with no hub
     # installed the files are simply never read.
-    #
-    # The roster read is the launcher's `docker ps` from moments ago (it writes
-    # it just before starting this container), so a session whose container is
-    # gone is collected on the very next launch instead of ageing out over a
-    # week or a month. No roster — vanilla Claude Code — and this is an empty
-    # set and the age windows are all there is, exactly as before.
     with run.stage("registry"):
         try:
             from lib import session_registry
 
-            session_registry.gc_stale(data_dir, dead_sids=roster_dead_sids(data_dir))
+            session_registry.gc_stale(data_dir)
             session_registry.record_event(data_dir, hook_input, "start")
         except Exception:
             logger.warning("Session registry start-event failed", exc_info=True)
 
-    # Log which model client is available. Try-wrapped like the registry and
-    # fleet stages: HookRun.stage never suppresses exceptions by contract, and
+    # Log which model client is available. Try-wrapped like the registry
+    # stage: HookRun.stage never suppresses exceptions by contract, and
     # an unwrapped raise here would skip everything below — including both
     # drains, silently accumulating deferred diary/learnings markers (M6).
     with run.stage("client_select"):
@@ -773,8 +766,8 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
     # minutes after it ends, and refuses while a pending marker still points at
     # it — and nothing ever revisited a refusal, so 216 directories had piled
     # up by 2026-08-10 with none collected since Jul 7. This is the revisit.
-    # In-process for the same reason as the fleet view: a few stats and the
-    # occasional rmtree, far cheaper than a `uv run` cold start.
+    # In-process rather than detached: a few stats and the occasional rmtree,
+    # far cheaper than a `uv run` cold start.
     with run.stage("checkpoint_sweep"):
         try:
             from lib import checkpoint as cp
@@ -792,17 +785,6 @@ def _start_pass(hook_input: dict, cwd: str, run) -> None:
                 )
         except Exception:
             logger.exception("Checkpoint sweep failed (non-fatal)")
-
-    # Refresh the fleet view (data/AGENTS.md). Runs
-    # in-process rather than detached: it is a pure read of sessions/ +
-    # checkpoints/ with no LLM call, so it costs a few file reads — far less
-    # than the `uv run` cold start a subprocess would pay. Also the moment it
-    # matters most, since this hook has just registered a new session.
-    with run.stage("fleet_view"):
-        try:
-            write_fleet_view(data_dir)
-        except Exception:
-            logger.warning("Fleet view refresh failed (non-fatal)", exc_info=True)
 
     # Dream gate: emit a nudge when the 24h window has elapsed and
     # fresh learnings are waiting. The nudge is additionalContext only —

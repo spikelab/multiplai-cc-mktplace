@@ -308,6 +308,18 @@ class TestAtomicity:
         blocks = [_block(1, "Byline", description="Show the author name on the post")]
         assert check_atomicity(blocks).kinds_present == []
 
+    def test_words_containing_sso_do_not_count_as_auth(self):
+        blocks = [
+            _block(1, "Tags", description="Store the tags associated with each order"),
+            _block(2, "Lesson", description="Show the lesson processor status"),
+        ]
+        assert check_atomicity(blocks).kinds_present == []
+
+    def test_sso_and_single_sign_on_count_as_auth(self):
+        for text in ["Add SSO for staff", "Support single sign-on for staff"]:
+            blocks = [_block(1, "Staff", description=text)]
+            assert check_atomicity(blocks).kinds_present == ["auth"], text
+
 
 # --- Check 3: package spread --------------------------------------------------
 

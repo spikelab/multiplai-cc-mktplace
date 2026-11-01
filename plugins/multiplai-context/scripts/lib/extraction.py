@@ -536,7 +536,7 @@ def parse_disposition(raw: str) -> dict:
 
     Absent, malformed, or an unrecognised state all fall back to ``active``.
     That default is deliberately the safe direction: labelling live work
-    "done" hides it from the fleet view and stops the registry protecting it,
+    "done" stops the registry protecting it,
     whereas leaving finished work labelled "active" costs nothing but a line.
 
     The last block wins. Chunked transcripts are handled by the caller, which

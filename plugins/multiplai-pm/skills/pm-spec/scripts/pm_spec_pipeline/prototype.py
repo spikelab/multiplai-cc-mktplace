@@ -19,7 +19,8 @@ turns the step off. Once the
 step has passed or been skipped it never runs again for the change.
 
 Files in `prototype/` are the PM's only when no agent has run. After a failed
-agent run (`steps.prototype` blocked, row S15) the next run re-checks them with
+or stopped agent run (`steps.prototype` blocked, row S15; the step is recorded
+blocked before the agent starts) the next run re-checks them with
 `prototype_gate`: passed (a person fixed them), they are kept; `STATUS:
 BLOCKED` or `NEEDS_CONTEXT`, it fails again; otherwise the agent runs again.
 
@@ -197,6 +198,11 @@ async def run_prototype_stage(run: Run) -> None:
         F.record_skipped(run, NAME, "", reason)
         return
     print("PHASE:PROTOTYPE", flush=True)
+    # Recorded before the agent runs, so whatever stops it (a budget, a kill)
+    # leaves the step blocked and its files are checked, not kept as the PM's.
+    started = run.state.step(NAME)
+    started.outcome, started.reason = "blocked", "Prototype agent did not finish"
+    run.save()
     gate = await run_prototype(run)
     if not gate.passed:
         _fail(run, gate.reason)

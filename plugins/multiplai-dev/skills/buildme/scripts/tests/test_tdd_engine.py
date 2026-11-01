@@ -4116,9 +4116,7 @@ class TestWholeChangeRefactor:
         assert "# review fix" in (config.project_dir / "module.py").read_text()
 
     @pytest.mark.asyncio
-    async def test_failed_checkpoint_commit_preserves_work_and_blocks_the_pass(
-        self, setup
-    ):
+    async def test_failed_checkpoint_commit_with_dirty_tree_skips_the_pass(self, setup):
         """`_git_commit_tree` returns None for "commit failed" too (failing
         hook, missing identity) — with the dirty work possibly all staged.
         HEAD is then NOT a faithful snapshot, and trusting it as the rewind
@@ -4144,8 +4142,7 @@ class TestWholeChangeRefactor:
         with patch(
             "build_pipeline.tdd_engine.run_refactor_all", new_callable=AsyncMock
         ) as agent:
-            with pytest.raises(git_ops.GitLifecycleError, match="Commit failed"):
-                await _run_refactor_all(config, state, progress)
+            assert await _run_refactor_all(config, state, progress) is True
 
         agent.assert_not_awaited()
         # The uncommitted review fix survived, and HEAD never moved.
@@ -4158,7 +4155,7 @@ class TestWholeChangeRefactor:
             check=True,
         ).stdout.strip()
         assert head_after == head_before
-        assert state.tdd.refactor_all_done is False
+        assert state.tdd.refactor_all_done is True
 
     @pytest.mark.asyncio
     async def test_red_tree_on_resume_is_not_checkpointed_as_a_baseline(self, setup):

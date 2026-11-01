@@ -1084,6 +1084,7 @@ async def run_find(state: ReviewState, ctx: RunContext) -> ReviewState:
     if all(r.error for r in defects):
         for key in group_keys:
             del state.finder_results[key]  # a later run tries every finder again
+        save(state, ctx)  # each failed result was saved as it returned
         raise sdk.AgentCallError("every finder failed: " + "; ".join(failed))
 
     # The record's entry for each finder's stored result: the last successful

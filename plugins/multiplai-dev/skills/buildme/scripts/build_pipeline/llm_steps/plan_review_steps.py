@@ -250,23 +250,46 @@ def render_split_context(assessment) -> str:
     return "\n".join(lines)
 
 
-def render_split_proposal(assessment, change_name: str) -> str:
+def render_split_proposal(
+    assessment, change_name: str, finding: PlanReviewFinding | None = None
+) -> str:
     """``split-proposal.md`` for the size gate: the cut, written for a ticket
-    comment or for the user. Block groups (the proposed PRs, in ship order),
-    the cut boundaries, ``split.reason`` and the atomicity evidence.
+    comment or for the user.
+
+    With *finding* (the plan check's `oversized-plan` finding, which decided
+    the stop): its claim and reason and its ``proposed_cut``, then buildme's
+    parse of the blocks below as context, when there is one (*assessment* may
+    be None). Without it (the gate fell back to the code's verdict): the block
+    groups (the proposed PRs, in ship order), the cut boundaries,
+    ``split.reason`` and the atomicity evidence.
 
     Pure: formats the assessment, reads nothing, changes nothing.
     """
+    lines = [f"# Split proposal: {change_name}", ""]
+    if finding is not None:
+        lines += _finding_proposal_lines(finding)
+        if assessment is None:
+            return "\n".join(lines).rstrip() + "\n"
+        lines += [
+            "",
+            "## buildme's parse of the blocks",
+            "",
+            "Context for the cut above, not the reason for the stop.",
+            "",
+        ]
+        groups_heading = "Block groups"
+    else:
+        lines += [
+            "buildme stopped after plan review: this plan is larger than one PR "
+            "should be and its blocks come apart cleanly. Proposed split below. "
+            "To build it as one PR anyway, re-run the same command with "
+            "`--accept-size`.",
+            "",
+        ]
+        groups_heading = "Proposed PRs"
     split = assessment.split
     atomicity = assessment.atomicity
-    lines = [
-        f"# Split proposal: {change_name}",
-        "",
-        "buildme stopped after plan review: this plan is larger than one PR "
-        "should be and its blocks come apart cleanly. Proposed split below. "
-        "To build it as one PR anyway, re-run the same command with "
-        "`--accept-size`.",
-        "",
+    lines += [
         f"Blocks: {assessment.block_count} (size trigger >{assessment.block_trigger}: "
         f"{'fired' if assessment.size_triggered else 'not fired'}). "
         f"Top-level packages: {assessment.spread.count} (package trigger "
@@ -274,7 +297,7 @@ def render_split_proposal(assessment, change_name: str) -> str:
         f"{'fired' if assessment.package_triggered else 'not fired'}). "
         "The triggers are unmeasured placeholders, not findings.",
         "",
-        f"## Proposed PRs — {split.group_count} group(s), in ship order",
+        f"## {groups_heading} — {split.group_count} group(s), in ship order",
         "",
     ]
     for group in split.groups:
@@ -309,6 +332,30 @@ def render_split_proposal(assessment, change_name: str) -> str:
             f"- block {high_risk.number} ({high_risk.name}) — matched {evidence}"
         )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _finding_proposal_lines(finding: PlanReviewFinding) -> list[str]:
+    """The plan check's `oversized-plan` finding as the proposal's opening."""
+    lines = [
+        f"buildme stopped after plan review: the plan check reported a "
+        f"{finding.severity} `oversized-plan` finding. Proposed split below. "
+        "To build it as one PR anyway, re-run the same command with "
+        "`--accept-size`.",
+        "",
+        "## Finding",
+        "",
+        _finding_line(finding),
+        "",
+        f"## Proposed tickets — {len(finding.proposed_cut)}",
+        "",
+    ]
+    for n, cut in enumerate(finding.proposed_cut, 1):
+        lines.append(f"{n}. {cut.ticket} — {_blocks_phrase(cut.blocks)}")
+        if cut.boundary:
+            lines.append(f"   - boundary: {cut.boundary}")
+    if not finding.proposed_cut:
+        lines.append("- (the finding proposed no cut)")
+    return lines
 
 
 def _split_context(config, change_dir: Path) -> str:
@@ -541,6 +588,17 @@ def finding_dicts(findings: list[PlanReviewFinding]) -> list[dict]:
     ]
 
 
+def save_size_verdict(step, findings: list[PlanReviewFinding]) -> None:
+    """Save on the passed step the model's most severe `oversized-plan`
+    finding, or that it reported none, for the size gate."""
+    from ..state import SizeVerdict
+
+    oversized = keep_most_severe(
+        [f for f in findings if f.category == "oversized-plan"], "oversized-plan"
+    )
+    step.size_verdict = SizeVerdict(oversized=oversized[0] if oversized else None)
+
+
 def log_plan_review_findings(findings: list[PlanReviewFinding]) -> None:
     """Record what the review found, at the severity it found it."""
     if not findings:
@@ -567,7 +625,8 @@ def log_plan_review_findings(findings: list[PlanReviewFinding]) -> None:
     proposed = [f for f in findings if f.category == "oversized-plan"]
     for finding in proposed:
         # Said out loud because it is an offer, and an offer nobody reads is a
-        # split that never happens. Still only an offer: nothing acts on it.
+        # split that never happens. Still only an offer: a critical or major
+        # one parks the build at the size gate, and nothing splits the plan.
         log.info(
             "PLAN_REVIEW proposes a split into %d ticket(s) — proposal only, "
             "nothing was split",
@@ -654,6 +713,7 @@ async def run_plan_review_stage(
             log_plan_review_findings(findings)
             if not plan_review_actionable(findings):
                 sg.record_step(name)
+                save_size_verdict(sg.steps[name], result.findings)
                 state.checkpoint(state_path)
                 return findings
             numbered = number_findings(
@@ -725,6 +785,7 @@ async def run_plan_review_stage(
             record_advisory(config, name, advisory)
             if not blocking:
                 sg.record_step(name)
+                save_size_verdict(sg.steps[name], result.findings)
                 state.checkpoint(state_path)
                 return findings
             # A listed finding of the scans is counted by the scans' own

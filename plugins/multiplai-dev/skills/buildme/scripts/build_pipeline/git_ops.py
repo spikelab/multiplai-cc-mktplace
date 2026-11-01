@@ -371,7 +371,7 @@ def default_branch(repo: Path | str) -> str:
     currently checked-out branch."""
     res = _run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd=repo)
     if res.ok and res.stdout.strip():
-        return res.stdout.strip().rsplit("/", 1)[-1]
+        return res.stdout.strip().removeprefix("refs/remotes/origin/")
     for candidate in ("main", "master"):
         if branch_exists(repo, candidate):
             return candidate
@@ -1393,8 +1393,8 @@ def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
        drop someone else's work, so this refuses instead.
     3. ``reset --soft <sha>`` moves the branch back and keeps every file.
     4. ``restore --source=<sha> --staged --worktree -- .`` puts the index and
-       the files under *repo* back to *sha*; files outside *repo* keep their
-       content and their staged state.
+       the files under *repo* back to *sha*, except the bookkeeping; files
+       outside *repo* keep their content and their staged state.
     5. ``clean`` removes files the step newly created, which the next
        whole-tree commit would otherwise sweep into the build as
        reverted-but-committed work. The bookkeeping pathspecs keep the clean
@@ -1484,8 +1484,19 @@ def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
             reset.stderr.strip() or reset.stdout.strip(),
         )
         return False
+    # The bookkeeping is left out: an agent's `git add -A` may have staged it,
+    # and restoring a staged file absent from *sha* deletes it from disk.
     restore = _run(
-        ["git", "restore", f"--source={sha}", "--staged", "--worktree", "--", "."],
+        [
+            "git",
+            "restore",
+            f"--source={sha}",
+            "--staged",
+            "--worktree",
+            "--",
+            ".",
+            *BOOKKEEPING_EXCLUDES,
+        ],
         cwd=repo,
     )
     if not restore.ok:

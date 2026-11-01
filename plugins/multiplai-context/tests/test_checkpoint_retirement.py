@@ -13,8 +13,7 @@ not. Before it, deleting is data loss.
 Criterion 11 names three cases that must RETAIN, and they are tested separately
 below because they fail for three unrelated reasons:
 
-* **parked** — `AGENTS.md` renders a parked session's intent and files from its
-  checkpoint, and a parked session is exactly the one still listed weeks later
+* **parked** — the hub shows a parked session's checkpoint, and a parked session is exactly the one still listed weeks later
   (its registry entry is GC-exempt). Collecting it would leave a deliberately
   preserved entry with nothing to say.
 * **diary write failed** — no record exists, so nothing has superseded anything.

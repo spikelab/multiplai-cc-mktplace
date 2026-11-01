@@ -148,11 +148,11 @@ def world(tmp_path: Path) -> dict:
     spill_dir.mkdir(parents=True)
 
     # --- Session A --------------------------------------------------------
-    # Prompt 1 suggests costs + fleet-status (spilled to a persisted file, and
+    # Prompt 1 suggests costs + memory-bank (spilled to a persisted file, and
     # the attachment hangs two hops below the prompt); costs invoked → hit.
     p1 = _user("2026-09-14T10:00:00.000Z", SESS_A, "what did this cost")
     spill = spill_dir / "hook-1-additionalContext.txt"
-    spill.write_text(_hook_text(["costs", "fleet-status"]), encoding="utf-8")
+    spill.write_text(_hook_text(["costs", "memory-bank"]), encoding="utf-8")
     a1_mid = _entry(
         "attachment",
         "2026-09-14T10:00:03.000Z",
@@ -243,10 +243,10 @@ def test_bare_name_strips_plugin_and_slash():
 
 def test_suggested_skills_reads_only_the_skills_block_and_dedups():
     text = (
-        _hook_text(["costs", "plugin:fleet-status", "costs"])
+        _hook_text(["costs", "plugin:memory-bank", "costs"])
         + "\n\n=== PROJECT STATE ===\n## not-a-skill\n"
     )
-    assert sp.suggested_skills(text) == ["costs", "fleet-status"]
+    assert sp.suggested_skills(text) == ["costs", "memory-bank"]
     assert sp.suggested_skills(_hook_text([])) == []
     assert sp.suggested_skills("") == []
 
@@ -299,7 +299,7 @@ def test_measure_transcript_windows_by_order_not_timestamp(world):
     assert prompts == 3  # tool_result and meta entries are not prompts
     assert earliest == datetime(2026, 9, 14, 10, 0, tzinfo=UTC)
     by_skills = {tuple(s.skills): s.invoked for s in suggestions}
-    assert by_skills == {("costs", "fleet-status"): ["costs"], ("gmail",): []}
+    assert by_skills == {("costs", "memory-bank"): ["costs"], ("gmail",): []}
 
 
 def test_measure_transcript_credits_slash_command_via_meta_chain(world):

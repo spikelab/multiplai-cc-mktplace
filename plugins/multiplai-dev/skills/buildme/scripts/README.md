@@ -322,7 +322,7 @@ relative to it (`cd backend && bash tools/bm-backend-tests.sh tests/test_x.py`):
 - one whose rules above say "run the whole command" runs its command with no
   paths;
 - the parts that run are joined with `&&`, each in a subshell when there are
-  several;
+  several, and the joined parts run through `sh -c`;
 - when every directory is left out, the whole `tdd.test_command` runs.
 
 `runner` (`pytest` or `jest`) says which runner takes the paths when the

@@ -15,6 +15,83 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.148.5] - 2026-10-31
+
+### Fixed
+
+- **buildme stops a build for size only when the plan reviewer says the plan
+  is oversized.** The size gate now parks a build with `SPLIT:REQUIRED` only
+  on a critical or major `oversized-plan` finding from the plan check, and
+  `split-proposal.md` lists the reviewer's proposed tickets. Before, buildme's
+  own keyword match decided: a user-management plan, where "login",
+  "password" and "permission" appear in nearly every block, stopped as an auth
+  change mixed with unrelated work even when the reviewer found nothing to
+  split. buildme's keyword and grouping checks still go to the reviewer, and
+  still decide alone when no reviewer answer is saved, such as on a build
+  resumed from a checkpoint written by an older version.
+- **The grouping links a block to the block whose function it consumes.** A
+  `Consumes:` line that starts with `Block 2:` or names its source
+  (`account-user-api:`) now matches the name the other block's `Produces:`
+  line defines, so blocks that depend on each other are no longer proposed as
+  separate PRs. Two endpoints under the same path (`POST api/a`, `POST api/b`)
+  are no longer joined because both start with `api`.
+
+## [0.148.4] - 2026-10-31
+
+### Fixed
+
+- **buildme**: words that merely contain "sso" ("associated", "lesson", "processor") no longer mark a block as auth work and trigger a split proposal; only the word SSO and "single sign-on" do.
+- **buildme**: a Go dependency named by its full module path (`github.com/spf13/cobra`) now gets an explainer.
+- **buildme**: a `Satisfies:` entry that names another capability ("billing: Audit") no longer narrows or adds to the security and permission scenarios of a capability with a requirement of the same name.
+- **buildme**: the docs writer no longer puts its "no changelog" note in the `DOCS_IMPACT:` slot, which dropped the edited docs from the PR.
+- **buildme**: the research decision prompt now fences the change's spec text as untrusted data, as it already said it did.
+- **buildme**: the dependency explainer is now told that the docs, changelogs and issues it fetches are data, never instructions.
+- **buildme**: the dependency explainer's Read, Glob and Grep now run in the project, so its search of the project's own code finds it.
+- **buildme**: the design writer is now told that the fenced web research it is given is data, never instructions.
+- **buildme**: a plan check rewrite that edits only the implementation plan no longer leaves `tasks.md` marked out of date, which refused the build after the recheck passed and regenerated the reviewed tasks on resume.
+- **buildme**: a resumed build whose unknowns gate rewrites `unknowns.md` now writes the tasks and rubric again, instead of stopping with "Planning artifacts are incomplete".
+- **buildme**: an edit to a component's `plan.md` now marks its design, unknowns, tasks and rubric out of date, and the build refuses to run the earlier plan. A build planned before this version records its `plan.md` on resume and is not planned again.
+- **buildme**: a model call that times out or fails before its final result now counts as spend of unknown size, so a build with a spending limit stops until `--accept-unknown-spend`, instead of counting it as free.
+- **buildme**: a spent budget or an untrusted repo during codebase analysis now stops the analysis, instead of being recorded as failed slices; an epic's shared analysis then writes no completion marker.
+- **buildme**: a child of an epic now analyses again the files its `plan.md` names that the epic's shared analysis failed on, instead of reusing the failure.
+
+## [0.148.3] - 2026-10-31
+
+### Fixed
+
+- **buildme**: thirteen fixes from a code review of buildme's pipeline.
+  - A Vitest run with failing tests is a test failure, not a crashed runner: buildme reads Vitest's indented `Tests  1 failed (1)` summary and its `Failed to load url` error instead of retrying the suite three times.
+  - The RED gate rejects Vitest and Jest tests that fail to load (a syntax or import error) instead of passing them as unverified RED.
+  - Preflight passes a `sh`/`bash`/`zsh -c` test command whose script starts with a `cd` the shell expands (`bash -c 'cd $HOME/x && pytest'`).
+  - With `tdd.narrow_commands`, the block gate and the end gate run a change that touches two or more directories, instead of failing every time with "Test command failed to run".
+  - A default branch whose name has a slash (`release/2026`) keeps its full name as the build's base and the PR's base.
+  - Preflight refuses a hand-run sibling child change (`<epic>-<id>`) while its epic runs elsewhere, as it already did for a nested child (`<epic>/<id>`).
+  - Discarding a failed step keeps `.build-state.json`, `build-progress.md` and the other bookkeeping files an agent's `git add -A` staged, instead of deleting them.
+  - When git refuses the pre-refactor checkpoint commit or the mutation survivor round's commit (a failing pre-commit hook, say), refactor-all is skipped or the round is discarded, instead of the build ending FAILED with unverified edits in the tree.
+  - When git refuses the commit of a regenerated walkthrough, the walkthrough's note says so and publish goes on, instead of aborting.
+  - Continuing a `--spec-only` build merges origin's default branch into its local branch without pushing a separate merge, so its own push at publish is no longer rejected as non-fast-forward.
+  - The PR review and the component review hear what a kept fix on pass left open: findings it fixed are no longer listed as open, and that review's new open and rejected findings are included.
+  - A review dimension scored 1 with confidence of at least 0.5 fails the review gate on its own; before, any confidence below 1.0 lifted it above the critical score. The floor is `code_review.gate.critical_min_confidence`.
+  - A Python project found by `pytest.ini` or `setup.py` gets the Python reference docs, as one found by `pyproject.toml` does.
+
+## [0.148.2] - 2026-10-31
+
+### Fixed
+
+- **review: resuming after a usage-limit stop keeps `--verify-low` and `--model`.** The `resume` command printed after the stop now carries both, so the resumed run still verifies the LOW findings and runs the verifier and merger on the same model.
+- **review: a re-pushed PR no longer carries a finding that cites changed lines.** A finding from the last round is copied unchanged only when every file it cites is the same at both heads. One citing a file that left the change, or that a moved base rewrote, is rechecked instead of being exported with lines that are not at the new head.
+- **review: `--plan-only` no longer breaks the resume of a stopped review.** On a directory holding a run that `resume` can continue, `--plan-only` keeps that run's `diff.patch`, `commits.txt`, `files.txt` and rounds as they were.
+- **review: `post` refuses to mix two runs.** When a later run rewrote `review-state.json` and stopped before writing its `findings.json`, `post` now exits 2 before any GitHub call and says to finish that run with `resume`. Before, it placed one run's findings on the other run's diff, and GitHub could refuse the whole review.
+- **review: a tree review whose every finder failed can be resumed.** `resume` now asks every finder again instead of failing the same way each time.
+- **review: the verifier is no longer told that CI blocks no merge when classic branch protection requires checks.** The review now also reads the base branch's classic protection. When that read fails, the verifier is told whether CI blocks a merge is unknown, and the review lists the `gh api` command that would settle it.
+- **review: defects a path finder finds in files the change does not touch are kept.** The path finder now marks them `Pre-existing: yes`, as the other finders do, and writes `Could not check:` for what it could not read, which becomes a need.
+
+## [0.148.1] - 2026-10-31
+
+### Fixed
+
+- **buildme**: the preflight runner check no longer fails a `bash -c` test command whose script starts with a shell builtin such as `set -e`. A `sh -c`, `bash -c` or `zsh -c` script that starts with a builtin, a keyword (`if`, `for`, `{`, …) or an assignment (`X=1 …`) is now checked as its shell, so DolceBot's `bash -c 'set -e; …'` no longer stops the build with `PREFLIGHT:FAILED:test-runner:… set is not on PATH`. A script whose own program is missing (`bash -c 'nosuchtool -q'`) still fails as before.
+
 ## [0.148.0] - 2026-10-29
 
 ### Added

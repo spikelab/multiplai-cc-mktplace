@@ -132,14 +132,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     rc = _refuse_unless_ready(config, state_path)
     if rc is not None:
         return rc
-    if merging:
-        rc = _merge_into_feature_branch(config)
-        if rc is not None:
-            return rc
-
-    progress = ProgressWriter(config.progress_file_path())
-
     # A spec-only handoff reuses its revision-bound planning evidence and spend.
+    # Bound to its branch before the merge, which then merges there and pushes
+    # nothing (`_merge_into_feature_branch`).
     completed = completed_state_path(state_path)
     if not state_path.exists() and completed.exists():
         planned = BuildState.load(completed)
@@ -156,6 +151,13 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 planned.budget, accept_unknown_spend=config.accept_unknown_spend
             )
             planned.checkpoint(state_path)
+
+    if merging:
+        rc = _merge_into_feature_branch(config)
+        if rc is not None:
+            return rc
+
+    progress = ProgressWriter(config.progress_file_path())
 
     # Resume or create state
     if state_path.exists():
@@ -1965,18 +1967,51 @@ def _run_size_gate(
     An acceptance is saved as ``state.size_accepted``, so a retry without the
     flag goes on instead of posting the proposal again.
 
-    Re-assesses the final tasks.md with the plan review's own parse and
-    thresholds (``split_assessment``). On ``should_split`` — or when an earlier
-    run already stopped here — writes ``split-proposal.md``, sets
-    ``state.split_required``, prints ``SPLIT:REQUIRED:<path>`` and returns 3.
-    The wrapper posts the proposal on the ticket (or shows it) and stops.
+    The verdict is the plan check's: the build stops only when the check's
+    saved answer (``StepOutcome.size_verdict``, `plan_review_steps.
+    save_size_verdict`) holds a critical or major `oversized-plan` finding.
+    The code's assessment of the final tasks.md (``split_assessment``: the
+    keyword and grouping checks) only informs the reviewer, and is shown in
+    the proposal as context. When no answer is saved for the current plan
+    (a checkpoint from before the field, or a check that never passed), the
+    code's ``should_split`` decides, logged as ``verdict=code-fallback``, so
+    a failed model call never lets a plan through unchecked.
+
+    On a split — or when an earlier run already stopped here — writes
+    ``split-proposal.md``, sets ``state.split_required``, prints
+    ``SPLIT:REQUIRED:<path>`` and returns 3. The wrapper posts the proposal
+    on the ticket (or shows it) and stops.
     """
     from .intake import MARKER_SPLIT_REQUIRED, WAITING_EXIT
-    from .llm_steps.plan_review_steps import render_split_proposal, split_assessment
+    from .llm_steps.plan_review_steps import (
+        PLAN_REVIEW_ACTIONABLE,
+        render_split_proposal,
+        split_assessment,
+    )
 
     log.info("START phase=SIZE_GATE")
     _, assessment = split_assessment(config, config.change_dir)
-    should_split = bool(assessment is not None and assessment.should_split)
+    sg = state.spec_gen
+    step = sg.steps.get("plan_review") if sg is not None else None
+    verdict = (
+        step.size_verdict
+        if sg is not None and step is not None and sg.step_passed("plan_review")
+        else None
+    )
+    finding = None
+    if verdict is None:
+        should_split = bool(assessment is not None and assessment.should_split)
+        log.info("SIZE_GATE verdict=code-fallback split=%s", should_split)
+    else:
+        oversized = verdict.oversized
+        if oversized is not None and oversized.severity in PLAN_REVIEW_ACTIONABLE:
+            finding = oversized
+        should_split = finding is not None
+        log.info(
+            "SIZE_GATE verdict=model split=%s severity=%s",
+            should_split,
+            oversized.severity if oversized is not None else "none",
+        )
     if not should_split and not state.split_required:
         log.info("DONE phase=SIZE_GATE split=false")
         return None
@@ -1989,7 +2024,9 @@ def _run_size_gate(
         return None
 
     path = config.change_dir / "split-proposal.md"
-    if assessment is not None and should_split:
+    if finding is not None:
+        path.write_text(render_split_proposal(assessment, config.change_name, finding))
+    elif assessment is not None and should_split:
         path.write_text(render_split_proposal(assessment, config.change_name))
     state.split_required = True
     state.checkpoint(state_path)

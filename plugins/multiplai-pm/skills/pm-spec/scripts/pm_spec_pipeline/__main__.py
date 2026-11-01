@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
 import sys
@@ -40,7 +41,7 @@ from multiplai_core.specs import normalize_change_name
 
 from . import branch, runlock, sdk
 from . import state as state_mod
-from .config import INTERVIEW_MODES, SpecConfig, read_specs_config
+from .config import INTERVIEW_MODES, RUN_DIR, SpecConfig, read_specs_config
 from .pipeline import NewInputs, TicketInputs, cmd_new, cmd_resume, cmd_revise
 from .run import EXIT_FAILED, EXIT_LOCKED, EXIT_REFUSED, Stop
 
@@ -268,6 +269,14 @@ async def _dispatch(args: argparse.Namespace) -> int:
     if why := _component_refusal(args.change, args.command):
         print(f"ERROR: {why}", flush=True)
         return EXIT_REFUSED
+    if args.command == "new" and args.no_epic_split and len(args.ticket_child) > 1:
+        print(
+            "ERROR: --no-epic-split keeps the work as one component, which can "
+            "deliver only one --ticket-child; give at most one, or drop "
+            "--no-epic-split. Nothing was written.",
+            flush=True,
+        )
+        return EXIT_REFUSED
     # Checked before anything is written (row S6).
     refs = _ticket_refs(args) if args.command == "resume" else {}
     if refs is None:
@@ -281,6 +290,20 @@ async def _dispatch(args: argparse.Namespace) -> int:
         command=args.command,
         ticket=args.ticket_ref,
     )
+    # A change already in the checkout is locked before the checkout is
+    # fetched into, fast-forwarded or written, so a second run changes nothing.
+    change_dir = (
+        where.project_dir / "specs" / "changes" / normalize_change_name(args.change)
+    )
+    with contextlib.ExitStack() as stack:
+        if change_dir.is_dir():
+            stack.enter_context(runlock.hold(change_dir / RUN_DIR, command=True))
+        return await _run_command(args, where, refs)
+
+
+async def _run_command(
+    args: argparse.Namespace, where: branch.Place, refs: dict[str, str]
+) -> int:
     branch.prepare(where)
     branch.adopt(where, args.project_dir, args.change, args.ticket_ref.strip())
     if args.command != "new":

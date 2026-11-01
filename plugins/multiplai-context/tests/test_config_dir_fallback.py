@@ -64,10 +64,3 @@ class TestCallSitesFallBack:
         from lib.reference_docs import reference_dir
 
         assert reference_dir() == vanilla / ".claude" / "reference" / "dev"
-
-    def test_fleet_jobs_config_dir_requires_existing(self, vanilla):
-        from lib.fleet_sources.jobs import config_dir
-
-        assert config_dir() is None  # ~/.claude does not exist yet
-        (vanilla / ".claude").mkdir()
-        assert config_dir() == vanilla / ".claude"

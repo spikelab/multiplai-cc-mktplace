@@ -231,8 +231,9 @@ def what_to_read(run: Run, prior: list[dict] | None = None) -> Reading:
     file. Otherwise, when the proposal or the use cases changed, every spec
     file too, as each spec may rest on them; else each spec file that changed,
     each one whose component's plan changed, each one a changed spec file names
-    (its component id or a capability name), and each one a finding in *prior*
-    cites. Every other spec file goes in by its capability names and
+    (its component id or a capability name), each one that names the id of a
+    component whose spec or plan was deleted, and each one a finding in *prior*
+    cites. A document deleted since the last check counts as changed. Every other spec file goes in by its capability names and
     requirement titles."""
     change_dir = run.config.change_dir
     digests = document_digests(run)
@@ -240,13 +241,20 @@ def what_to_read(run: Run, prior: list[dict] | None = None) -> Reading:
     saved = run.state.checked_digests
     if not saved:
         return Reading(digests, None, set(units))
-    changed = {k for k, v in digests.items() if saved.get(k) != v}
+    changed = {
+        k for k in digests.keys() | saved.keys() if saved.get(k) != digests.get(k)
+    }
     if changed & set(CHANGE_WIDE):
         return Reading(digests, changed, set(units))
     edited = [u for u in units if u in changed]
     full = set(edited) | {u for u in units if _plan_of(u) in changed}
     for unit in edited:
         full |= _cited_by(change_dir, (change_dir / unit).read_text(), units)
+    for gone in changed - digests.keys():
+        parent = PurePosixPath(_plan_of(gone)).parent
+        if parent.parent.name == "components":
+            word = _word(parent.name)
+            full |= {u for u in units if word.search((change_dir / u).read_text())}
     for finding in prior or []:
         full |= set(cited_units(change_dir, finding))
     return Reading(digests, changed, full)
@@ -499,20 +507,22 @@ def _row_text(row: tuple[str, ...]) -> str:
 
 def table_findings(run: Run) -> list[dict]:
     """A critical `format` finding for each table in a spec file whose header
-    row is a table's header row in `ticket.md` and whose cells differ from that
-    table's, whitespace aside: a table copied from the ticket must be copied
-    exactly (G14). Found in code, with no model call."""
+    row is a table's header row in `ticket.md` and whose cells differ from
+    every ticket table with that header, whitespace aside: a table copied from
+    the ticket must be copied exactly (G14). Found in code, with no model call."""
     change_dir = run.config.change_dir
     ticket = change_dir / TICKET_FILE
     if not ticket.is_file():
         return []
-    copied = {rows[0]: (n, rows) for n, rows in markdown_tables(ticket.read_text())}
+    copied: dict[tuple[str, ...], list[tuple[int, list]]] = {}
+    for n, rows in markdown_tables(ticket.read_text()):
+        copied.setdefault(rows[0], []).append((n, rows))
     found = []
     for unit in layout.units(change_dir):
         for n, rows in markdown_tables((change_dir / unit).read_text()):
-            if rows[0] not in copied or rows == copied[rows[0]][1]:
+            if rows[0] not in copied or any(rows == t for _, t in copied[rows[0]]):
                 continue
-            tn, expected = copied[rows[0]]
+            tn, expected = copied[rows[0]][0]
             found.append(
                 {
                     "category": "format",
@@ -787,6 +797,17 @@ def refuse_at_round_cap(run: Run) -> None:
     raise Stop(EXIT_BLOCKED, "round cap")
 
 
+def _not_accepted(run: Run, found: list[dict]) -> list[dict]:
+    """*found* without each finding a person accepted: the same category and
+    the same text, as `--accept` saved it."""
+    accepted = {
+        (f.get("category", ""), F.finding_text(f)) for f in run.state.accepted_findings
+    }
+    return [
+        f for f in found if (f.get("category", ""), F.finding_text(f)) not in accepted
+    ]
+
+
 async def check_reviewed(run: Run, revision: str) -> None:
     """The check after the specs review: reports, rewrites nothing, and blocks
     (exit 4) on a critical or major finding (rows S13, S17). After a block it
@@ -795,7 +816,9 @@ async def check_reviewed(run: Run, revision: str) -> None:
     step = run.state.step(NAME)
     later = step.outcome == "blocked" and bool(step.blocking_findings)
     listed = _open(step) if later else []
-    in_code = format_findings(run) + table_findings(run) + registry_findings(run)
+    in_code = _not_accepted(
+        run, format_findings(run) + table_findings(run) + registry_findings(run)
+    )
     earlier = _earlier(run, NAME)
     reading = what_to_read(run, listed)
     answer = await check(run, prior=listed, edited=True, reading=reading)
@@ -865,7 +888,9 @@ async def run_consistency(run: Run) -> None:
         await recheck(run, NAME, BLOCK_REASON)
         return
     print("PHASE:CONSISTENCY", flush=True)
-    in_code = format_findings(run) + table_findings(run) + registry_findings(run)
+    in_code = _not_accepted(
+        run, format_findings(run) + table_findings(run) + registry_findings(run)
+    )
     earlier = _earlier(run, NAME)
     reading = what_to_read(run)
     answer = await check(run, reading=reading)

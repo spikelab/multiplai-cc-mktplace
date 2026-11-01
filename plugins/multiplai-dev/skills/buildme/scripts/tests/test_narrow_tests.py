@@ -1079,9 +1079,39 @@ class TestNarrowCommands:
         (repo / "backend" / "pkg" / "widget.py").write_text("x = 2\n")
         (repo / "frontend" / "src" / "cart.ts").write_text("export const a = 2\n")
         assert self.narrow(repo, base) == (
-            "(cd backend && pytest -q tests/test_widget.py) && "
-            "(cd frontend && npx jest src/cart.test.ts)"
+            "sh -c '(cd backend && pytest -q tests/test_widget.py) && "
+            "(cd frontend && npx jest src/cart.test.ts)'"
         )
+
+    def test_a_two_part_command_runs_through_the_test_runner(
+        self, tmp_path, monkeypatch
+    ):
+        """The block and end gates hand this command to `run_test_suite`,
+        which runs an argv with no shell: each part must still run, in its
+        own directory."""
+        import sys
+
+        from build_pipeline.gates import run_test_suite
+
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        repo = tmp_path / "repo"
+        for d in ("a", "b"):
+            (repo / d).mkdir(parents=True)
+            (repo / d / "x.txt").write_text("1\n")
+        base = _repo(repo)
+        for d in ("a", "b"):
+            (repo / d / "x.txt").write_text("2\n")
+        touch = f"{sys.executable} -c \"open('ran', 'w')\""
+        command = narrow_test_command_multi(
+            [NarrowCommand("a", touch), NarrowCommand("b", touch)],
+            repo,
+            base,
+            True,
+            "make test",
+        )
+        code, output = run_test_suite(command, repo)
+        assert code == 0, output
+        assert (repo / "a" / "ran").exists() and (repo / "b" / "ran").exists()
 
     def test_a_backend_test_it_cannot_name_runs_the_backend_whole(self, repo):
         base = _repo(repo)
@@ -1089,7 +1119,8 @@ class TestNarrowCommands:
         (repo / "backend" / "pkg" / "tests.py").write_text("def test_t(): pass\n")
         (repo / "frontend" / "src" / "cart.ts").write_text("export const a = 2\n")
         assert self.narrow(repo, base) == (
-            "(cd backend && pytest -q) && (cd frontend && npx jest src/cart.test.ts)"
+            "sh -c '(cd backend && pytest -q) && "
+            "(cd frontend && npx jest src/cart.test.ts)'"
         )
 
     def test_nothing_selected_runs_the_whole_test_command(self, repo):

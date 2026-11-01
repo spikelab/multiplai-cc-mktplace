@@ -205,12 +205,12 @@ over the anchor:
 | Option | Default | Purpose |
 |--------|---------|---------|
 | `anthropic_api_key` | _(unset, sensitive)_ | API key fallback when the Agent SDK is unavailable. Marked sensitive — stored in the system keychain, never logged. |
-| `catalog_model` | `claude-sonnet-5` | Model for LLM catalog generation |
+| `catalog_model` | `claude-sonnet-5-5` | Model for LLM catalog generation |
 | `catalog_model_diary` | _(inherits)_ | Optional model override for the diary catalog |
 | `catalog_ttl_hours` | `168` | Hours a generated catalog stays valid before the read path flags it stale (advisory warning only — never regenerates inline) |
 | `diary_catalog_days` | `7` | Days of diary history the diary catalog covers |
 | `memory_router` | `token_overlap` | Context selection strategy: `token_overlap` (offline, instant), `llm` (one model call per prompt — 2.4× better at finding the right file, worse at injecting nothing), or `llm_hybrid` (`llm` picks, then `token_overlap`'s breadth gate and `anti_domains` veto filter the picks — opt-in and unmeasured; it can only remove files, so it trades recall for precision). See [Router latency](#router-latency) before choosing either LLM strategy. |
-| `router_model` | `claude-haiku-4-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
+| `router_model` | `claude-haiku-5-5` | Model for the `llm` router. Haiku by default — routing is cheap classification, so the smallest/fastest model keeps per-prompt latency down. Ignored under `token_overlap`. |
 | `router_thinking` | `false` | Extended thinking on router calls. Off by default and that is what makes LLM routing fit the hook budget: a cold call is 18.4 s with thinking on, 2.9 s with it off. Set `true`/`1`/`yes`/`on` to restore it. If the installed `multiplai-core` or `claude-agent-sdk` is too old to carry the setting, the plugin warns once, keeps thinking on, and keeps working. |
 | `extraction_thinking` | `false` | Extended thinking on the diary/learnings extraction call — structured parsing over a distilled transcript, so it gets the same 18.4 s → 2.9 s win as the router. Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
 | `checkpoint_thinking` | `false` | Extended thinking on the checkpoint writer's call (folds a transcript segment into the fixed six-section document). Set `true`/`1` to restore it. Same old-dependency behaviour as `router_thinking`. |
@@ -614,7 +614,6 @@ All commands are namespaced under `/multiplai-context:`.
 | `/multiplai-context:now` | Rebuild per-project `now/` status snapshots from recent diary entries. Run after a backfill, or any time the injected project state looks stale. |
 | `/multiplai-context:qmd-search` | Manually search the resources knowledge base via qmd (semantic + keyword) — the manual companion to the automatic per-prompt retrieval. |
 | `/multiplai-context:costs` | Report API-equivalent costs for Claude Code usage — per chat, skill, subagent, project, model, day, or branch. Also reports **per outcome** (`--group task --pr-join` = cost per merged PR; `--group build` = cost per DONE and per FAILED buildme block) and **cache utilization** (`--report cache`). Cross-model comparisons are per-outcome only — different models tokenize differently, so a cheaper per-token model that loops twice is more expensive. Collects fresh data from session transcripts, then reports from the cost ledger. Requires `enable_costs`. Interface pinned by [`skills/costs/CONTRACT.md`](skills/costs/CONTRACT.md). |
-| `/multiplai-context:fleet-status` | **What is actually blocked on me?** One ranked snapshot of everything in flight — agent sessions waiting on an answer, open PRs with CI and review state, dirty or unpushed checkouts, background jobs, and the pending backlog. Ranked by what needs a decision only you can make (approved PR → red CI → stacked PRs → a session that asked a question → collisions), capped at 8 items, with the full report one `--full` away. Read-only: it merges nothing, kills nothing, deletes nothing. Needs `git`; `gh` is optional and its absence reports "not read", never "none". |
 | `/multiplai-context:memory-bank` | Work with **shared memory banks** — git repositories of memory files a team or household shares. `list` and `sync` subscribed banks, `check` for cross-bank collisions, `contribute` a dream item as a pull request on the bank, and `adopt` — the migration that moves personal memory into a bank and deletes the local copy. `contribute` and `adopt` are dry-run without `--apply`; adoption never deletes a file the bank does not already contain line for line. See [Shared memory banks](#shared-memory-banks). |
 | `/multiplai-context:config-audit` | **Subtractive** config/rules review on a **60-day** cadence (pinned to how often models ship, not to how fast config rots — what the audit removes is scaffolding a newer model no longer needs) — enumerates the active config surface (global + workspace `CLAUDE.md`s, `settings.json` env/permissions, hook registrations, memory-file standing rules), classifies each rule as still-serving / obsolete / model-constraining, and writes a removals-first proposal to `.multiplai/dreams/config-audit-YYYY-MM-DD.md`. Never applies changes; stamps `config_audit_state.yaml` to close the SessionStart nudge gate. |
 
@@ -1299,7 +1298,7 @@ injected on *every* source.
 
 Then, in this order, always:
 
-1. **GC the registry** (see [When entries are collected](#5-when-entries-are-collected)) — before anything is written, so a
+1. **GC the registry** (see [When entries are collected](#4-when-entries-are-collected)) — before anything is written, so a
    just-started session is never a GC candidate.
 2. **Record the `start` event**, which also clears any `disposition`:
    picking a session back up makes "parked" obsolete by definition, and
@@ -1313,9 +1312,7 @@ Then, in this order, always:
    `enable_costs`)*, the **extraction drain** for markers left by earlier
    sessions, and the **memory maintainer** *(24h gate, checked before
    spawning so 95% of sessions pay nothing)*.
-6. Write the fleet view — in-process, since it is a pure read of
-   `sessions/` + `checkpoints/` with no model call.
-7. Emit whichever nudges are due: dream *(>24h **and** unprocessed
+6. Emit whichever nudges are due: dream *(>24h **and** unprocessed
    learnings on disk)*, config audit *(>60 days)*, prospective intentions
    *(their own due date is the gate — no cadence)*.
 
@@ -1348,8 +1345,7 @@ other Stop hooks are unaffected.
 
 #### Stage 4 — when it waits for you (`Notification`)
 
-One job: stamp the entry with a `notification` event. That is what makes
-the session read as **Needs you** in the fleet view, and it is the hub's
+One job: stamp the entry with a `notification` event. It is the hub's
 push trigger. No LLM, no state migration.
 
 #### Stage 5 — when the window fills
@@ -1381,14 +1377,8 @@ discard the transcript.
 Two observers, neither of them the session. It has its own section:
 [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
 In brief: a clean quit fires `SessionEnd` and is recorded at once. Nothing
-inside the session records a reboot, a closed terminal, a `docker kill` or
-an OOM — but since 0.22.0 the kit launcher writes the running container
-names on every launch, and a container missing from a reading taken after
-the session's last event is proof it is over. What is left over is the
-session you simply walked away from: still running, just quiet, filed as
-**idle** after 12h. That one is a conservative guess rather than a claim
-that it died, which is why idle is counted but never ranked — nor, since
-0.21.0, listed.
+records a reboot, a closed terminal, a `docker kill` or an OOM; those
+entries age out under the 30-day window.
 
 #### Stage 7 — the drain
 
@@ -1432,18 +1422,12 @@ The disposition is gated on the **final** chunk specifically: a partial
 extraction leaves it at the default rather than writing a guess as a
 fact, because a fabricated `active` would silently strip a real `parked`.
 
-#### Stage 9 — how it is seen, and forgotten
+#### Stage 9 — how it is forgotten
 
-The fleet view (`AGENTS.md`) is regenerated from the two stores every
-time a session starts and every time the host drain runs. It is pure
-aggregation — delete the file and the next pass rebuilds it
-byte-for-byte. What is listed and what counts as a front is
-[What you actually see](#4-what-you-actually-see).
-
-Entries are then collected on a schedule that depends on how the session
-ended — 7 days for an observed or recorded end, 30 for one that might
+Entries are collected on a schedule that depends on how the session
+ended — 7 days for a recorded end, 30 for one that might
 still be alive, never for a parked one. See
-[When entries are collected](#5-when-entries-are-collected).
+[When entries are collected](#4-when-entries-are-collected).
 
 #### Branch points at a glance
 
@@ -1462,87 +1446,6 @@ Everything above that can go two ways, in one table:
 | which drain got there first | in-session / host *(kit)* | atomic rename |
 | extraction outcome | diary + disposition + retire · partial · requeue · quarantine | the model call |
 | disposition | `active` · `parked` · `done` | how you left, read from the transcript |
-| fleet grouping | Needs you · Working · Parked (listed) · Idle (counted only) · finished (neither) | status × disposition |
-
-#### A worked example — two sessions, one line of output
-
-Two tabs on a Tuesday. **A** is a bugfix in `PROJECTS/DolceBot` that you
-finish and quit out of. **B** is a refactor in `knowhere` that asks you a
-question at 12:40, right as you leave for lunch — and you never go back
-to that tab.
-
-| Time | Session A (`DolceBot`) | Session B (`knowhere`) |
-|---|---|---|
-| 09:02 | `./claude.sh` → `SessionStart(startup)`; entry created, `last_event: start` | — |
-| 09:05 | first reply → `Stop` → `last_event: stop` | — |
-| 11:30 | — | launched; `SessionStart(startup)`, `last_event: start` |
-| 12:40 | — | Claude asks a question → `Notification` → `last_event: notification` |
-| 13:10 | done. **Ctrl-C Ctrl-C** → `SessionEnd` writes `last_event: end` and an extraction marker | still open, still waiting |
-| 13:10 | the host drain picks up that marker → detached extraction → diary entry, learnings, `disposition` | — |
-
-Now the readings. A is `ended`, so it drops off the board entirely. B is
-the whole question:
-
-| When | B's group | in the `/fleet-status` digest |
-|---|---|---|
-| 13:15 Tue — 35 min after B's last event | **Needs you** | ranked item: B, waiting on your answer |
-| 01:00 Wed — 13h quiet | **Idle** — counted in the `AGENTS.md` header, not listed, not a front | `1 idle (oldest 13h)` on the in-flight line |
-| following Tuesday | still **Idle**; still only a number | unchanged |
-| +30 days | entry GC'd — B disappears | unchanged |
-
-**B never becomes `ended`, and that is correct here** — B's tab is still
-open, so its container is still in every roster the launcher writes, and
-`idle` is the honest reading: quiet for 13 hours, not dead. No hook fires
-for a session that is merely sitting there.
-
-Close that tab, though, and B is `ended` at the next launch — not
-thirteen hours later, and not on a guess. That is the whole of what the
-roster buys: it is the difference between "quiet" and "gone", which
-before 0.22.0 read the same.
-
-That is why counting and ranking are kept apart. The digest does **not
-rank** B, because a tab that went quiet has no claim on your attention
-while a session waiting on an answer does. Every entry the system is
-unsure about lands on the counted-but-not-ranked side, which is what
-keeps the list you actually read honest.
-
-Its **checkpoint is untouched** either way. `data/checkpoints/<sid>/` is
-still on disk with B's intent, next action and files in it, and the diary
-is where "what did that session decide" is answered. Dropping B from the
-listing costs you nothing you cannot get back by name.
-
-And if you reboot the Mac on Wednesday, B looks **exactly the same** —
-which is the point of [How the end of a session is detected](#3-how-the-end-of-a-session-is-detected).
-Dead and dormant are indistinguishable from outside, so both are filed
-as the harmless one.
-
-**Why this matters — real numbers.** On a registry of 118 entries
-(82 ended, one session actually running), the pre-0.15.1 line read:
-
-```
-36 fronts · 4 need you · oldest 19d · 8 collisions
-```
-
-The same registry, same instant, with 0.15.1's counting:
-
-```
-7 fronts · 4 need you · oldest 7h
-```
-
-The 29 that vanished are B-shaped: tabs that went quiet days or weeks
-ago. At the time they were still listed in `AGENTS.md` under **Idle** —
-nothing was hidden — they simply stopped being counted as things needing
-you. (0.21.0 took the second step and dropped the section too, once the
-same registry showed 36 idle entries to 17 fronts: the graveyard *was*
-the file. They are still counted in the header.) `oldest` fell
-from 19d to 7h for the same reason: it now measures the oldest *front*,
-not the oldest corpse. All 8 collisions were between pairs of sessions
-last heard from over a week ago, which is shared history, not a live
-conflict over a file.
-
-Worth noting what did **not** contribute: nothing outside the session
-was consulted. The entire improvement is counting the entries already on
-disk correctly, which is why it works identically on vanilla Claude Code.
 
 ### Key libraries
 
@@ -1707,46 +1610,30 @@ what it wrote is indistinguishable from one that quietly discards good items.
 
 *How each session's state is decided, and by whom.*
 
-Running several sessions at once, the question at the end of the day is
-*which of these needs me?* Everything below exists to answer that one
-question honestly. Read this section before changing any of it — the
-pieces are individually small and it is the *interaction* that gets
-confusing.
-
 #### 1. What is on disk
 
-One directory, four kinds of file, and a strict rule about who may
+One directory, three kinds of file, and a strict rule about who may
 write which:
 
 | Path | Written by | Holds |
 |---|---|---|
 | `data/sessions/<sid>.json` | this plugin's lifecycle hooks | the registry entry — project, cwd, container hostname, `in_container`, `started_at`, `last_event`, `disposition` |
-| `data/live_containers.json` | **multiplai-kit's launcher**, on the host | which containers were running, and when it looked. Read-only here; absent without the kit |
 | `data/sessions/<sid>.adopt` | the multiplai hub | nothing. Its existence means "the hub has taken the driver seat" |
 | `data/checkpoints/<sid>/checkpoint.md` | this plugin's checkpoint writer | what the session is *doing* — intent, next action, files in hand |
 
 **Only this plugin writes a registry entry.** Nothing outside a session
 may edit one — a second writer of session *state* is how two stores start
-disagreeing silently. What an outside observer may do is deposit its own
-evidence in its own file, which this plugin then reads: the hub's `.adopt`
-marker is a one-bit channel that cannot corrupt anything, and the
-launcher's `live_containers.json` is a dated observation, never a verdict
-about any particular session. Both are inputs to a derivation here; the
-entry stays single-writer.
+disagreeing silently. The hub's `.adopt` marker is a one-bit channel in
+its own file that cannot corrupt anything; the entry stays single-writer.
 
-`data/AGENTS.md` and `data/fleet.json` are **outputs, never inputs** —
-pure aggregation over the stores above, no LLM call. Delete them and
-the next run reconstructs them byte-for-byte.
+#### 2. Two questions, two fields
 
-#### 2. Three questions, three fields
-
-They get conflated constantly. They are independent:
+They are independent:
 
 | Question | Field | Values |
 |---|---|---|
-| Is its process running, and doing what? | `status` (derived) | `working` · `waiting_input` · `idle` · `ended` |
+| Is its process running, and doing what? | `status` (derived by the hub) | `working` · `waiting_input` · `idle` · `ended` |
 | How did *you* leave it? | `disposition` (on the entry) | `active` · `parked` · `done` |
-| So what do I see? | group (derived from both) | **Needs you** · **Working** · **Parked** · **Idle** · not listed |
 
 `status` is frozen — it is the vocabulary the multiplai-gui API contract
 speaks, so nothing here may coin a fifth value. `disposition` is a
@@ -1761,150 +1648,35 @@ to `active` whenever the model is unsure.
 
 #### 3. How the end of a session is detected
 
-This is the part that surprises people, so it is worth stating flatly:
-**a hook is code running inside a session, and a session cannot report
-its own death.** Only two things observe it, and neither is the session:
+**A hook is code running inside a session, and a session cannot report
+its own death.**
 
-| How it stopped | Fires | Recorded as | Noticed |
-|---|---|---|---|
-| `/exit`, Ctrl-D, Ctrl-C Ctrl-C — a clean quit | `SessionEnd` | `last_event.kind = end` | at once |
-| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing | its container is missing from the next roster |
-| Still running; you walked away | nothing | nothing | still listed — quiet ⇒ `idle` after 12h |
-
-**The roster is what separates rows 2 and 3**, which used to be
-indistinguishable and both decayed to `idle`. multiplai-kit's launcher
-writes the running container names to
-`.multiplai/data/live_containers.json` on every launch — before it
-starts your session container and again after that container exits. When
-a reading is *newer* than a session's last event and that session's
-container is not in it, the session is over. Nothing is inferred; the
-host looked.
-
-Everything about it is conditional on evidence, and its absence changes
-nothing:
-
-- **No roster file** — no kit, or a kit that has not launched since —
-  and the quiet-window behaviour below applies unchanged.
-- **A roster older than a session's last event** decides nothing about
-  that session. A reading can only retire what already existed when it
-  was taken.
-- **Only container sessions are judged.** Entries record an
-  `in_container` flag, because outside a container the hostname is a
-  *machine* name and no string comparison could tell it from a container
-  name — so a `--local` session, or one run through `claude-wrapped` on
-  the Mac, would otherwise be declared dead by a roster that could never
-  have listed it. Entries written before 0.22.0 are not judged either.
-- **A corrupt or unreadable roster** is ignored rather than trusted.
-- **Parked sessions are never retired this way.** Parking is a stated
-  intent; the container being gone is exactly what you meant.
-
-The quiet window still governs everything the roster cannot see — a
-session whose container is alive but which has not spoken. The threshold
-is **12h**, and it was 24h until 0.21.0. A day sounds conservative until
-you notice it spans the previous evening: every container you opened
-after dinner still claimed a slot under **Working** the next morning,
-which read as nine running agents where there was one. Half a day is
-roughly one working session. And quiet is still treated as a **guess,
-deliberately the conservative one** — the entry is filed as `idle`, not
-declared over, because it may just be thinking or you may be at lunch.
-What that buys is that `idle` is *never a front*.
-
-*A different design was tried and rejected.* 0.15.1 briefly had the kit
-launcher drop an `.exited` marker beside the entry when `docker run`
-returned. It was removed before release once measured: a clean quit
-already records `end`, and a reboot or a closed terminal kills the
-launcher along with the container, so the marker only ever covered
-`docker kill` and OOM-kills — worth zero entries on a real 118-entry
-registry. The roster is not that design. A marker is a **write on the
-way out**, so it needs the launcher to survive the thing it is reporting;
-a roster is a **poll**, and it does not care whether any launcher
-survived. That single difference is why it reaches the cases the marker
-could not — 49 stuck entries on the registry that motivated it.
-
-#### 4. What you actually see
-
-Listing and counting are deliberately kept apart:
-
-| Group | Listed in `AGENTS.md` | A **front** (counted by the digest) |
+| How it stopped | Fires | Recorded as |
 |---|---|---|
-| Needs you | yes | **yes** |
-| Working | yes | **yes** |
-| Parked | yes | **yes** |
-| Idle | no — a count in the header | no |
-| ended / `done` | no (counted as "finished") | no |
+| `/exit`, Ctrl-D, Ctrl-C Ctrl-C — a clean quit | `SessionEnd` | `last_event.kind = end` |
+| Reboot, closed terminal, `docker kill`, OOM-kill, crash | **nothing** | nothing |
+| Still running; you walked away | nothing | nothing |
 
-`AGENTS.md` **lists the fronts**: what has a claim on you. The
-`/multiplai-context:fleet-status` digest ranks the same set. Idle is the
-difference, and on a real registry it is most of the entries — 36 to 17
-on the reading that prompted 0.21.0, each up to forty lines long, which
-put the answer at the top of the file and a graveyard under it. It is now
-a number in the header (`… · 36 idle, not listed`) and nothing more.
-(`fleet.txt`, the old one-line status-bar count of the same fronts, is
-retired — a count with no referent said there was a fire without saying
-where.)
+Rows 2 and 3 look the same from outside, so both keep the longer
+collection window below.
 
-What that gives up is "where did I leave that thing last Tuesday", which
-an idle entry's checkpoint used to answer in passing. Nothing was
-deleted: `data/checkpoints/<sid>/checkpoint.md` is still there, and the
-diary is the place that question is supposed to be asked.
-
-Parked counts as a front on purpose. Its process is usually long gone,
-but "I am coming back to this" is a claim on you in a way that a tab
-which merely went quiet is not — that is the whole difference between
-parking something and abandoning it. It is also why parking is the way
-to keep something on this list.
-
-An entry does **not** list its involved files. It did, shortened and
-capped at six, and the line still never earned its space: repeated under
-every heading it wrapped across the terminal and pushed the next agent's
-heading off screen, which is the same bulk this file was trimmed to
-remove. The paths are still collected and still absolute — `fleet.json`
-ships them, and collision detection reads them to answer the one question
-the line stood in for, on its own line, below.
-
-A **Collisions** section names every file two agents both have in hand.
-Both holders must be `Working` or `Parked` *and* have been heard from
-within 24h. In practice unparked work is bounded by the shorter idle
-window, since it leaves `Working` at 12h; parked work keeps the full 24,
-because uncommitted edits nobody is watching hold a file harder, not
-less. A file two sessions both touched last week is shared history.
-
-#### 5. When entries are collected
+#### 4. When entries are collected
 
 | Entry | Kept for |
 |---|---|
 | `disposition: parked` | forever — parking it is you saying you will be back |
 | extraction still queued or in flight | until the extraction finishes |
-| **container confirmed gone by the roster** | **1 hour** |
 | ended cleanly (`SessionEnd` fired) | 7 days |
 | anything else (might still be alive) | 30 days |
 
 The 30-day window exists for sessions that *might* still be running —
 and since nothing outside a session can prove one is not, every entry
-that did not quit cleanly gets it. The roster is exactly that proof
-where the kit launcher is installed: it records the running containers
-on the host, so an entry whose container is absent from a reading taken
-*after* that entry last spoke is over as a matter of observation. Those
-are collected on the next session start rather than sitting out a month.
-The hour is not doubt about the roster — it is room for the deferred
-extraction, which writes `disposition` minutes after a session exits and
-only protects an entry once its marker is on disk.
-
-With no kit and no roster, nothing above changes: the two windows are
-all there is, as before.
+that did not quit cleanly gets it.
 
 Parked being exempt closes a real asymmetry: transcripts survive a year,
 so `claude --resume <id>` works months later, but registry entries used
 to age out in 7–30 days. A parked idea stayed *resumable* while becoming
 *invisible*.
-
-#### 6. When it refreshes
-
-`SessionStart` regenerates both files in-process (no model call, so it
-costs a few file reads), and `drain_extractions.py` does the same on the
-host after a container exits — so the view is current at session start
-**and** after the last tab closes. `scripts/fleet_status.py --full` writes
-them on demand and prints the whole picture.
 
 ## Observability
 

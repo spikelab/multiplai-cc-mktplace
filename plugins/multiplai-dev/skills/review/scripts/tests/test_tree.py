@@ -416,6 +416,33 @@ async def test_a_resumed_tree_review_asks_only_the_missing_pairs(tmp_path, monke
     assert [label for label, _ in again.calls] == ["find:tests", "find:tests"]
 
 
+async def test_every_tree_finder_failing_leaves_a_checkpoint_that_resume_asks_again(
+    tmp_path, monkeypatch
+):
+    from review_pipeline.state import STATE_FILE, load_state
+
+    repo = tree_repo(tmp_path)
+    state = _tree_state(repo)
+    groups = file_groups(state.target)
+    monkeypatch.setattr(find_stage, "file_groups", lambda t: groups[:2])
+    dims = ("diff-bugs", "callers")
+    ctx = _ctx(tmp_path, dims=dims)
+    ctx.target_dir = tmp_path / "out"
+    ctx.target_dir.mkdir()
+    monkeypatch.setattr(
+        sdk, "agent_call_structured", Fake(fail={"find:diff-bugs", "find:callers"})
+    )
+    with pytest.raises(sdk.AgentCallError, match="every finder failed"):
+        await run_find(state, ctx)
+
+    saved = load_state(ctx.target_dir / STATE_FILE)
+    assert saved.finder_results == {}  # the checkpoint holds no failed group result
+    again = Fake()
+    monkeypatch.setattr(sdk, "agent_call_structured", again)
+    await run_find(saved, ctx)
+    assert len(again.calls) == 4  # every group finder is asked again
+
+
 async def test_a_tree_review_records_one_check_per_group_and_times_each_call(
     tmp_path, monkeypatch
 ):

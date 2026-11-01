@@ -132,6 +132,19 @@ def _record_partial(error: BaseException, label: str) -> None:
     partial = getattr(error, "partial", None)
     if partial is not None:
         budget.record(partial.usage, label=label)
+        # All zeros means the CLI's final ResultMessage never arrived, so the
+        # call's spend is unknown, not nothing.
+        if not any(
+            getattr(partial.usage, name, 0)
+            for name in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+                "cost_usd",
+            )
+        ):
+            budget.record_unaccounted(label)
     elif isinstance(error, asyncio.CancelledError):
         # Core/providers do not always expose partial usage on cancellation.
         # Preserve that uncertainty rather than reporting the call as free.
@@ -146,6 +159,7 @@ async def llm_call(
     max_turns: int = 1,
     system_prompt: str | None = None,
     allowed_tools: list[str] | None = None,
+    cwd: str | None = None,
     call_timeout: float = DEFAULT_LLM_CALL_TIMEOUT_S,
     budget_label: str = "",
 ) -> str:
@@ -181,6 +195,7 @@ async def llm_call(
                 max_turns=max_turns,
                 model=model,
                 effort=effort,
+                cwd=cwd,  # None → run_agent's isolated hook-sessions dir
                 timeout_s=call_timeout,
                 label="llm",
                 component="buildme",
