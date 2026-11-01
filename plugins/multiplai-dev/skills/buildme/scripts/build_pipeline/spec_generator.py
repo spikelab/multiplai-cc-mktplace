@@ -35,7 +35,7 @@ from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
 
-from . import budget
+from . import block_inputs, budget
 from .change_manager import (
     ARTIFACT_DAG,
     OLD_PLAN_FILE,
@@ -902,7 +902,7 @@ def scan_no_behaviour_blocks(tasks_path: Path) -> list[dict]:
 
     if not tasks_path.exists():
         return []
-    bodies = _block_bodies(tasks_path.read_text())
+    bodies = _block_bodies(block_inputs.strip(tasks_path.read_text()))
     findings = []
     for block in parse_blocks(tasks_path):
         if block.produces:
@@ -1609,7 +1609,7 @@ def _plan_hashes(config) -> dict[str, str]:
         }
     )
     hashes = {
-        name: hashlib.sha256(p.read_bytes()).hexdigest()
+        name: hashlib.sha256(_planned_bytes(name, p)).hexdigest()
         for name, p in files.items()
         if p.is_file()
     }
@@ -1619,6 +1619,17 @@ def _plan_hashes(config) -> dict[str, str]:
     ).hexdigest()
     hashes["granularity"] = hashlib.sha256(config.task_granularity.encode()).hexdigest()
     return hashes
+
+
+def _planned_bytes(name: str, path: Path) -> bytes:
+    """What *path* hashes as: its bytes, but tasks.md without the input lists
+    buildme writes into it after the plan check (`block_inputs`), so writing
+    them changes no revision."""
+    data = path.read_bytes()
+    if name != "tasks.md" or block_inputs.START.encode() not in data:
+        return data
+    text = data.decode("utf-8", "surrogateescape")
+    return block_inputs.strip(text).encode("utf-8", "surrogateescape")
 
 
 def _revision(hashes: dict[str, str]) -> str:
@@ -1917,7 +1928,7 @@ async def rewrite_plan(
                     }
                 ],
             )
-        if found := scan_placeholders(tasks_path.read_text()):
+        if found := scan_placeholders(block_inputs.strip(tasks_path.read_text())):
             reject("Rewritten tasks still contain placeholder findings", found)
         if found := scan_no_behaviour_blocks(tasks_path):
             reject("Rewritten tasks still contain blocks with no behavior", found)

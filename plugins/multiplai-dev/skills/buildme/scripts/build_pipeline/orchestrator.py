@@ -349,6 +349,17 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                     state.advance_to(phase, state_path)
                 print(f"PHASE:{phase.name}:COMPLETE", flush=True)
                 board.record(config, state, phase, progress=progress)
+            # What each block's agents get besides its text, listed in its
+            # section of tasks.md for whoever reads the plan; no revision moves.
+            from . import block_inputs
+            from .spec_generator import _commit_change_dir
+
+            if block_inputs.write_inputs(config):
+                _commit_change_dir(
+                    config,
+                    config.change_dir,
+                    f"docs(specs): {config.change_name} — list each block's inputs",
+                )
 
         # Reassess size after every plan rewrite. A plan that should be split
         # stops here (exit 3) with split-proposal.md, until --accept-size.

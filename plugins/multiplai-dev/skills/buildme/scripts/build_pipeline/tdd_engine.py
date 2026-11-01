@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from . import board, git_ops, review_rounds, stop_record
+from . import block_inputs, board, git_ops, review_rounds, stop_record
 from . import budget as budget_mod
 from .budget import BudgetExceededError
 from .change_manager import (
@@ -809,7 +809,9 @@ def parse_blocks(tasks_path: Path) -> list[BlockInfo]:
         log.warning("tasks.md not found at %s", tasks_path)
         return []
 
-    text = tasks_path.read_text()
+    # The input lists buildme writes into each block (`block_inputs`) are
+    # not the block's text: its agents get those inputs themselves.
+    text = block_inputs.strip(tasks_path.read_text())
     blocks: list[BlockInfo] = []
 
     # Split on ## N. headers

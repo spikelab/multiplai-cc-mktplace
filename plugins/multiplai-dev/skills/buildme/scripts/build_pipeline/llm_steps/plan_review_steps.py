@@ -19,6 +19,7 @@ from multiplai_core.specs import change_root
 
 from build_pipeline.budget import BudgetExceededError
 
+from .. import block_inputs
 from ..change_manager import (
     plan_path,
     reads_change_plan,
@@ -866,7 +867,9 @@ def _scan_findings(change_dir: Path) -> list[PlanReviewFinding]:
             claim=f["description"],
             suggestion=f["suggestion"],
         )
-        for f in scan_placeholders(tasks.read_text() if tasks.exists() else "")
+        for f in scan_placeholders(
+            block_inputs.strip(tasks.read_text()) if tasks.exists() else ""
+        )
     ]
     return placeholders + [
         PlanReviewFinding(
