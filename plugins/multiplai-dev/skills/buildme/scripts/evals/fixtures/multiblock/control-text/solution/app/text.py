@@ -1,8 +1,6 @@
-import re
-
-
 def slug(text):
-    return "-".join(re.sub(r"[^a-z0-9 ]", "", text.lower()).split())
+    kept = "".join(c for c in text.lower() if c.isalpha() or c.isdigit() or c == " ")
+    return "-".join(kept.split())
 
 
 def word_count(text):

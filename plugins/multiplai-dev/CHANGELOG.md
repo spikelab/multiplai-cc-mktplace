@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.151.1] - 2026-11-01
+
+### Fixed
+
+- **buildme**: the notes-forward benchmark's `control-text` fixture now
+  expects `slug` to keep accented letters, as its requirement says ("dropping
+  every character that is not a letter, digit or space"). Its acceptance test
+  and reference solution kept only ASCII letters, so a build that followed the
+  requirement was scored as a failure buildme claimed as a success.
+
 ## [0.151.0] - 2026-11-01
 
 ### Added
