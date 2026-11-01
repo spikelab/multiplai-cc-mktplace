@@ -1476,7 +1476,7 @@ PLANNING_KEY = "planning"
 
 # Top-level config.yaml sections no planning step reads: how the TDD loop runs
 # its tests, how an epic runs its children, the git switches, `review:`
-# (`review.plan_approval`, stop 4), and the settings of the steps after
+# (whose `plan_approval` key is no longer read), and the settings of the steps after
 # planning: the fixer of PR comments (`findings:`), the per-block code review
 # (`code_review:`; its `model` is also the planning check's fallback model,
 # which picks who checks the plan, not what the plan says) and the test
@@ -1484,9 +1484,7 @@ PLANNING_KEY = "planning"
 # `stacks` sets the stack that picks the reference docs the design and tasks
 # prompts inline (`BuildConfig.reference_docs_text`). They are cut out of the plan's hash and
 # stored nowhere, so editing one mid-build changes no plan revision and marks
-# nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md):
-# turning stop 4 on for a planned build asks for an approval of that plan
-# instead of writing a new one.
+# nothing stale (rows S3, S4 of plan-buildme-subdir-narrow-tests-2026-10-28.md).
 UNPLANNED_SECTIONS = (
     "tdd",
     "epic",

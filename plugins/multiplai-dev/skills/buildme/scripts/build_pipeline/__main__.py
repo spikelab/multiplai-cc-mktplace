@@ -180,9 +180,9 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--approve-plan",
         action="store_true",
-        help="Under review.plan_approval: commit your approval of the "
-        "implementation plan at its current revision (Approved-by: git "
-        "user.name) and go on",
+        help="Commit your approval of the implementation plan at its "
+        "current revision (Approved-by: git user.name) and go on; for a "
+        "change with components, the change's plan, on its feature branch",
     )
     build.add_argument(
         "--epic-child",

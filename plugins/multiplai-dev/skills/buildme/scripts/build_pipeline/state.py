@@ -447,7 +447,7 @@ class BuildState(BaseModel):
     # acceptance instead of stopping again. Default False.
     size_accepted: bool = False
     # The approval commit stop 4 found for the plan revision it names
-    # (`orchestrator._plan_approval_gate`, under `review.plan_approval`). A new
+    # (`orchestrator._plan_approval_gate`, unless --auto). A new
     # plan revision clears it (`spec_generator.reconcile_plan`). None in older
     # checkpoints and while the build waits for an approval.
     plan_approval: PlanApproval | None = None

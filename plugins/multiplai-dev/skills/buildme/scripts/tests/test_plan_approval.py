@@ -1,5 +1,5 @@
 """Stop 4: an engineer approves the implementation plan before TDD starts
-(`orchestrator._plan_approval_gate`, `review.plan_approval`).
+(`orchestrator._plan_approval_gate`), unless the build runs with --auto.
 
 Chunk E of plan-multiplai-dev-pipeline-viewer-2026-10-28.md: items E1-E3 and
 E6, and rows S8, S9 and S10 of its Stop and resume table (S12, the epic
@@ -62,7 +62,8 @@ def _args(project: Path, **over) -> argparse.Namespace:
 
 class Build:
     """A project repo with a change planned up to the plan check, built in
-    place (spec-only) so every run ends at the gate or just after it."""
+    place (spec-only) so every run ends at the gate or just after it.
+    *gate* False runs it with --auto, which skips the gate."""
 
     def __init__(self, root: Path, *, gate: bool = True):
         self.repo = make_repo(root)
@@ -81,17 +82,17 @@ class Build:
         config = BuildConfig(
             project_dir=self.repo,
             change_name=CHANGE,
-            auto=True,
+            auto=not self.gate,
             spec_only=True,
             skip_research=True,
             git=GitToggles(worktree=False),
         )
         config.specs_dir = self.repo / "specs"
-        config.plan_approval = self.gate
         return config
 
     async def run(self, capsys, **over) -> tuple[int, str]:
         capsys.readouterr()
+        over.setdefault("auto", not self.gate)
         rc = await run_orchestrator(self.config(), _args(self.repo, **over))
         return rc, capsys.readouterr().out
 
@@ -155,26 +156,29 @@ def _ended(out: str) -> list[str]:
 # --- E1 ---------------------------------------------------------------------------
 
 
-def test_config_plan_approval_is_off_unless_set_true(tmp_path):
+def test_config_review_plan_approval_is_no_longer_read(tmp_path, caplog):
+    """The gate is on unless --auto; a config that still sets the old key is
+    told so, whatever its value."""
     specs = tmp_path / "specs"
     specs.mkdir()
-    cases = {
+    for text, warned in {
         "": False,
         "review:\n  plan_approval: true\n": True,
-        "review:\n  plan_approval: false\n": False,
-        "review:\n  plan_approval: yes please\n": False,
-    }
-    for text, want in cases.items():
+        "review:\n  plan_approval: false\n": True,
+    }.items():
+        caplog.clear()
         (specs / "config.yaml").write_text("context: x\n" + text)
         config = BuildConfig(project_dir=tmp_path, change_name=CHANGE)
         config.specs_dir = specs
         config._load_specs_config()
-        assert config.plan_approval is want, text
+        assert not hasattr(config, "plan_approval")
+        said = "review.plan_approval in config.yaml is no longer read" in caplog.text
+        assert said is warned, text
 
 
-def test_turning_the_gate_on_changes_no_plan_revision(tmp_path):
-    """`review:` is cut out of the plan's hash: turning stop 4 on for a
-    planned build asks for an approval of that plan, never a new plan."""
+def test_the_old_review_key_changes_no_plan_revision(tmp_path):
+    """`review:` is cut out of the plan's hash: a config that still sets
+    `review.plan_approval` keeps the plan's revision."""
     from build_pipeline.spec_generator import _config_hashes
 
     specs = tmp_path / "specs"
@@ -192,8 +196,8 @@ def test_turning_the_gate_on_changes_no_plan_revision(tmp_path):
 
 @pytest.mark.asyncio
 async def test_gate_off_changes_nothing(tmp_path, capsys):
-    """Off, the build runs exactly as one without the key, and
-    `--approve-plan` commits nothing."""
+    """With --auto, the build runs exactly as one never told to approve,
+    and `--approve-plan` commits nothing."""
     off = Build(tmp_path / "off", gate=False)
     rc, out = await off.run(capsys, approve_plan=True)
     assert rc == 0
@@ -422,7 +426,6 @@ def test_gate_unit_saved_approval_for_this_revision_skips_git(tmp_path, monkeypa
 
     config = BuildConfig(project_dir=tmp_path, change_name=CHANGE)
     config.specs_dir = tmp_path / "specs"
-    config.plan_approval = True
     state = BuildState(
         change_name=CHANGE,
         tier="advanced",
