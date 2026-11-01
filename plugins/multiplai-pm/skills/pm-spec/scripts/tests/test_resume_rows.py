@@ -28,6 +28,7 @@ from conftest import (
     Killed,
     agent,
     change_dir,
+    component,
     git,
     make_repo,
     meta,
@@ -514,6 +515,112 @@ def test_S9_edits_between_a_stop_and_the_resume_are_kept(repo, model, tmp_path, 
     assert git(worktree(repo), "rev-parse", "HEAD") == git(
         origin(repo), "rev-parse", BRANCH
     )
+
+
+# --- a proposal edited at the components stop -------------------------------------
+
+NARROWED = proposal(title="Request throttling for the API only", extra=" NARROWED.")
+ONE_LEFT = {
+    "reason": "Only the API is left.",
+    "components": [component("api", title="Throttle the API")],
+}
+
+
+def test_a_proposal_edited_at_the_components_stop_is_split_again(
+    repo, model, tmp_path, capsys
+):
+    model["components"] = [TWO, ONE_LEFT]
+    go(repo, FLOW[:2])
+    cdir = change_dir(repo)
+    push_edit(repo, tmp_path / "pm", "proposal.md", NARROWED)
+    capsys.readouterr()
+
+    # The old split and the files pm-spec wrote from it are gone; the use
+    # cases and the components are asked for again, and the run stops again.
+    calls = len(model.calls)
+    assert run(repo, *RESUME) == 3
+    assert model.labels()[calls:] == ["spec:use-cases", "components"]
+    assert "SPEC:REVIEW:components" in capsys.readouterr().out
+    assert "NARROWED" in model.exactly("components")[1]
+    assert "NARROWED" in model.exactly("spec:use-cases")[1]
+    assert not (cdir / "components").exists()
+    assert not (cdir / "components.md").exists()
+    assert "children" not in meta(cdir)
+    assert (cdir / "plan.md").read_text().startswith("# Plan: Throttle the API")
+    assert state(cdir)["split"]["single"] is True
+    assert pushed(repo)[0] == "@ specs(throttle): components for review"
+    assert "specs/changes/throttle/components/api/plan.md" in pushed(repo)
+
+    # Approved this time: stage 3 runs from the new split.
+    go(repo, [(RESUME, 3), ([*RESUME, "--tickets-later"], 3), (RESUME, 0)])
+    assert model.calls_to("components") == 2
+    assert (cdir / "specs.md").is_file()
+
+
+def test_a_use_cases_edit_alone_keeps_the_split(repo, model, tmp_path):
+    two(model)
+    go(repo, FLOW[:2])
+    cdir = change_dir(repo)
+    edited = "# Use cases\n\nEDITED by a reviewer.\n"
+    push_edit(repo, tmp_path / "pm", "use-cases.md", edited)
+
+    assert run(repo, *RESUME) == 3
+    assert model.calls_to("components") == 1
+    assert model.calls_to("spec:use-cases") == 1
+    assert (cdir / "use-cases.md").read_text() == edited
+    assert meta(cdir)["children"] == ["api", "ui"]
+
+
+def test_use_cases_a_reviewer_edited_are_kept_when_the_split_is_asked_again(
+    repo, model, tmp_path
+):
+    model["components"] = [TWO, ONE_LEFT]
+    go(repo, FLOW[:2])
+    cdir = change_dir(repo)
+    edited = "# Use cases\n\nEDITED by a reviewer.\n"
+    mine = clone(repo, tmp_path / "pm")
+    base = mine / "specs" / "changes" / "throttle"
+    write(base / "proposal.md", NARROWED)
+    write(base / "use-cases.md", edited)
+    git(mine, "commit", "-qam", "narrow the proposal")
+    git(mine, "push", "-q", "origin", BRANCH)
+
+    assert run(repo, *RESUME) == 3
+    assert model.calls_to("components") == 2
+    assert model.calls_to("spec:use-cases") == 1
+    assert (cdir / "use-cases.md").read_text() == edited
+    assert "EDITED by a reviewer." in model.exactly("components")[1]
+
+
+def test_a_run_saved_before_the_proposal_hash_is_split_again_too(
+    repo, model, tmp_path, capsys
+):
+    model["components"] = [TWO, ONE_LEFT]
+    go(repo, FLOW[:2])
+    cdir = change_dir(repo)
+    path = cdir / ".pm-spec" / "state.json"
+    saved = json.loads(path.read_text())
+    saved["split"].pop("proposal_inputs", None)
+    path.write_text(json.dumps(saved))
+    push_edit(repo, tmp_path / "pm", "proposal.md", NARROWED)
+
+    assert run(repo, *RESUME) == 3
+    assert model.calls_to("components") == 2
+    assert "SPEC:REVIEW:components" in capsys.readouterr().out
+    assert not (cdir / "components").exists()
+
+
+def test_a_proposal_edited_after_stage_3_started_keeps_the_split(
+    repo, model, tmp_path
+):
+    two(model)
+    go(repo, FLOW[:3])
+    cdir = change_dir(repo)
+    push_edit(repo, tmp_path / "pm", "proposal.md", NARROWED)
+
+    assert run(repo, *TICKETS) == 3
+    assert model.calls_to("components") == 1
+    assert meta(cdir)["children"] == ["api", "ui"]
 
 
 # --- S10 --------------------------------------------------------------------------
