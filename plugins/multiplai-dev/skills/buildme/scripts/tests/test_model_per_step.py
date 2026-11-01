@@ -476,6 +476,10 @@ CALL_SITES = {
         "config.model_for('spec_artifact')",
         ("spec_artifact",),
     ),  # design and tasks
+    ("llm_steps/spec_steps.py", "generate_change_plan", "agent_call"): (
+        "config.model_for('spec_artifact')",
+        ("spec_artifact",),
+    ),  # the plan of a change with components
     ("llm_steps/spec_steps.py", "generate_artifact", "llm_call"): (
         "config.model_for('spec_artifact')",
         ("spec_artifact",),

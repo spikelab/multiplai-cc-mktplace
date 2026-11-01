@@ -32,6 +32,8 @@ from build_pipeline.state import BuildState, PlanApproval, completed_state_path
 from tests.planning_fakes import accepted_planning  # noqa: F401
 from tests.test_git_ops import make_repo
 
+pytestmark = pytest.mark.plan_gate
+
 CHANGE = "csv"
 
 
