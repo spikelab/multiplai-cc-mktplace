@@ -43,6 +43,7 @@ from .change_manager import (
     PLAN_HASH_KEY,
     ChangeManager,
     plan_path,
+    reads_change_plan,
     requirement_texts,
 )
 from .dependencies import NewDependency, design_decisions_text, detect_new_dependencies
@@ -253,6 +254,14 @@ async def _generate_single_artifact(
     state: BuildState,
 ) -> None:
     """Generate a single artifact: design, unknowns, tasks or rubric."""
+    if artifact_id == "design" and reads_change_plan(change_dir):
+        # The change's build writes that plan, and an engineer approves it,
+        # before any component builds (`epic.change_plan`).
+        raise RuntimeError(
+            f"{config.change_name} builds from its change's implementation plan, "
+            f"{plan_path(change_dir)}, which is not there. Run /buildme "
+            f"{change_root(change_dir).name} to write it and have it approved"
+        )
     context = cm.artifact_context(change_dir, artifact_id)
 
     # Thread the explainers into the task breakdown: the edge cases are only
@@ -1698,6 +1707,11 @@ def reconcile_plan(
         config.change_dir, "requirements/*.md"
     ):
         stale.update({"tasks", "rubric"})
+    if reads_change_plan(config.change_dir):
+        # The change's plan is this component's input, never written here: what
+        # would make it stale makes the component's own documents stale, which
+        # every rule above that names "design" marks too.
+        stale.discard("design")
     stale -= (regenerated or set()) | recovered
     sg.stale_artifacts = sorted(stale)
     revision = _revision(current)
@@ -1767,6 +1781,12 @@ def apply_plan_edits(staged_dir: Path, edits) -> dict[str, str]:
     texts: dict[str, str] = {}
     originals: dict[str, str] = {}
     for index, edit in enumerate(edits, 1):
+        if edit.file == PLAN_FILE and reads_change_plan(staged_dir):
+            _reject_edits(
+                f"Plan edit {index} changes the change's approved implementation plan, "
+                f"{plan_path(staged_dir).name}; a component edits only tasks.md. "
+                "Edit the change's plan by hand and run the change's build again"
+            )
         if edit.file not in texts:
             path = (
                 plan_path(staged_dir)
@@ -1849,7 +1869,7 @@ async def rewrite_plan(
         # A component's proposal and use cases are its change's.
         root = change_root(config.change_dir)
         if root != config.change_dir:
-            for name in ("proposal.md", "use-cases.md"):
+            for name in ("proposal.md", "use-cases.md", PLAN_FILE, OLD_PLAN_FILE):
                 if (root / name).is_file():
                     shutil.copy2(root / name, change_root(staged.change_dir) / name)
         registry = config.specs_dir / "registry"
