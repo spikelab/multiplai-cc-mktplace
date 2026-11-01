@@ -93,7 +93,7 @@ from .prompts.consistency import (
     prior_findings_section,
 )
 from .publish import publish
-from .rewrite import check_texts, cited_units, rewrite_units
+from .rewrite import check_texts, cited_units, rewrite_units, target_units
 from .run import EXIT_BLOCKED, EXIT_REFUSED, MARKER_BLOCKED, Run, Stop
 
 log = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ class Place(BaseModel):
 
 
 class ConsistencyFinding(BaseModel):
-    type: Literal["contradiction", "gap", "duplicate"]
+    type: Literal["contradiction", "gap", "duplicate", "infeasible"]
     severity: Literal["critical", "major", "minor"]
     description: str = Field(min_length=1)
     places: list[Place] = Field(min_length=2)
@@ -594,6 +594,34 @@ def registry_findings(run: Run) -> list[dict]:
     return found
 
 
+def _not_component(listed: list[dict]) -> list[dict]:
+    """The listed findings the consistency agent gives a status: all but the
+    component check's, which their component's check settles."""
+    return [f for f in listed if not f.get("component")]
+
+
+async def _component_checks(run: Run, listed: list[dict]):
+    """The component check over every component (`component_check`)."""
+    from . import component_check as CK
+
+    return await CK.run_component_checks(run, listed=listed)
+
+
+def _new_component_findings(run: Run, checked, listed: list[dict]) -> list[dict]:
+    """The component check's findings that are not a listed finding (the same
+    category and text: a reused result raises it again) and that no person
+    accepted."""
+    keys = {(f.get("category", ""), F.finding_text(f)) for f in listed}
+    return _not_accepted(
+        run,
+        [
+            f
+            for f in checked.findings
+            if (f.get("category", ""), F.finding_text(f)) not in keys
+        ],
+    )
+
+
 async def check(
     run: Run,
     prior: list[dict] | None = None,
@@ -623,27 +651,43 @@ async def check(
 
 async def recheck(run: Run, name: str, reason: str) -> str:
     """The recheck after a published rewrite: listed findings must be `resolved`,
-    a new finding blocks only when critical. Passes, or blocks with exit 4.
+    a new finding blocks only when critical. The component check runs first, on
+    each component the rewrite was given to rewrite and each one that depends
+    on one of them (row S10: a stop part way re-runs only those with no saved
+    result); a new critical or major finding from it blocks, as the rewrite
+    caused it. Listed component-check findings get their status from it, the
+    others from the consistency agent. Passes, or blocks with exit 4.
     Returns the revision it passed at: the files' revision before the agent
     read them, so an edit made while it reads is never counted as checked."""
+    from . import component_check as CK
+
     step = run.state.step(name)
     listed = step.repair_findings
     revision = layout.revision(run.config.change_dir)
-    answer = await check(run, prior=listed)
+    touched = CK.with_dependents(
+        run,
+        CK.of_units(run, target_units(run.config.change_dir, listed))
+        | {f["component"] for f in listed if f.get("component")},
+    )
+    checked = await CK.run_component_checks(run, touched, listed)
+    answer = await check(run, prior=_not_component(listed))
     assessments, citations = settle_citations(
         listed,
         answer.prior_assessments,
         run.state.accepted_findings,
         citation_findings(run),
     )
+    raised = _new_component_findings(run, checked, listed)
+    caused = [f for f in raised if f.get("severity") in F.ACTIONABLE]
     blocking, advisory = F.recheck_verdict(
         listed,
-        assessments,
-        as_dicts(answer),
+        [*assessments, *checked.assessments],
+        as_dicts(answer) + [f for f in raised if f not in caused],
         deterministic=format_findings(run)
         + table_findings(run)
         + registry_findings(run)
-        + citations,
+        + citations
+        + caused,
     )
     step.repair_findings = F.saved_findings(F.assess_listed(listed, assessments))
     F.log_findings(name, "listed", step.repair_findings)
@@ -810,8 +854,10 @@ def _not_accepted(run: Run, found: list[dict]) -> list[dict]:
 
 async def check_reviewed(run: Run, revision: str) -> None:
     """The check after the specs review: reports, rewrites nothing, and blocks
-    (exit 4) on a critical or major finding (rows S13, S17). After a block it
-    rechecks the open blocking findings, and a new one blocks only when critical."""
+    (exit 4) on a critical or major finding (rows S13, S17). The component
+    check runs first, over every component, and its findings count as the
+    agent's. After a block it rechecks the open blocking findings (a component
+    check's by its component's check), and a new one blocks only when critical."""
     print("PHASE:CONSISTENCY", flush=True)
     step = run.state.step(NAME)
     later = step.outcome == "blocked" and bool(step.blocking_findings)
@@ -820,8 +866,11 @@ async def check_reviewed(run: Run, revision: str) -> None:
         run, format_findings(run) + table_findings(run) + registry_findings(run)
     )
     earlier = _earlier(run, NAME)
+    checked = await _component_checks(run, listed)
     reading = what_to_read(run, listed)
-    answer = await check(run, prior=listed, edited=True, reading=reading)
+    answer = await check(
+        run, prior=_not_component(listed), edited=True, reading=reading
+    )
     assessments, citations = settle_citations(
         listed,
         answer.prior_assessments,
@@ -829,11 +878,12 @@ async def check_reviewed(run: Run, revision: str) -> None:
         citation_findings(run),
     )
     deterministic = in_code + citations
+    raised = _new_component_findings(run, checked, listed)
     if later:
         blocking, advisory = F.recheck_verdict(
             listed,
-            assessments,
-            as_dicts(answer),
+            [*assessments, *checked.assessments],
+            as_dicts(answer) + raised,
             deterministic=deterministic,
         )
         blocking = F.number_new(
@@ -842,7 +892,7 @@ async def check_reviewed(run: Run, revision: str) -> None:
         reason = f"{REVIEWED_BLOCK_REASON} ({F.carried_and_new(blocking)})"
     else:
         kept, quiet = quiet_unchanged(run, as_dicts(answer), reading, earlier)
-        actionable, advisory = F.first_check_verdict(deterministic + kept)
+        actionable, advisory = F.first_check_verdict(deterministic + raised + kept)
         advisory += quiet
         blocking = F.number_new(NAME, actionable, run.state.accepted_findings)
         reason = REVIEWED_BLOCK_REASON
@@ -892,11 +942,15 @@ async def run_consistency(run: Run) -> None:
         run, format_findings(run) + table_findings(run) + registry_findings(run)
     )
     earlier = _earlier(run, NAME)
+    checked = await _component_checks(run, [])
     reading = what_to_read(run)
     answer = await check(run, reading=reading)
     kept, quiet = quiet_unchanged(run, as_dicts(answer), reading, earlier)
     actionable, advisory = F.first_check_verdict(
-        in_code + citation_findings(run) + kept
+        in_code
+        + citation_findings(run)
+        + _new_component_findings(run, checked, [])
+        + kept
     )
     advisory += quiet
     F.record_advisory(run, NAME, advisory)
@@ -911,15 +965,9 @@ async def run_consistency(run: Run) -> None:
         )
     numbered = F.number_findings(NAME, actionable)
     F.admit_repair(run, NAME, revision, numbered)
-    # The specs files the findings cite; every file when one cites none
-    # (a finding between the proposal and the use cases, say).
-    named = [cited_units(change_dir, f) for f in numbered]
-    units = (
-        layout.units(change_dir)
-        if not all(named)
-        else sorted({u for us in named for u in us})
-    )
-    await rewrite_and_publish(
-        run, NAME, run.state.step(NAME).repair_findings, units, BLOCK_REASON
-    )
+    units = target_units(change_dir, numbered)
+    with F.released_on_spend_stop(run, NAME):
+        await rewrite_and_publish(
+            run, NAME, run.state.step(NAME).repair_findings, units, BLOCK_REASON
+        )
     await recheck(run, NAME, BLOCK_REASON)

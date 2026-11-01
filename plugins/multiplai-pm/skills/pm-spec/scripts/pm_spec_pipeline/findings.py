@@ -24,8 +24,11 @@ Restated from buildme's plan recheck (`spec_generator.py`: `number_findings`,
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Literal
 
+from multiplai_core.budget import BudgetExceededError
 from pydantic import BaseModel, field_validator
 
 from . import layout
@@ -117,6 +120,7 @@ SAVED_KEYS = (
     "evidence",
     "reason",
     "accepted_at",
+    "component",
 )
 
 
@@ -151,6 +155,8 @@ def new_finding(finding: dict) -> dict:
     }
     if finding.get("places"):
         out["places"] = finding["places"]
+    if finding.get("component"):
+        out["component"] = finding["component"]
     return out
 
 
@@ -276,6 +282,29 @@ def admit_repair(run: Run, name: str, revision: str, numbered: list[dict]) -> No
         name.upper() + "_REWRITE",
         "One rewrite admitted for:\n" + findings_report(numbered),
     )
+
+
+SPEND_STOP_REASON = "The spend cap stopped the rewrite before it published"
+
+
+@contextmanager
+def released_on_spend_stop(run: Run, name: str) -> Iterator[None]:
+    """Around a step's rewrite: a spend-cap stop before the rewrite published
+    gives the step its one rewrite back (`repair_attempts` as before
+    `admit_repair`), so a run with a higher `--max-usd` rewrites (row S9 of
+    the component check's table). Nothing was written, so nothing was spent
+    on the files; any other stop keeps the rewrite spent."""
+    try:
+        yield
+    except BudgetExceededError:
+        step = run.state.step(name)
+        if not step.rewrite_published:
+            step.repair_attempts = 0
+            step.repair_findings = []
+            step.reason = SPEND_STOP_REASON
+            run.save()
+            run.progress(name.upper() + "_SPEND_STOP", SPEND_STOP_REASON)
+        raise
 
 
 def record_passed(run: Run, name: str, revision: str, reason: str = "") -> None:

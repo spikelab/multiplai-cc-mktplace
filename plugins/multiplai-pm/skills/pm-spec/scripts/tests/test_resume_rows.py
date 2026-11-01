@@ -412,7 +412,7 @@ def test_S7_killed_during_the_specs(repo, model, tmp_path, monkeypatch, capsys):
     assert model.labels()[calls:] == ["spec:specs:ui"]
     assert "SPEC:REVIEW:specs" in capsys.readouterr().out
     assert run(repo, *RESUME) == 0
-    assert model.labels()[calls:] == ["spec:specs:ui", "consistency"]
+    assert model.labels()[calls:] == ["spec:specs:ui", "component_check:api", "component_check:ui", "consistency"]
     assert (
         ready_line(capsys.readouterr().out)
         == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
@@ -615,7 +615,7 @@ def test_S13_the_review_stop_after_the_specs(
     # Resume pulls, then runs the check and the handoff only.
     calls = len(model.calls)
     assert run(repo, *RESUME) == 0
-    assert model.labels()[calls:] == ["consistency"]
+    assert model.labels()[calls:] == ["component_check:api", "component_check:ui", "consistency"]
     assert (
         ready_line(capsys.readouterr().out)
         == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
@@ -681,7 +681,7 @@ def test_S13_after_the_review_a_major_finding_blocks_and_rewrites_nothing(
     calls = len(model.calls)
     assert run(repo, *RESUME) == 4
     out = capsys.readouterr().out
-    assert model.labels()[calls:] == ["consistency"]
+    assert model.labels()[calls:] == ["component_check:api", "component_check:ui", "consistency"]
     assert f"SPEC:BLOCKED:{cdir}" in out and "SPEC:READY" not in out
     assert "api says 60 a minute, ui says 100" in out
     assert "no file was rewritten" in out
@@ -753,7 +753,7 @@ def test_S17_resume_after_a_blocked_check_rechecks_the_edited_files(
     rule = reviewer_edit(repo, tmp_path / "reviewer", "60 a minute everywhere")
     assert run(repo, *RESUME) == 0
     out = capsys.readouterr().out
-    assert model.labels()[calls:] == ["consistency"]
+    assert model.labels()[calls:] == ["component_check:ui", "consistency"]
     assert "60 a minute everywhere" in model.exactly("consistency")[-1]
     assert (cdir / "components" / "ui" / "specs.md").read_text() == rule
     assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
@@ -852,7 +852,7 @@ def test_S14_a_run_from_before_the_staged_flow_only_checks_and_hands_off(
     assert run(repo, *RESUME) == 0
     out = capsys.readouterr().out
     cdir = change_dir(repo)
-    assert model.labels() == ["consistency"]
+    assert model.labels() == ["component_check:throttle", "consistency"]
     assert "EDITED" in model.exactly("consistency")[0]
     assert "SPEC:REVIEW" not in out and "SPEC:TICKETS" not in out
     assert ready_line(out) == f"SPEC:READY:{cdir}:{layout.revision(cdir)}"
@@ -876,7 +876,7 @@ def test_S14_a_run_from_before_the_staged_flow_only_checks_and_hands_off(
 
     # Resumed again: nothing to do, nothing regenerated.
     assert run(repo, *RESUME) == 0
-    assert model.labels() == ["consistency"]
+    assert model.labels() == ["component_check:throttle", "consistency"]
 
 
 # --- S15 --------------------------------------------------------------------------

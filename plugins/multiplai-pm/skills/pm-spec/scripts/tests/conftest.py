@@ -201,6 +201,7 @@ DEFAULTS = {
     "spec:use-cases": USE_CASES,
     "spec:specs": lambda prompt, label, kw: rewrite_answer(specs()),
     "consistency": NO_FINDINGS,
+    "component_check": NO_FINDINGS,
     "prototype": agent(),
 }
 
