@@ -112,8 +112,12 @@ def _view_box(root: str) -> tuple[float, float]:
         return 1000.0, 600.0
 
 
-def standalone(svg: str, page: Page, theme: str) -> str:
-    """*svg*, one SVG of *page*, as a file a renderer draws alone in *theme*."""
+def standalone(
+    svg: str, page: Page, theme: str, around: list[str] | None = None
+) -> str:
+    """*svg*, one SVG of *page*, as a file a renderer draws alone in *theme*. Its content goes inside a
+    `<g>` with *around*, the classes of the page elements around it, so a rule such as `.fig .node`
+    matches as it does on the page."""
     values = theme_values(page.tokens_css(), theme)
     svg = CAMEL_ATTR.sub(
         lambda m: m.group(1) + CAMEL[m.group(2).lower()] + m.group(3), svg
@@ -144,9 +148,11 @@ def standalone(svg: str, page: Page, theme: str) -> str:
     )
     if svg.rstrip().endswith("/>") and root.end() == len(svg.rstrip()):
         return f"{tag}<defs>{style}</defs>{background}</svg>"
-    return (
-        f"{svg[: root.start()]}{tag}<defs>{style}</defs>{background}{svg[root.end() :]}"
-    )
+    inner = svg[root.end() :].rstrip()
+    if inner.lower().endswith("</svg>"):
+        inner = inner[: -len("</svg>")]
+    group = f'<g class="{" ".join(dict.fromkeys(around or []))}">'
+    return f"{svg[: root.start()]}{tag}<defs>{style}</defs>{background}{group}{inner}</g></svg>"
 
 
 def render_svgs(page: Page, folder: Path) -> list[Path]:
@@ -160,10 +166,13 @@ def render_svgs(page: Page, folder: Path) -> list[Path]:
     folder.mkdir(parents=True, exist_ok=True)
     paths = []
     for n, svg in enumerate(page.svgs, 1):
+        around = page.svg_ancestors[n - 1] if n <= len(page.svg_ancestors) else []
         for theme in THEMES:
             path = folder / f"{n}-{theme}.png"
             try:
-                data = resvg_py.svg_to_bytes(svg_string=standalone(svg, page, theme))
+                data = resvg_py.svg_to_bytes(
+                    svg_string=standalone(svg, page, theme, around)
+                )
             except Exception as e:  # resvg raises its own error types
                 raise ValueError(f"SVG {n} ({theme}): {e}") from e
             path.write_bytes(bytes(data))

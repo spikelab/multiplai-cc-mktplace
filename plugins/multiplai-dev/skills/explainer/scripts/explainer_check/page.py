@@ -49,6 +49,9 @@ class Page:
     media: list[tuple[str, str]] = field(default_factory=list)  # (tag, src)
     ids: list[str] = field(default_factory=list)
     svgs: list[str] = field(default_factory=list)  # the source of each outermost <svg>
+    # The classes of the HTML elements around each outermost <svg>, in the same order: `render` gives
+    # them to the drawn SVG so the page's `.fig .node` rules still match.
+    svg_ancestors: list[list[str]] = field(default_factory=list)
     cites: list[Cite] = field(default_factory=list)
 
     def tokens_css(self) -> str:
@@ -61,6 +64,9 @@ class _Reader(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.page = Page()
         self.stack: list[str] = []
+        self.classes: list[
+            list[str]
+        ] = []  # the class list of each element on the stack
         self.details = 0  # open <details> elements
         self.summary = 0  # open <summary> elements
         self.hidden = 0
@@ -94,9 +100,12 @@ class _Reader(HTMLParser):
             self.in_title = True
         elif tag == "h1":
             p.h1 += 1
+        if tag == "svg" and "svg" not in self.stack:
+            p.svg_ancestors.append([c for cs in self.classes for c in cs])
         if tag in VOID:
             return
         self.stack.append(tag)
+        self.classes.append(a.get("class", "").split())
         if tag == "details":
             self.details += 1
         elif tag == "summary":
@@ -122,6 +131,7 @@ class _Reader(HTMLParser):
             return
         while self.stack:
             top = self.stack.pop()
+            self.classes.pop()
             if top == "details":
                 self.details -= 1
             elif top == "summary":

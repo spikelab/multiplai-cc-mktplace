@@ -281,3 +281,19 @@ def test_check_cli_exit_codes(tmp_path, capsys):
     assert "check: ok" in capsys.readouterr().out
     assert main(["check", str(bad)]) == 1
     assert "FAIL:" in capsys.readouterr().out
+
+
+def test_render_keeps_the_classes_around_an_svg_so_page_rules_match():
+    # `.fig .node` styles a box only inside figure.fig; drawn alone, the SVG has no such
+    # ancestor, so render wraps its content in a <g> with the figure's classes.
+    from explainer_check.render import standalone
+
+    src = page(
+        css="body{color:var(--fg)} .fig .node{fill:var(--accent)}",
+        body=f'<section class="s"><figure class="fig">{SVG}</figure></section>',
+    )
+    p = parse_page(src)
+    assert p.svg_ancestors == [["s", "fig"]]
+    drawn = standalone(p.svgs[0], p, "light", p.svg_ancestors[0])
+    assert '<g class="s fig">' in drawn and drawn.rstrip().endswith("</g></svg>")
+    assert ".fig .node{fill:#1f5fc4}" in drawn
