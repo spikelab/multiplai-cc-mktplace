@@ -965,6 +965,10 @@ def real_git() -> str:
     return shutil.which("git", path=os.pathsep.join(path))
 
 
+# What the fake change-plan writer (`Fakes`) returns.
+CHANGE_PLAN = "# Implementation plan\n\n## Decisions\n\nOne plan for every component.\n"
+
+
 class Fakes:
     """The fake build and `gh` first on PATH, answering from `<root>/fakes.json`
     (per child, one step per attempt: `block`, `marker`, `exit`, `no_pr`,
@@ -1021,6 +1025,18 @@ class Fakes:
         )
         (root / "psfail" / "ps").chmod(0o755)
         self.use(monkeypatch)
+        # The change's plan writer (`epic.change_plan`), for a change with
+        # components: a fixed plan, each change it was asked for in
+        # `plans_written`.
+        self.plans_written: list[str] = []
+
+        async def write_plan(change_dir, config, **_):
+            self.plans_written.append(Path(change_dir).name)
+            return CHANGE_PLAN
+
+        from build_pipeline.llm_steps import spec_steps
+
+        monkeypatch.setattr(spec_steps, "generate_change_plan", write_plan)
 
     def ps_fails(self, monkeypatch) -> None:
         monkeypatch.setenv(

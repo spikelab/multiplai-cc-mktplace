@@ -602,6 +602,52 @@ def archive_on(repo: Path, branch: str, specs_rel: str, change: str) -> Merged:
     return Merged("merged", sha=sha)
 
 
+def checkout_tip(repo: Path, branch: str) -> tuple[Path, str] | str:
+    """The detached worktree `merge_default` uses, at `origin/<branch>` after
+    a fetch, and that sha; or why not."""
+    repo = Path(repo)
+    failed = fetch(repo)
+    if failed is not None:
+        return f"git fetch origin failed: {failed}"
+    tip = _remote_sha(repo, branch)
+    if tip is None:
+        return f"origin has no {branch}"
+    w = worktree_path(repo, branch)
+    why = _checkout(repo, w, tip)
+    return why if why else (w, tip)
+
+
+def commit_and_push(
+    repo: Path, w: Path, branch: str, message: str, paths: list[str] | None
+) -> str | None:
+    """Commit *paths* in the detached worktree *w* (`checkout_tip`), or, with
+    *paths* None, an empty commit holding only *message*, and push it to
+    *branch*, never forced; then update `origin/<branch>` in *repo*. None once
+    pushed, else why not."""
+    if paths is None:
+        committed = _git(w, "commit", "-q", "--allow-empty", "-m", message)
+    else:
+        added = _git(w, "add", "-A", "--", *paths)
+        committed = (
+            _git(w, "commit", "-q", "-m", message, "--", *paths) if added.ok else added
+        )
+    if not committed.ok:
+        return f"{committed.command} failed: {(committed.stderr or committed.stdout).strip()[-400:]}"
+    pushed = _git(
+        w, "push", "origin", f"HEAD:refs/heads/{branch}", timeout=git_ops._PUSH_TIMEOUT
+    )
+    if not pushed.ok:
+        return f"git push origin {branch} failed: {(pushed.stderr or pushed.stdout).strip()[-400:]}"
+    _git(
+        Path(repo),
+        "fetch",
+        "origin",
+        f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+        timeout=git_ops._PUSH_TIMEOUT,
+    )
+    return None
+
+
 def conflict_exit(branch: str, files: list[str]) -> int:
     """Print `FEATURE_BRANCH:CONFLICT:<branch>:<files>` and what to do; exit 3."""
     print(f"{MARKER_CONFLICT}:{branch}:{','.join(files)}", flush=True)
