@@ -15,6 +15,17 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.152.0] - 2026-11-01
+
+### Removed
+
+- **buildme**: the `carry_block_notes` setting, which asked each block's
+  implementer for notes and handed them to later blocks' implementers. A
+  30-run benchmark found it made builds no more correct and no cheaper once
+  run order was accounted for, so it is gone, with its benchmark harness
+  (`evals/notes_forward_compare.py`) and fixtures. A `specs/config.yaml` that
+  still sets it is ignored, and a checkpoint saved with its notes still loads.
+
 ## [0.151.0] - 2026-11-01
 
 ### Added
