@@ -188,7 +188,7 @@ def _commit_tree_or_none(config: BuildConfig, message: str, label: str) -> str |
     """`git_ops.commit_tree`, with a commit git refused or failed returned as
     None, for the callers whose recovery path starts from None."""
     try:
-        return git_ops.commit_tree(config.project_dir, message, label)
+        return git_ops.commit_tree(config.project_dir, message)
     except git_ops.GitLifecycleError as e:
         log.warning("Could not commit %s: %s", label, e)
         return None
@@ -205,7 +205,6 @@ def _git_commit_block_phase(
     return git_ops.commit_tree(
         config.project_dir,
         f"{phase}(block-{block.number}): {block.name}",
-        f"block={block.number} phase={phase}",
     )
 
 
@@ -4455,7 +4454,6 @@ async def _run_refactor_all(
         sha = git_ops.commit_tree(
             config.project_dir,
             "refactor: simplify across blocks",
-            "whole-change refactor",
         )
         if sha:
             # So the end-of-build run can throw this commit away first when
@@ -4833,9 +4831,7 @@ async def _run_end_suite(
                 "END_SUITE",
                 f"{tests_gate.reason}\n" + "\n".join(f"- {c}" for c in claims),
             )
-        git_ops.commit_tree(
-            config.project_dir, "fix: end-of-build test suite", "end-of-build fix"
-        )
+        git_ops.commit_tree(config.project_dir, "fix: end-of-build test suite")
         if standalone:
             # The commit moved HEAD: the final check runs again on it.
             state.verification = None
@@ -5122,9 +5118,7 @@ async def _run_component_review(
 
     # The record is the review a resume fixes from (row S44): committed, the
     # checkpoint holds it and a discard back to the checkpoint keeps it.
-    git_ops.commit_tree(
-        config.project_dir, "docs(component): component review", "component review"
-    )
+    git_ops.commit_tree(config.project_dir, "docs(component): component review")
     checkpoint = git_ops.rev_parse_head(config.project_dir)
     if checkpoint is None or not git_ops.tree_is_clean(config.project_dir):
         review_rounds.append_unfixed(
@@ -5221,7 +5215,6 @@ async def _component_fix_round(
     sha = git_ops.commit_tree(
         config.project_dir,
         "fix(component): component review findings",
-        "component review fix",
     )
     if sha is None:
         return _component_not_kept(
@@ -5668,7 +5661,7 @@ def _write_mutation_report(config: BuildConfig, text: str) -> str | None:
         log.warning("Could not write %s: %s", path, e)
         return None
     return git_ops.commit_tree(
-        config.project_dir, "test(mutation): record mutation score", "mutation report"
+        config.project_dir, "test(mutation): record mutation score"
     )
 
 

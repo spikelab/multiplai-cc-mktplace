@@ -980,11 +980,11 @@ def commit_stage(config, message: str, paths: list[str]) -> str | None:
 # branch pointer and restores files under `.`.
 
 
-def commit_tree(repo: Path | str, message: str, label: str = "") -> str | None:
+def commit_tree(repo: Path | str, message: str) -> str | None:
     """Commit everything under *repo* except buildme's bookkeeping.
 
     Returns the new SHA or None for no changes. Commit refusals/failures raise
-    GitLifecycleError. *label* is retained for caller compatibility.
+    GitLifecycleError.
     """
     return commit_paths(repo, message, [".", *BOOKKEEPING_EXCLUDES])
 

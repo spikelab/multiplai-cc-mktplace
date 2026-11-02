@@ -524,7 +524,7 @@ class TestFailedRunsSaveTheirOutput:
             p.dir, "status", "--porcelain", "--", ".", *git_ops.BOOKKEEPING_EXCLUDES
         )
         assert TEST_RUNS_DIR not in status
-        assert git_ops.commit_tree(p.dir, "nothing", "") is None
+        assert git_ops.commit_tree(p.dir, "nothing") is None
         git_ops.discard_to(p.dir, _git(p.dir, "rev-parse", "HEAD"), "test")
         assert log_path.exists()
 

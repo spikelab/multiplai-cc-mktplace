@@ -317,17 +317,6 @@ async def worker(args) -> int:
                     "Evaluation candidate failed deterministic plan validation"
                 )
 
-        async def advisory(change_dir, cfg, state, state_path):
-            deterministic_plan(cfg, state)
-            state.spec_gen.record_step(
-                "design_audit",
-                "passed",
-                "evaluation: deterministic checks; model audit omitted",
-            )
-            state.checkpoint(state_path)
-            return []
-
-        spec_generator.run_design_audit_stage = advisory
         if args.variant != "candidate+plan-review":
             from build_pipeline.llm_steps import plan_review_steps
 

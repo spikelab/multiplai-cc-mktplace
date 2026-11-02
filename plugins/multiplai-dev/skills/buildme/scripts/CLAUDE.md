@@ -558,8 +558,10 @@ after the size gate and looks on HEAD of the project for a commit with `Stop: 4`
 (`git_ops.commit_trailers`). Found, it saves `BuildState.plan_approval`;
 missing, it writes `plan-approval.md` (rewritten only when its revision
 differs), prints `PLAN:WAITING:<path>` and exits 3. `--approve-plan` makes the
-commit (`git_ops.commit_empty`). The file it asks to approve is named once,
-`orchestrator.PLAN_APPROVAL_DOC`. A new plan revision clears the saved
+commit (`git_ops.commit_empty`). The file it asks to approve is
+`change_manager.plan_path` (`PLAN_FILE`, or `design.md` in a change planned
+before the rename); `orchestrator.PLAN_APPROVAL_DOC` is `PLAN_FILE`, read only
+by the tests. A new plan revision clears the saved
 approval (`reconcile_plan`). `review.plan_approval` is no longer read; a
 config that sets it logs a warning, and `review:` stays in
 `UNPLANNED_SECTIONS`, so the key changes no revision. The epic's coordinator records a

@@ -15,6 +15,27 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.153.2] - 2026-11-02
+
+### Fixed
+
+- **review**: removed a second, unreachable copy of the code that extracts the
+  base version of changed files. Reviews behave as before; the copy could only
+  mislead someone reading the code.
+- **review**: the scripts' notes no longer say the checkpoint's
+  `extra_finders` value is worked out from earlier rounds (nothing sets it any
+  more), and the skill's instructions now list `--base-branch`, which picks
+  the branch a `--branch` review is compared against.
+- **buildme**: the paired evaluation script no longer replaces the design
+  audit, which the single plan check replaced; the plan check stub it already
+  had covers that work. A test now fails if the script stubs a step that does
+  not exist.
+- **buildme**: dropped an ignored `label` argument from the internal commit
+  helper and every caller; commit messages and log lines are unchanged.
+- **buildme**: the scripts' notes now say which file the plan approval asks
+  you to approve: the change's implementation plan, or `design.md` in a change
+  planned before the rename.
+
 ## [0.153.1] - 2026-11-02
 
 ### Fixed
