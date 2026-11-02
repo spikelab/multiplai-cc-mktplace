@@ -4,6 +4,8 @@ plan-factory-merged-2026-10-29.md).
 `run` calls no model. It checks that:
 
 - `specs/config.yaml` parses to a mapping;
+- there is a test command, unless `tdd.enabled: false` says to build
+  without one (every test gate then runs nothing);
 - the program of the test command, and of each `tdd.narrow_commands` entry,
   exists in the directory it runs from;
 - the branch the build's PR targets exists on origin (when the repo has an
@@ -125,6 +127,21 @@ def _runner_missing(command: str, project_dir: Path) -> str | None:
     return None
 
 
+#: Why `run` refuses an empty test command.
+NO_TEST_COMMAND = (
+    "no test command: specs/config.yaml sets no tdd.test_command and discovery "
+    "found no root file it knows in {dir}, so every test gate would pass without "
+    "running a test. Set tdd.test_command, or tdd.enabled: false to build with "
+    "the test gates skipped."
+)
+
+
+def _test_command(config) -> str | None:
+    if config.test_command or not getattr(config, "tdd_enabled", True):
+        return None
+    return NO_TEST_COMMAND.format(dir=config.project_dir)
+
+
 def _test_runners(config) -> list[str]:
     from .narrow_tests import WHOLE, NarrowPart
 
@@ -239,6 +256,9 @@ def run(config, *, publishes: bool, target: str | None) -> list[Failed]:
     reason = _config_parses(config)
     if reason:
         failed.append(Failed("config", reason))
+    reason = _test_command(config)
+    if reason:
+        failed.append(Failed("test-command", reason))
     failed += [Failed("test-runner", r) for r in _test_runners(config)]
     repo = git_ops.repo_root(config.project_dir)
     if target and repo is not None and git_ops.has_remote(repo):

@@ -189,11 +189,44 @@ uncommitted config never reaches it. With `git.worktree` on, the pipeline stops
 with `ERROR: specs/config.yaml is not committed; the build's worktree would not
 see it. Commit it first.` With `--base-ref` (every epic child, and every
 build of a change on a feature branch, which starts from
-`origin/<branch>`) the worktree branches from that commit instead, and the build still reads the checkout's
-file, so the version committed at `HEAD` must be the one at that commit:
-otherwise it stops with `... Push it, or pull origin's, first.` An epic checks
-this before each child's first launch and launches nothing for it, so the next
-run, after the push or pull, fetches again and goes on.
+`origin/<branch>`) the worktree branches from that commit instead. The build
+reads `specs/config.yaml` from the checkout it was started in, before the
+worktree exists: `git:`, the tier and the models are fixed from that file. So
+the version committed at `HEAD` must be the one at that commit.
+Otherwise the build stops with `... Push it, or pull origin's, first.` A
+checkout with no `config.yaml`, while that commit has one, stops the same
+way. No file on either side is fine. An epic checks this before each child's
+first launch and launches nothing for that child, so the next run, after the
+push or pull, fetches again and goes on.
+
+**Test command, read in the worktree.** Once the build is in its worktree (a
+new one, or the one a resume re-binds to), it reads `tdd.test_command` and
+`tdd.enabled` again from the worktree's `specs/config.yaml`, and runs test
+discovery there. A root file that exists only on the branch the build starts
+from is found. So is one an earlier block added, on a resume. A command found
+in the starting checkout is dropped first.
+
+**No test command.** Discovery looks for these root files: `pytest.ini`,
+`pyproject.toml`, `setup.py`, `Package.swift`, `Cargo.toml`, `go.mod`,
+`package.json`. When `tdd.test_command` is unset and none of them is found,
+every test gate (baseline, RED, integration, mutation) would pass without
+running a test. So preflight refuses the build before any model call:
+`PREFLIGHT:FAILED:test-command:...`. To build without tests anyway, set
+`tdd.enabled: false` in `specs/config.yaml`. The build then goes on with the
+gates skipped. Every TDD run writes a `WARNING` saying so to
+`build-progress.md`, the baseline is logged `SKIPPED`, not `PASSED`, and the
+PR body gets a "Warning: no tests ran" section. `tdd.enabled: false` never
+turns the gates off when there is a test command.
+
+A brand-new project has no tests yet. When bootstrap writes the starter
+`specs/config.yaml` and finds no test command, it writes
+`tdd.enabled: false`, so that first build is not refused. The starter file is
+committed with the change, where the PR shows it. Once the project has a
+test command (a root file discovery knows, or `tdd.test_command`), the gates
+run whatever `tdd.enabled` says. Remove `enabled: false` at that point, so a
+later build that finds no test command is refused again. Discovery runs when
+a run starts, not between blocks. If a block adds the project's first root
+file, the build gets a test command only from its next resume.
 
 ### Reference docs — the standards the specs are written against
 
