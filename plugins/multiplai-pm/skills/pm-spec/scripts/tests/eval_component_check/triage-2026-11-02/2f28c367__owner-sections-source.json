@@ -1,0 +1,175 @@
+[
+ {
+  "n": 1,
+  "severity": "critical",
+  "type": "contradiction",
+  "description": "[component `owner-sections-source`, finding 1] The section function may return only the seven listed names. But geperman stores more than seven: the save code accepts every value of the `Section` list, and that list includes an eighth one, `reporting`. Older rows may also still hold `ari_calendar` until a cleanup command runs. Today `AllowedSectionsView` returns whatever a live link holds. Another requirement says `/api/allowed-sections/` must return exactly the same sections as before for every owner. For any owner whose links hold `reporting` or `ari_calendar`, a builder must break one of the two rules. The claim that geperman stores only seven names is also not true of the code.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-resolution: Only known section names returned"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-equivalence: Menu entries unchanged for every owner"
+   },
+   {
+    "file": "backend/DolceSystem/models.py",
+    "where": "Section (REPORTING) / ManagerOwnerLink.sections"
+   },
+   {
+    "file": "backend/DolceSystem/endpointz/manager_owner_links.py",
+    "where": "update_link / create_orphan_link (filter against the Section list)"
+   }
+  ],
+  "suggestion": "Say what happens to stored values outside the seven (`reporting`, `ari_calendar`). Either they are dropped, and the unchanged-menu requirement allows exactly that difference. Or they are converted or removed from the data before release, and the requirement states this as a precondition. Remove the claim that geperman stores only seven names."
+ },
+ {
+  "n": 2,
+  "severity": "critical",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 2] The booking-sheet requirement says an owner whose only section is Calendario pulizie gets HTTP 403 from the booking-sheet endpoints. Owners with only Chat must get the same responses as before. This component writes only an inventory; it puts no check on the booking-sheet endpoints. Today those endpoints check only that the booking is on the owner's property, so this owner gets 200. The checks that would refuse come from owner-sections-bookings and owner-sections-property-pages. This component declares no dependencies, so its 403 scenario cannot hold when it is delivered. The rule it gives as the reason ('a shared endpoint admits an owner holding any section whose inventory lists it') is also defined only in those later components.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-endpoint-inventory: Booking-sheet endpoints listed under every section that opens the sheet"
+   },
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-rules: An endpoint shared by several sections admits any of them"
+   },
+   {
+    "file": "backend/DolceSystem/auth_utils.py",
+    "where": "require_booking_access / can_access_booking"
+   }
+  ],
+  "suggestion": "Limit this requirement to what the inventory lists: the booking-sheet endpoints appear under the six sections and not under Calendario pulizie. Move the 403 and 'same response' scenarios to the components that add the checks, or declare those components as dependencies."
+ },
+ {
+  "n": 3,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 3] The WhatsApp attachment requirement says access must be 'no wider than the chat API's', and the plan says attachments are reachable more widely than the chat API today. In the code the owner path already requires the Chat section. The actual extra access is for everyone who is not an owner: OM users and cleaning-company users get every attachment without any check, while the chat API limits them to their own properties. The scenarios cover only owners, operators and anonymous requests. So a builder must guess whether OM and cleaning-company users are now limited, which would change their behaviour, or left as they are, which would break the 'no wider' rule. The 'Non-owner roles unaffected' requirement covers only the chat and cleaning-feed checks, not `media_guard`.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "whatsapp-attachment-section-guard: WhatsApp attachments require the Chat section"
+   },
+   {
+    "file": "backend/DolceEngine/media_guard/resolvers.py",
+    "where": "_whatsapp_media (non-owners return True)"
+   },
+   {
+    "file": "backend/DolceSystem/auth_utils.py",
+    "where": "can_access_chat / chat_scope_immobili_ids"
+   }
+  ],
+  "suggestion": "State what OM users and cleaning-company users get when they ask for a WhatsApp attachment. For example: the same answer the chat API gives them for that conversation. Add a scenario for each of these roles."
+ },
+ {
+  "n": 4,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 4] The property index must answer 403 to a role it 'does not recognise', and keep today's list for operators, OM users and owners. Cleaning-company users are not mentioned. Today `_get_immobili_queryset` gives them, and logins with no profile, every property, and the code comment says the index serves cleaning companies. The spec does not say whether a cleaning-company user counts as a recognised role (and keeps some list) or an unrecognised one (and gets 403). It also does not define what 'no recognised role' means, for example a login with no `Utente` profile.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "property-index-unknown-role: Unrecognised role gets no properties"
+   },
+   {
+    "file": "backend/DolceSystem/endpointz/index_immobili.py",
+    "where": "IndiceImmobiliJson / _get_immobili_queryset"
+   }
+  ],
+  "suggestion": "List the recognised roles completely, including cleaning-company users, and say which properties each one receives. Say that a login with no role, or with no profile, gets 403."
+ },
+ {
+  "n": 5,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 5] The inventory must list every endpoint the booking sheet calls under each of six sections. The list of places that open the sheet is only referenced, in owner-permissions-core's Conversion table. owner-sections-source does not depend on that component, and a later component is described as building on this inventory. So the input this requirement needs is defined downstream of it.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-endpoint-inventory: Booking-sheet endpoints listed under every section that opens the sheet"
+   },
+   {
+    "file": "components/owner-permissions-core/specs.md",
+    "where": "owner-permission-migration: Conversion table"
+   }
+  ],
+  "suggestion": "Put the list of booking-sheet entry points (by section and page) in this requirement itself, rather than pointing to a later component."
+ },
+ {
+  "n": 6,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 6] One scenario says the review check fails when a page calls an endpoint missing from the inventory. No requirement defines this check, how it finds the calls a page makes, or which pages belong to each section. Only the check that listed routes exist is described as an automated test. A builder cannot tell whether this coverage check is automated or a manual review.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-endpoint-inventory: Inventory covers every endpoint a section's pages call"
+   },
+   {
+    "file": "frontend/src/lib/route-permissions.ts",
+    "where": "route-to-section mapping"
+   }
+  ],
+  "suggestion": "Say how coverage is checked (automated test or named manual review) and what the source is for which pages belong to each section."
+ },
+ {
+  "n": 7,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 7] The single function 'governs owners only', and other roles keep today's behaviour. Some logins are both owner and OM (logins 44 and 61). Today `AllowedSectionsView` gives them owner sections only, while the chat scope adds their managed properties. The spec does not say which rule applies to a login with both roles, so builders could treat them differently in the menu and in the checks.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-resolution: Non-owner roles unaffected"
+   },
+   {
+    "file": "backend/DolceSystem/autenticazzone.py",
+    "where": "AllowedSectionsView (owner branch takes precedence over manager)"
+   }
+  ],
+  "suggestion": "Say that a login with both roles keeps today's behaviour: owner sections in the menu, managed properties still reachable as an OM. Or name it as an exception until the decision on logins 44 and 61."
+ },
+ {
+  "n": 8,
+  "severity": "minor",
+  "type": "contradiction",
+  "description": "[component `owner-sections-source`, finding 8] The WhatsApp scenarios say 'refused with an access-denied response'. owner-permissions-core expects 403 for the same situation. `media_guard` today answers every refusal with 404 'Risorsa non trovata', on purpose. So the expected status reads two ways.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "whatsapp-attachment-section-guard: WhatsApp attachments require the Chat section"
+   },
+   {
+    "file": "components/owner-permissions-core/specs.md",
+    "where": "owner-permission-enforcement: WhatsApp attachments require the Chat permission"
+   },
+   {
+    "file": "backend/DolceEngine/media_guard/views.py",
+    "where": "refusal response (404)"
+   }
+  ],
+  "suggestion": "Name the status code a refused attachment request returns (404 as media_guard does today, or 403), and keep it the same as owner-permissions-core."
+ },
+ {
+  "n": 9,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 9] The spec relies on 'live' `ManagerOwnerLink` rows in several requirements but never defines 'live'. The code defines it as: a link to an OM that manages at least one of the owner's properties today, or a direct link when the owner has at least one property with no OM. A builder would have to work the rule out from the code.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-resolution: Single source for an owner's sections"
+   },
+   {
+    "file": "backend/DolceSystem/autenticazzone.py",
+    "where": "AllowedSectionsView (is_active rule)"
+   }
+  ],
+  "suggestion": "Define 'live link' in the requirement, using today's rule from the menu endpoint."
+ }
+]
