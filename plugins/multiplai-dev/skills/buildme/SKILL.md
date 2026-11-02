@@ -1202,7 +1202,7 @@ them before the abort. The project's tests then run in the worktree
 (`tdd.test_command`, else the command buildme discovers, with
 `BUILDME_TRUST_REPO=1`, `agents/<NNN>-merge-tests-<id>.*`; SIGHUP ends them with the run), and a failure
 parks. The merge commit is pushed, never forced; a push rejected because origin's branch moved parks naming
-where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the feature branch's; a CHANGELOG is the feature branch's with every line the child added; a lockfile in a format read as data (TOML, JSON, pnpm's YAML) loads with no key twice, holds only either side's keys and values, the written version or a new hex manifest hash, and pins each package, under its own name, as one side does; another lockfile holds only either side's lines or the written version), as the merge step's own do, is not
+where it now is and the `fetch` and `reset --keep` to run; any other failed push, or a failed fetch, leaves the child `unknown` (exit `1`), and the next run tries again. Before that, a failed `git fetch` is run again after 15, 30 and 60 seconds, and a failed `gh` read after 2, 5 and 10. When `epic.max_usd` is reached and the merge would need the agent, nothing is merged. A merge commit holding only git's own merge plus such resolutions (checked against each file's three sides: a version file is git's merge with each version value the side's that changed it or, where both did, the next after the feature branch's; a CHANGELOG is the feature branch's with every line the child added; a lockfile in a format read as data (TOML, JSON, pnpm's YAML) loads with no key twice, holds only either side's keys and values, the written version or a new hex manifest hash, and pins each package, under its own name, as one side does; another lockfile holds only either side's lines or the written version), as the merge step's own do, is not
 reviewed again; any other, such as a person's "Update branch" with other edits, is. Then
 buildme waits for the PR's required checks (`gh pr checks --required`, read
 every 30 seconds while one is pending; when no check is required, the PR's
@@ -1447,7 +1447,10 @@ Parse pipeline stdout for progress lines:
   ticket ref, or (for a build that branches a worktree) are on no feature
   branch, on one origin does not have, or on one of several origin has. Nothing was written; exit `2`. When the second line is not a
   pm-spec command, it says what to do instead (newer specs on the feature
-  branch than in the build's worktree: the merge to run).
+  branch than in the build's worktree: the merge to run). A build that has
+  not started TDD and holds only its own park record (the `spec_issues` key
+  it wrote) does not stop here: it moves its `spec-issues.md` aside as
+  `spec-issues.resolved-<revision>.md`, merges the branch and goes on.
   Run the pm-spec command the second line names (`resume` checks specs already
   on disk, from an older buildme build or edited by hand, and marks them ready
   without rewriting them), then re-run the same build command

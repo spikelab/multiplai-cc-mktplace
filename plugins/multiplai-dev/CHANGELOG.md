@@ -15,6 +15,28 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.154.0] - 2026-11-02
+
+### Changed
+
+- **buildme epics**: a failed `git fetch` is run again after 15, 30 and 60
+  seconds, and a failed `gh` read after 2, 5 and 10 seconds, before the
+  child is set aside for the run. One network error or expired credential
+  no longer costs a whole epic run.
+- **buildme**: a test file that only gained lines since the block's tests
+  were committed passes the test-integrity gate, flagged for the reviewer,
+  instead of failing the block. A review-fix that adds tests no longer needs
+  to declare them. A changed or removed test line still fails, and so does
+  any change to a `conftest.py`.
+- **buildme**: a block's implementer that stops at its turn cap is run again
+  once, told its edits are in the working tree, before the block fails.
+  `tdd.implementer_continuations` sets how many times (`0` turns it off).
+- **buildme**: a build parked on spec issues resumes on its own once pm-spec
+  has marked revised specs ready on the feature branch. It moves its
+  `spec-issues.md` aside and merges the branch, where it used to refuse and
+  ask for the merge by hand. A build that has started TDD, or a worktree
+  with someone's own edits, still refuses as before.
+
 ## [0.153.3] - 2026-11-02
 
 ### Fixed

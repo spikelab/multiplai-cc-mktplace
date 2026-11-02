@@ -373,6 +373,7 @@ so Node commands are unchanged.
 | `tdd.parallel` | `auto` / `off` | `auto`; `off` runs the full suite serially |
 | `tdd.test_timeout` | whole seconds | `300`; each full-suite run (the baseline, the integration gates, the final verification, an epic's merge tests) that takes longer counts as not run |
 | `tdd.test_writer_max_turns` | positive integer | `30`; the block test writer's turn cap, stated in its prompt |
+| `tdd.implementer_continuations` | integer, 0 or more | `1`; how many times a block's implementer that stopped at its turn cap is run again, told its edits are in the working tree, before the block fails; `0` turns it off |
 | `tdd.mutation_test_writer_max_turns` | positive integer | `30`; the mutation round's test writer's turn cap |
 
 ## Mutation testing
