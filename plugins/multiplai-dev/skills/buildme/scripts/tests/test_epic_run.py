@@ -666,9 +666,7 @@ def test_a_checkout_with_no_config_yaml_refuses_a_base_ref_that_has_one(
     assert state.worktree_path is None
 
 
-def test_bootstrap_discovers_the_test_command_in_the_worktree(
-    tmp_path, monkeypatch
-):
+def test_bootstrap_discovers_the_test_command_in_the_worktree(tmp_path, monkeypatch):
     """The checkout (on main) has no pyproject.toml; the base ref, a feature
     branch, has one. Discovery runs in the build's worktree, so the build gets
     the branch's test command, and bootstrap's stub records it."""

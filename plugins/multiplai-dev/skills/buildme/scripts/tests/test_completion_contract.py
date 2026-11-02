@@ -241,6 +241,9 @@ async def test_standalone_requires_final_checks_even_when_optional_steps_done(
 ):
     config, state, args, push = accepted_build
     config.test_command = command
+    # An empty command with `tdd.enabled` on is refused before this point
+    # (preflight); with it off, the final checks must still not pass.
+    config.tdd_enabled = bool(command)
     state.phase = BuildPhase.TDD_BUILD
     state.checkpoint(config.state_file_path())
     assert await run_tdd_engine(config, args) != 0

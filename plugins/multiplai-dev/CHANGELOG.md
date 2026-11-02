@@ -15,19 +15,32 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
-## [0.151.2] - 2026-11-01
+## [0.152.0] - 2026-11-02
+
+### Changed
+
+- **buildme**: a build with no test command is now refused before any model
+  call (`PREFLIGHT:FAILED:test-command:...`). This happens when
+  `specs/config.yaml` sets no `tdd.test_command` and discovery finds no root
+  file it knows. Before, every test gate passed without running a test. To
+  build without tests anyway, set `tdd.enabled: false`. That key was written
+  by bootstrap but never read; now it is. With it set, the build goes on, but
+  `build-progress.md` gets a `WARNING`, the baseline is logged `SKIPPED`, and
+  the PR body gets a "Warning: no tests ran" section.
+- **buildme**: bootstrap's starter `specs/config.yaml` for a project with no
+  test command yet (a brand-new one) now says `tdd.enabled: false`, so that
+  project's first build is not refused.
+- **buildme**: the test command and `tdd.enabled` are read again once the
+  build is in its worktree, and discovery runs there. A test setup that is
+  only on the branch the build starts from (`--base-ref`, as every epic
+  child does) is used, and so is one an earlier block added before a resume.
 
 ### Fixed
 
-- **buildme**: a build of a feature branch (`--base-ref origin/<branch>`,
-  as every epic child is) started from a checkout with no
-  `specs/config.yaml`, while the branch has one, now stops with
-  `... Push it, or pull origin's, first.` It used to go on with no config,
-  so with no `tdd.test_command` its test gates ran nothing.
-- **buildme**: a build with no test command now says so. Every TDD run
-  writes a `WARNING` to `build-progress.md`, the baseline is logged
-  `SKIPPED` instead of `PASSED`, and the PR body gets a "Warning: no tests
-  ran" section.
+- **buildme**: a build of a feature branch (`--base-ref origin/<branch>`)
+  started from a checkout with no `specs/config.yaml`, while the branch has
+  one, now stops with `... Push it, or pull origin's, first.` It used to go
+  on and read no config.
 
 ## [0.151.0] - 2026-11-01
 

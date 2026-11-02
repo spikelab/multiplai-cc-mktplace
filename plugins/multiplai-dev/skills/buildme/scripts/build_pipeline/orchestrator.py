@@ -1949,12 +1949,19 @@ async def _run_bootstrap(
     if not config_yaml.exists():
         import yaml
 
+        # A project with no test command yet (a brand-new one) gets
+        # `enabled: false`, so its first build goes on with the test gates
+        # skipped, and says so, instead of being refused.
         data = {
             "schema": "spec-driven",
             "context": f"Project: {config.project_name}\n{config.project_description}",
-            "tdd": {"enabled": True, "test_command": config.test_command},
+            "tdd": {
+                "enabled": bool(config.test_command),
+                "test_command": config.test_command,
+            },
         }
         config_yaml.write_text(yaml.dump(data, default_flow_style=False))
+        config.reload_test_settings()
 
     # What a kept re-run's bootstrap leaves is the build's own (the check
     # above passed, then bootstrap wrote its files): a stop before the
@@ -2397,6 +2404,8 @@ def _setup_worktree(config: BuildConfig, state: BuildState) -> None:
     # Re-bind to the SAME subdirectory inside the worktree, not its root — a
     # nested project (monorepo subpackage) must keep building where it lives.
     config.rebind_project_dir(dest / offset)
+    # Test the worktree's tree: discovery and `tdd:` read it, not the checkout.
+    config.reload_test_settings()
     config.pipeline_branch = branch
     state.state_file = str(config.state_file_path())
     log.info("Build re-bound to %s on branch %s", config.project_dir, branch)
@@ -2530,6 +2539,7 @@ def _rebind_to_existing_worktree(config: BuildConfig) -> None:
     _, dest, prior = max(found, key=lambda f: f[0])
     config.source_project_dir = config.project_dir
     config.rebind_project_dir(dest / offset)
+    config.reload_test_settings()
     config.pipeline_branch = prior.branch or git_ops.current_branch(dest)
     log.info(
         "RESUME re-bound to existing worktree %s (branch=%s) — not creating a new one",
