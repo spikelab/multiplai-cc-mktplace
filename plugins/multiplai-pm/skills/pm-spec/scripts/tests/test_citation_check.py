@@ -154,7 +154,9 @@ def test_S58_a_block_then_only_depends_on_edited_reopens_the_check(repo, model):
     _add_dependency(repo, repo.parent / "reviewer")
     calls = len(model.calls)
     assert run(repo, *RESUME) == 0
-    assert len(model.calls) == calls + 1  # checked again, not refused
+    assert (
+        len(model.calls) == calls + 2
+    )  # checked again (ui now reads api), not refused
     assert layout.revision(change_dir(repo)) == revision  # no hashed file changed
     step = state(change_dir(repo))["steps"]["consistency"]
     assert step["outcome"] == "passed" and step["blocked_dependencies"] is None

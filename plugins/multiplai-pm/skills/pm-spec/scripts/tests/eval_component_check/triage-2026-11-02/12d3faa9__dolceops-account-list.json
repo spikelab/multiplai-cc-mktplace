@@ -1,0 +1,74 @@
+[
+ {
+  "n": 2,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `dolceops-account-list`, finding 2] The requirement says validation on the sheet is 'the same as on the property's owner tab today' and that an invalid value, including the IBAN, is refused with a message. The owner tab does no validation today. The save path writes owner fields with no checks (no IBAN format, no required name), there are no required-field rules for the owner, and the tab itself checks nothing. So the scenario 'a value the owner tab would reject' has nothing to copy: a builder must either invent rules or ship a check that never refuses anything.",
+  "places": [
+   {
+    "file": "components/dolceops-account-list/specs.md",
+    "where": "account-sheet: Editable fiscal and payment data"
+   },
+   {
+    "file": "backend/DolcePMS/endpointz/onboard.py",
+    "where": "create_or_update_immobile / _assign_fields with CAMPI_PROPRIETARIO (no field validation)"
+   },
+   {
+    "file": "frontend/src/app/dolceops/pms/immobile/[immobileId]/components/tab-proprietario.tsx",
+    "where": "saveProprietario (no validation)"
+   }
+  ],
+  "suggestion": "List which fields must be valid and what counts as invalid (for example IBAN format, required registry name, maximum lengths), and say that the same rules apply on the property's owner tab. Or say that no extra validation applies beyond what is accepted today, and drop the 'invalid value refused' scenario."
+ },
+ {
+  "n": 3,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `dolceops-account-list`, finding 3] The sheet makes 'the account's fiscal (registry) data and payment data' editable for every OM and owner account, with validation 'the same as on the property's owner tab'. The owner tab and the sync rule only cover owner data. An OM's data is on the Manager record: IBAN, bank holder, bank, BIC, email, phone and commission, but no fiscal registry fields. No requirement and no existing screen says which OM fields the sheet shows or edits, or how they are validated.",
+  "places": [
+   {
+    "file": "components/dolceops-account-list/specs.md",
+    "where": "account-sheet: Editable fiscal and payment data"
+   },
+   {
+    "file": "backend/DolceSystem/models.py",
+    "where": "class Manager (iban, intestatario_conto_bancario, nome_banca, bic_swift, email, telefono)"
+   }
+  ],
+  "suggestion": "Say which data the sheet shows and lets operators edit for an OM account (for example its payment details and contacts) and which validation applies to them. Or say that fiscal and payment editing is offered only on owner account sheets."
+ },
+ {
+  "n": 4,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `dolceops-account-list`, finding 4] Units are defined as 'the number of properties linked to the account (for a cleaning company, the properties assigned to it)'. A cleaning company is assigned per unit (room type), through the unit's cleaning details, not per property. One property can have units cleaned by different companies. The column is called 'units' but the definition counts properties, so a builder must guess whether to count properties or units and how to count a property that is only partly assigned.",
+  "places": [
+   {
+    "file": "components/dolceops-account-list/specs.md",
+    "where": "account-list-api: One entry per account with its summary fields"
+   },
+   {
+    "file": "backend/DolcePMS/models.py",
+    "where": "CleaningInfo.cleaning_company (per RoomType)"
+   }
+  ],
+  "suggestion": "Say whether the count is properties or units for every account type. For cleaning companies, say whether a property counts when only some of its units are assigned to the company."
+ },
+ {
+  "n": 5,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `dolceops-account-list`, finding 5] An OM account's name may not be empty. An owner account's name is the registry name (first name plus surname). The owner tab accepts an empty first name today, and this spec adds no rule against it. So an owner account can end up with an empty name in the list and on the sheet. Nothing says whether that is refused or what is shown instead.",
+  "places": [
+   {
+    "file": "components/dolceops-account-list/specs.md",
+    "where": "account-sheet: Editable account name"
+   },
+   {
+    "file": "components/account-model/specs.md",
+    "where": "account-entity: Account has its own name"
+   }
+  ],
+  "suggestion": "Say whether an empty owner registry name is refused, on both the sheet and the property's owner tab. If it is not refused, say what the account list and sheet show for an owner account with no name."
+ }
+]
