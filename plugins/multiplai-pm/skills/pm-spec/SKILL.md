@@ -190,10 +190,13 @@ after the third stop runs the consistency check and the handoff.
    applies one rule to every member of a set ("every endpoint …", "each page
    that …") it lists the members from the code, from both the side that
    defines them and the side that calls or uses them, and tests the rule on
-   each one. Before it reports a problem it looks for text that already
-   settles it (the requirement's other scenarios, the rest of the spec, the
-   plan, the dependencies' specs) and drops the problem when there is; a kept
-   finding says which such text it read. It reports each
+   each one, against the other requirements, the dependencies' specs,
+   `proposal.md` and the code. Before it reports a problem it looks for text
+   that already settles it (the requirement's other scenarios, the rest of
+   the spec, the plan, the dependencies' specs) and drops the problem when
+   such text speaks to the same case; two rules that cannot both hold stay a
+   problem unless some text says which one wins. A kept finding says which
+   such text it read. It reports each
    requirement that contradicts another requirement of the same spec, a
    dependency's spec or the code as it is (`contradiction`, `gap`), and each
    one that cannot be met as written (`infeasible`). Each finding names the
@@ -205,8 +208,8 @@ after the third stop runs the consistency check and the handoff.
    builder would have to guess something that changes behaviour or cannot
    build the requirement as written, and `minor` otherwise. How well the
    check does is measured by a replay eval on problems buildme raised after
-   past handoffs: `scripts/tests/eval_component_check/README.md`. Its findings are the consistency check's own, tagged
-   with their component: the same block, `--accept`, round cap and
+   past handoffs: `scripts/tests/eval_component_check/README.md`. Its
+   findings are the consistency check's own, tagged with their component: the same block, `--accept`, round cap and
    `SPEC:WARN` rules. Each component's result is saved in the run state with
    a digest of the files it read, and one line `COMPONENT_CHECK <id>
    findings=<n> cost=<usd>` goes to `.pm-spec/progress.md`; a result whose
