@@ -508,7 +508,7 @@ class TestCommitScope:
         before = _repo_view(repo)
         head = _head(repo)
         with pytest.raises(git_ops.GitLifecycleError):
-            git_ops.commit_tree(repo, "block", "partially staged")
+            git_ops.commit_tree(repo, "block")
         assert _repo_view(repo) == before
         assert _head(repo) == head
         assert _out(repo, "show", ":part.py") == "p = 2\n"
@@ -565,7 +565,7 @@ class TestCommitScope:
         (proj / "app.py").write_text("x = 2\n")
 
         if commit == "commit_tree":
-            assert git_ops.commit_tree(proj, "block", "row C2")
+            assert git_ops.commit_tree(proj, "block")
         elif commit == "commit_paths":
             assert git_ops.commit_paths(proj, "spec", ["app.py"])
         else:
@@ -599,7 +599,7 @@ class TestCommitScope:
         _git(root, "add", "build-progress.md")
         (root / "app.py").write_text("x = 2\n")
 
-        assert git_ops.commit_tree(root, "block", "row C3")
+        assert git_ops.commit_tree(root, "block")
         assert _out(root, "diff", "--name-only", "HEAD~1", "HEAD").split() == ["app.py"]
         assert _out(root, "diff", "--cached", "--name-only").split() == [
             "build-progress.md"
@@ -617,7 +617,7 @@ class TestCommitScope:
         head = _head(root)
 
         with pytest.raises(git_ops.GitLifecycleError):
-            git_ops.commit_tree(root, "block", "row C5")
+            git_ops.commit_tree(root, "block")
         assert (root / ".git" / "MERGE_HEAD").exists()
         assert git_ops.save_wip_ref(root, "refs/buildme/wip/feat/c5", "wip") is None
         assert (root / ".git" / "MERGE_HEAD").exists()
@@ -779,7 +779,7 @@ class TestWholeTreeOperations:
         (repo / "module.py").write_text("x = 1\n")
         self._bookkeeping(repo)
 
-        sha = git_ops.commit_tree(repo, "impl(block-1): B", "block=1")
+        sha = git_ops.commit_tree(repo, "impl(block-1): B")
         assert sha == git_ops.rev_parse_head(repo)
 
         committed = _git(
@@ -792,13 +792,13 @@ class TestWholeTreeOperations:
 
     def test_commit_tree_returns_none_when_there_is_nothing_to_commit(self, tmp_path):
         repo = make_repo(tmp_path / "proj")
-        assert git_ops.commit_tree(repo, "noop", "label") is None
+        assert git_ops.commit_tree(repo, "noop") is None
 
     def test_commit_tree_reports_unavailable_repo(self, tmp_path):
         plain = tmp_path / "plain"
         plain.mkdir()
         with pytest.raises(git_ops.GitLifecycleError):
-            git_ops.commit_tree(plain, "m", "label")
+            git_ops.commit_tree(plain, "m")
 
     def test_rev_parse_head_is_none_without_commits(self, tmp_path):
         repo = make_repo(tmp_path / "proj", commit=False)
@@ -826,7 +826,7 @@ class TestWholeTreeOperations:
         change.mkdir(parents=True)
         (change / "proposal.md").write_text("# proposal\n")
         (repo / "module.py").write_text("x = 1\n")
-        base = git_ops.commit_tree(repo, "impl", "block=1")
+        base = git_ops.commit_tree(repo, "impl")
         assert base is not None
 
         # A failed refactor: a tracked file edited and a new file created,
@@ -851,7 +851,7 @@ class TestWholeTreeOperations:
         change.mkdir(parents=True)
         (change / "proposal.md").write_text("# proposal\n")
         (repo / "module.py").write_text("x = 1\n")
-        base = git_ops.commit_tree(repo, "impl", "block=1")
+        base = git_ops.commit_tree(repo, "impl")
         assert base is not None
 
         (repo / "module.py").write_text("x = 2\n")
