@@ -36,6 +36,12 @@ time, not derived from a tag.
   `spec-issues.md` aside and merges the branch, where it used to refuse and
   ask for the merge by hand. A build that has started TDD, or a worktree
   with someone's own edits, still refuses as before.
+- **buildme**: a block whose jest test files sit under a folder with
+  brackets or parentheses in its name (Next.js routes such as
+  `[accountId]/`) runs only those files, passed after `--runTestsByPath`.
+  It used to run the whole jest suite, so a suite that already failed
+  elsewhere in the repo failed the block. A command that reaches jest
+  through an npm script, a task runner or vitest still runs whole.
 
 ## [0.153.3] - 2026-11-02
 

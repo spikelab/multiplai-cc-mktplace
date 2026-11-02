@@ -7,6 +7,7 @@ the whole command, so RED never passes on an empty selection.
 """
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -304,10 +305,26 @@ class TestNarrowCommand:
     @pytest.mark.parametrize(
         "path", ["src/[id].test.js", "src/(auth)/login.test.js", "src/a+b.test.ts"]
     )
-    def test_node_path_jest_would_read_as_a_regex_falls_back(self, path):
-        # jest reads each path as a regular expression.
+    def test_jest_takes_a_path_with_regex_characters_by_path(self, path):
+        # jest reads each path as a regular expression unless told otherwise.
+        assert narrow_command(
+            "pnpm exec jest --maxWorkers=50%", ["src/ok.test.js", path], "node"
+        ) == (
+            "pnpm exec jest --maxWorkers=50% --runTestsByPath src/ok.test.js "
+            + shlex.quote(path)
+        )
+
+    @pytest.mark.parametrize("command", ["npx vitest run", "npm test", "make jest"])
+    def test_a_path_with_regex_characters_falls_back_when_jest_is_not_called(
+        self, command
+    ):
+        # vitest, and a script or task runner, may not pass the flag to jest.
+        assert narrow_command(command, ["src/[id].test.js"], "node") == command
+
+    def test_jest_paths_without_regex_characters_are_appended_as_before(self):
         assert (
-            narrow_command("npx jest", ["src/ok.test.js", path], "node") == "npx jest"
+            narrow_command("npx jest", ["src/ok.test.js"], "node")
+            == "npx jest src/ok.test.js"
         )
 
     def test_pytest_takes_a_path_with_brackets(self):
