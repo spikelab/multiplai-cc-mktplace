@@ -253,7 +253,8 @@ def count_entries(proposal: str) -> int:
     """Total ``### N.`` update entries plus ``### A{N}.`` action items.
 
     The merge's own tripwire: if this drops between the inputs and the output,
-    the run has lost a learning and must stop rather than record the ledger keys.
+    the run has lost a learning and ``dream.py`` stops before writing the
+    proposal, so the staged drafts are kept for the next run.
     """
     total = 0
     _, sections = _sections(proposal)

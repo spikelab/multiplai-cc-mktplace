@@ -1956,6 +1956,17 @@ async def dream_report() -> None:
         from lib import proposal_merge
 
         merged = proposal_merge.merge_drafts(merge_input)
+        # The merge's tripwire: a merged document with fewer entries than its
+        # drafts has lost a learning. Raising here, before the proposal is
+        # written and before staging is cleared, keeps every staged draft on
+        # disk for the next run to resume.
+        drafts_count = proposal_merge.count_entries_in(merge_input)
+        merged_count = proposal_merge.count_entries(merged)
+        if merged_count < drafts_count:
+            raise RuntimeError(
+                f"Merge lost entries: {drafts_count} in the drafts, "
+                f"{merged_count} in the merged proposal"
+            )
         logger.info(
             "Merged %d draft(s) (%d fresh, %d resumed, %d folded) into %d bytes",
             len(merge_input),

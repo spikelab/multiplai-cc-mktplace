@@ -674,6 +674,28 @@ class TestReportRunEndToEnd:
         )
         assert written.count("<!-- dream:generated") == 1
 
+    def test_a_merge_that_loses_entries_stops_the_run(
+        self, seeded, dream_env, monkeypatch
+    ):
+        """``count_entries`` is the merge's tripwire: fewer entries out than in
+        means a learning was lost, so no proposal is written and the staged
+        drafts stay on disk for the next run to resume."""
+        from lib import proposal_merge
+
+        mod, _ = seeded
+        real_merge = proposal_merge.merge_drafts
+
+        def _lossy_merge(drafts):
+            return real_merge(drafts).replace("### 1.", "", 1)
+
+        monkeypatch.setattr(proposal_merge, "merge_drafts", _lossy_merge)
+
+        with pytest.raises(RuntimeError, match="Merge lost entries"):
+            asyncio.run(mod.dream_report())
+
+        assert not list(dream_env["dreams_dir"].glob("processed-learnings-*.md"))
+        assert any(mod._runs_dir().iterdir()), "staged drafts must survive"
+
     def test_a_second_run_finds_nothing_new(self, seeded, dream_env, capsys):
         mod, _ = seeded
         asyncio.run(mod.dream_report())
