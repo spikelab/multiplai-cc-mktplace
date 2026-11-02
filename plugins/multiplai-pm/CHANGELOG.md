@@ -21,6 +21,14 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-11-02
+
+### Changed
+- **pm-spec**: the component check now lists the members of every set a requirement applies one rule to ("every endpoint …", "each page that …") from the code, from both the side that defines them and the side that calls them, and tests the rule on each one, so it reports a member the rule breaks even when the spec does not list it.
+- **pm-spec**: the component check looks for text that already settles a problem (the requirement's other scenarios, the rest of the spec, the plan, a dependency's spec) before reporting it, and drops it when there is such text; a kept finding says which text it read. It should raise fewer findings that the specs already answer.
+- **pm-spec**: a component-check finding is `critical` only when two stated rules cannot both hold; `major` when a builder would have to guess something that changes behaviour or cannot build the requirement as written; `minor` otherwise.
+- **pm-spec**: a change whose component check already ran keeps its saved results after this update, because a saved result is reused while the files it read are unchanged; edit a component's files, or start the check on a new change, to get the new behaviour for it.
+
 ## [0.16.1] - 2026-11-02
 
 ### Fixed
