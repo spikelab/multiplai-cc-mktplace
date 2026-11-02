@@ -1226,3 +1226,256 @@ labels:
     endpoints, /api/dolcealloggiati/lookup/proprietari/ (operator-only by default), and /api/booking/<id>/legal-status/
     (managers only). An owner who holds the section still gets a refusal from these. That scenario and
     ''serve an owner holding the section as before'' cannot both hold.'
+- id: 12d3faa9/account-billing/A-2026-11-02-baseline-5
+  commit: 12d3faa9
+  component: account-billing
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 5
+  severity: major
+  verdict: false
+  reason: 'The account migration is already its own atomic migration (0027_migra_account), so billing
+    cannot share its transaction, but the harm does not follow: specs.md:115 says the billing migration
+    stops without committing any billing-profile change, and 0027 keeps the legacy links, so an aborted
+    billing step leaves a consistent database; the release-checklist point concerns only the permission
+    migration.'
+  evidence: specs/changes/account-management/components/account-billing/specs.md:115-119; account-model/specs.md:395-400;
+    backend/DolceSystem/migrations/0027_migra_account.py:1-3,12-19; owner-permissions-core/specs.md:506-511;
+    account-billing/.change.yaml
+  description: The billing migration runs 'after the account migration' and stops without committing any
+    billing change. The account migration is one all-or-nothing transaction. Nothing says whether the
+    billing step is part of that same transaction. If it isn't, the accounts could be saved while the
+    billing step stops. Profiles would then still be tied to users while the code reads them by account,
+    so every user would see no profiles until someone steps in. The release-checklist order in owner-permissions-core
+    doesn't mention billing either.
+- id: 12d3faa9/account-billing/A-2026-11-02-baseline-8
+  commit: 12d3faa9
+  component: account-billing
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 8
+  severity: major
+  verdict: false
+  reason: 'A second run has nothing to guess: the scenario only requires that no billing profile''s links
+    or data change, which skipping placed profiles or stopping both meet, and nothing requires keeping
+    the original user for audit (specs.md:11 rules out only a user link that determines who can use it).'
+  evidence: specs/changes/account-management/components/account-billing/specs.md:8-11,80-81,121-126; account-billing/plan.md:12,19
+  description: '''Re-run is a no-op'' assumes the migration can be run again on migrated data. The plan
+    replaces the profile''s user link with the account link, and the only rule for placing a profile is
+    ''the account of the user it is linked to today''. Once the user link is gone, a second run has nothing
+    to place profiles by. It''s unclear whether a re-run should check, skip or fail. It''s also unclear
+    whether a profile''s original user is kept anywhere, for example for audit.'
+- id: cdc8ec05/account-billing/A-2026-11-02-baseline-6
+  commit: cdc8ec05
+  component: account-billing
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 6
+  severity: major
+  verdict: real
+  reason: 'Same problem as 12d3faa9/account-billing/T6, text unchanged at cdc8ec05: deleting an owner,
+    OM or cleaning company deletes its account first (pre_delete receiver) while properties, receipts
+    and stay-tax payments PROTECT their billing profile, so deleting, unlinking or refusing each clashes
+    with the mandatory account link or account-model''s rule that deleting a cleaning company is not refused.'
+  evidence: backend/DolceSystem/accounts.py:234-243,260-272; backend/DolcePMS/models.py:194-196; backend/DolceFinance/models/billing.py:55,77-79;
+    backend/DolceFinance/models/stay_tax.py:580,598-600; account-billing/specs.md:6,37-51; account-model/specs.md:83-84
+  description: 'The spec protects profiles when a user is deactivated or deleted. It says nothing about
+    what happens when the account itself goes away. account-model says deleting a cleaning company deletes
+    its users and ''SHALL NOT be refused''. If the company''s account is removed too, its profiles must
+    be deleted or unlinked, and either one conflicts with this spec: the account link is mandatory, and
+    properties and receipts protect the profiles from deletion. Nothing says whether the deletion keeps
+    the profiles, gets refused, or detaches them.'
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-3
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 3
+  severity: major
+  verdict: real
+  reason: The 'Every actor field is in the inventory' scenario asks an automated check to find every field
+    that references the user model and records who performed an action, but no spec or plan gives a rule
+    a check can apply, and many links to auth User and Utente record no action (Utente.user, Manager.user,
+    Operatore.user, Account.titolare, CleaningMessageDestination.utente, ProfiloFatturazione.utente);
+    the login-history half is overstated (plan.md lists UtenteLoginHistory.user). Related to P4 but not
+    P4.
+  evidence: account-attribution specs.md:17-19,25-30; plan.md:24-35; backend/DolceSystem/models.py:46-50,232-237,302,411,501;
+    backend/DolceCleaning/models.py:42-49; backend/DolceFinance/models/billing.py:232-236
+  description: 'The inventory check must ''enumerate every model field that references the user model
+    and records who performed an action'' and fail if one is missing. The code has two user models (auth
+    User and DolceSystem.Utente), and many fields point to them without recording an action: Utente.user,
+    Manager/Operatore user links, Account.titolare, CleaningMessageDestination.utente. No requirement
+    says how a field is classed as an actor field, so an automated check cannot tell which missing fields
+    count. The scope is also unclear for UtenteLoginHistory.user, a login record, against the out-of-scope
+    ''logging reads''.'
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-5
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 5
+  severity: minor
+  verdict: false
+  reason: 'Both rules are explicit: after deletion the view shows the username snapshot (scenario with
+    mundus.ops2) and account-model frees the username; the deleted user''s row reference is null so it
+    can never point to a new user with the same username; a ''(eliminato)'' marker is a product choice,
+    not a conflict.'
+  evidence: account-attribution specs.md:132,138-140,158-160; account-model specs.md:190-195
+  description: After deletion, the view shows the stored username snapshot. The account-model spec frees
+    a deleted user's username for reuse. A new user can take that username, so old log entries show a
+    username that now belongs to a different person, and the spec does not say whether that is acceptable
+    or how such entries should be shown.
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-6
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 6
+  severity: minor
+  verdict: false
+  reason: 'The spec settles the order: for an existing user with no name it SHALL show the username (scenario
+    mundus.ops2); Utente.user is a required one-to-one to an auth User, which always has a username, so
+    the email and ''Utente #id'' fallbacks can never be reached.'
+  evidence: account-attribution specs.md:131-136; backend/DolceLog/views.py:194-206,560-571; backend/DolceSystem/models.py:46-51
+  description: 'The spec says that when a user exists with no first name or surname, the view shows the
+    username. The current calendar log API falls back to username, then email, then ''Utente #id''. The
+    plan only partly states which order replaces it, and the spec does not say whether the email step
+    stays.'
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-7
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 7
+  severity: minor
+  verdict: false
+  reason: The code claim is right (the text filter and options list use only linked users), but the specs
+    require only what the views display and add no search requirement, and the plan's views.py change
+    is display only, so leaving the filters breaks no rule. Borderline.
+  evidence: account-attribution specs.md:116-117,157-160; plan.md:27; backend/DolceLog/views.py:120-134,245-260
+  description: The spec says that while the user exists, views show the user's current name, and the snapshot
+    only after deletion. The calendar log view also has a user filter, which searches the user's name,
+    username and email, and a list of users to filter by. The spec does not say whether entries by deleted
+    users can still be found by their stored name, or whether they appear in that list.
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-8
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 8
+  severity: minor
+  verdict: false
+  reason: The order is settled (the backfill runs after users are assigned to accounts and leaves rows
+    it cannot fill empty and counted); a backfill inside account-model's transaction or in a later dependent
+    migration both meet every stated requirement. Borderline.
+  evidence: account-attribution specs.md:79-80,94-95; account-model specs.md:395-400; account-attribution
+    plan.md:13,40
+  description: The spec says the backfill runs 'after users have been assigned to accounts'. The account-model
+    migration is one all-or-nothing transaction. The spec does not say whether the backfill belongs to
+    that transaction or runs as a separate later step, and so whether a failed backfill must also undo
+    the account migration.
+- id: c5712a34/dolcecleaning-users/A-2026-11-02-baseline-3
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 3
+  severity: major
+  verdict: false
+  reason: 'The plan settles it: views.py returns role and last access on top of what the endpoint returns
+    today (id, user_id, tel), and the team user type extends today''s user type; ''SHALL carry'' lists
+    required fields and does not forbid more. Borderline.'
+  evidence: dolcecleaning-users specs.md:6,46,184-188,409-414; plan.md:30,37; account-user-api specs.md:47-53,59-60;
+    backend/DolceCleaning/views.py:291-312; frontend/src/lib/dolcecleaning/types.ts:46-55
+  description: The edit requirements need the tab and the team table to show a user's phone, and to fill
+    the edit form with it. In the Utenti tab, 'the tab shows the new phone'. On the team, 'the user's
+    details show the new phone'. Today the edit dialog fills tel and the other fields from the list response.
+    But the list endpoint the spec makes these screens use (account-user-api, account-user-list) returns
+    only name and surname, username, email, role, status and last access. It returns no phone and no user
+    identifier, yet every row action (edit, deactivate, change Owner, delete, reset) has to name a user.
+    Neither the spec nor account-user-api gives the phone or an id to the screens.
+- id: c5712a34/dolcecleaning-users/A-2026-11-02-baseline-6
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 6
+  severity: minor
+  verdict: false
+  reason: provider_user_create_api accepts any non-empty password, but the spec routes user management
+    through account-user-api, which requires today's password validation, and its plan reuses validate_password_strength,
+    which exists at this commit.
+  evidence: dolcecleaning-users specs.md:6,84-103; account-user-api specs.md:126-141; account-user-api
+    plan.md:34; backend/DolceSystem/endpointz/update_user.py:185; backend/DolceCleaning/views.py:405-422
+  description: 'The ''Password chosen'' scenarios rely on ''today''s validation''. But today the DolceCleaning
+    create-user endpoint applies no password validation at all: it accepts any non-empty string. So it
+    is unclear which rule ''today''s validation'' means for cleaning users.'
+- id: c5712a34/dolcecleaning-users/A-2026-11-02-baseline-7
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 7
+  severity: minor
+  verdict: false
+  reason: '''as today'' applies only to the checkbox label; the same requirement says on confirmation
+    the form SHALL ask account-user-api for the welcome email when checked, and the ''Checked sends the
+    welcome email'' scenario says one email is sent.'
+  evidence: dolcecleaning-users specs.md:109-127; frontend/src/app/dolceops/dolcecleaning/impresa/[impresaId]/page.tsx:132,353-372,1174-1181
+  description: The welcome-email requirement says the checkbox works 'as today'. On the DolceCleaning
+    form today, the checkbox is shown but its value is never sent, and no welcome email goes out. The
+    'Checked sends the welcome email' scenario is therefore new behaviour for the Utenti tab, not a kept
+    one, and the wording reads two ways.
+- id: 1c19e875/owner-sections-source/A-2026-11-02-baseline-4
+  commit: 1c19e875
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 4
+  severity: major
+  verdict: false
+  reason: The code claims hold (_whatsapp_media is wider than can_access_chat's single-booking choice),
+    but the requirement already says media_guard's access SHALL be no wider than the chat API's, which
+    forbids keeping the wider rule.
+  evidence: owner-sections-source specs.md:133-147; backend/DolceEngine/media_guard/resolvers.py:165-215;
+    backend/DolceSystem/auth_utils.py:242-310; backend/DolceSystem/chatz/chatz_v2.py:83
+  description: The requirement and the 'other client's property' scenario depend on the property of 'a
+    conversation', which the data does not define. Today WhatsApp messages are linked to a contact's phone
+    number, not to a property. The resolver serves an owner any attachment whose contact matches a customer
+    of any booking on the owner's properties. The chat API instead resolves the phone number to one booking
+    (`booking_for_chat_phone`). For a guest with bookings at two clients' properties, the two rules give
+    different answers, and the spec does not say which booking decides.
+- id: 1c19e875/owner-sections-source/A-2026-11-02-baseline-5
+  commit: 1c19e875
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 5
+  severity: minor
+  verdict: real
+  reason: The scenario says 'the review check for this component fails and reports that endpoint' but
+    nothing says what that check is, while neighbouring requirements say 'an automated test', so a builder
+    must guess between a scanner and a manual review; the page-to-section half is overstated (route-permissions.ts
+    maps routes to sections).
+  evidence: owner-sections-source specs.md:73-74,84-93,114-120; plan.md:35; frontend/src/lib/route-permissions.ts:1-39
+  description: The coverage requirement says a 'review check' fails when a section's page calls an endpoint
+    that is not in the inventory. It does not say whether this check is automated or manual. It also does
+    not say what decides which DolceBot pages belong to which section (for example, the route-to-section
+    map the frontend already uses).
+- id: 12d3faa9/dolceops-account-list/A-2026-11-02-baseline-4
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 4
+  severity: minor
+  verdict: real
+  reason: The sheet API reads and updates a sheet for any account and the fiscal/payment requirement covers
+    'the account's' data, yet only OM and owner rows open a sheet and nothing says what the API returns
+    or allows for a cleaning-company id; the name part is overstated. Different from T3 (OM sheets).
+  evidence: dolceops-account-list specs.md:141-153,159-175,212-215,237-249; plan.md:18-23; account-model
+    specs.md:31-32
+  description: The account sheet API reads and updates 'an account sheet' for any account id. Only OM
+    and owner rows open a sheet; cleaning-company rows redirect to DolceCleaning. Nothing says what the
+    sheet API does for a cleaning-company account. If it allowed editing that account's fiscal data or
+    name, it would break account-model, where a cleaning company's name is edited only in DolceCleaning.
