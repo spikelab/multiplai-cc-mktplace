@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 from build_pipeline import git_ops, intake, orchestrator
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig, EpicSettings
@@ -663,6 +664,89 @@ def test_a_checkout_with_no_config_yaml_refuses_a_base_ref_that_has_one(
     with pytest.raises(intake.ConfigNotCommittedError, match="Push it, or pull"):
         asyncio.run(orchestrator._run_bootstrap(config, state, None, None))
     assert state.worktree_path is None
+
+
+def test_bootstrap_discovers_the_test_command_in_the_worktree(
+    tmp_path, monkeypatch
+):
+    """The checkout (on main) has no pyproject.toml; the base ref, a feature
+    branch, has one. Discovery runs in the build's worktree, so the build gets
+    the branch's test command, and bootstrap's stub records it."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    subprocess.run(["git", "checkout", "-qb", "feature"], cwd=project, check=True)
+    (project / "pyproject.toml").write_text("[project]\nname='x'\n")
+    subprocess.run(["git", "add", "pyproject.toml"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "scaffold"],
+        cwd=project,
+        check=True,
+    )
+    feature = _sha(project)
+    subprocess.run(["git", "checkout", "-q", "-"], cwd=project, check=True)
+    config = BuildConfig(project_dir=project, change_name="c")
+    config._discover_test_command()
+    assert config.test_command == ""
+    config.base_ref = feature
+    state = BuildState(change_name="c", tier="advanced")
+    asyncio.run(
+        orchestrator._run_bootstrap(
+            config, state, ChangeManager(config.specs_dir), None
+        )
+    )
+    assert config.project_dir != project
+    assert config.test_command == "pytest -xvs"
+    assert config.tdd_enabled is True
+    stub = yaml.safe_load((config.specs_dir / "config.yaml").read_text())
+    assert stub["tdd"] == {"enabled": True, "test_command": "pytest -xvs"}
+
+
+def test_bootstrap_of_a_project_with_no_tests_writes_tdd_disabled(
+    tmp_path, monkeypatch
+):
+    """A brand-new project has no test command yet. Bootstrap's stub says
+    `tdd.enabled: false`, so the build goes on with the gates skipped (and
+    says so) instead of refusing a project that cannot have tests yet."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    config = BuildConfig(project_dir=project, change_name="c")
+    state = BuildState(change_name="c", tier="advanced")
+    asyncio.run(
+        orchestrator._run_bootstrap(
+            config, state, ChangeManager(config.specs_dir), None
+        )
+    )
+    stub = yaml.safe_load((config.specs_dir / "config.yaml").read_text())
+    assert stub["tdd"] == {"enabled": False, "test_command": ""}
+    assert config.test_command == ""
+    assert config.tdd_enabled is False
+
+
+def test_a_resume_reads_the_test_settings_of_the_worktree_it_rebinds_to(
+    tmp_path, monkeypatch
+):
+    """A resumed build re-binds to its worktree, where an earlier block may
+    have added the project's first root file; the test command and
+    `tdd.enabled` come from there, not from the checkout."""
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    config = BuildConfig(project_dir=project, change_name="c")
+    state = BuildState(change_name="c", tier="advanced")
+    asyncio.run(
+        orchestrator._run_bootstrap(
+            config, state, ChangeManager(config.specs_dir), None
+        )
+    )
+    wt = config.project_dir
+    state.checkpoint(config.state_file_path())
+    (wt / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (wt / "specs" / "config.yaml").write_text("tdd:\n  enabled: true\n")
+    again = BuildConfig(project_dir=project, change_name="c")
+    again.tdd_enabled = False
+    orchestrator._rebind_to_existing_worktree(again)
+    assert again.project_dir == wt
+    assert again.test_command == "pytest -xvs"
+    assert again.tdd_enabled is True
 
 
 def test_a_build_inside_its_own_worktree_is_not_refused_on_its_base_ref(

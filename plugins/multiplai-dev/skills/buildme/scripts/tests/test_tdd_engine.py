@@ -2671,6 +2671,7 @@ class TestRunTDDEngineEntryPoint:
 
         config, args = tdd_setup
         config.test_command = ""
+        config.tdd_enabled = False
         with patch(
             "build_pipeline.tdd_engine.run_test_writer",
             new_callable=AsyncMock,
@@ -2680,6 +2681,16 @@ class TestRunTDDEngineEntryPoint:
         text = config.progress_file_path().read_text()
         assert "WARNING" in text and NO_TEST_COMMAND_WARNING in text
         assert "BASELINE\nPASSED" not in text
+
+    @pytest.mark.asyncio
+    async def test_no_test_command_is_refused_with_tdd_enabled(self, tdd_setup):
+        config, args = tdd_setup
+        config.test_command = ""
+        writer = AsyncMock(return_value=AgentResult(success=False, error="fail"))
+        with patch("build_pipeline.tdd_engine.run_test_writer", writer):
+            result = await run_tdd_engine(config, args)
+        assert result == EXIT_BUILD_FAILURE
+        writer.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_test_command_gives_no_warning(self, tdd_setup):
