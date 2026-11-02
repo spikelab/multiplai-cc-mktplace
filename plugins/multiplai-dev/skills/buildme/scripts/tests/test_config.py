@@ -2119,7 +2119,12 @@ models:
 
 class TestImplementerContinuations:
     def test_defaults_to_one(self, tmp_path):
-        assert _config_from_yaml(tmp_path, "tdd:\n  narrow_tests: true\n").implementer_continuations == 1
+        assert (
+            _config_from_yaml(
+                tmp_path, "tdd:\n  narrow_tests: true\n"
+            ).implementer_continuations
+            == 1
+        )
 
     def test_zero_turns_it_off(self, tmp_path):
         config = _config_from_yaml(tmp_path, "tdd:\n  implementer_continuations: 0\n")
@@ -2127,7 +2132,9 @@ class TestImplementerContinuations:
 
     @pytest.mark.parametrize("bad", ["-1", "yes", "two"])
     def test_an_invalid_value_keeps_one(self, tmp_path, bad):
-        config = _config_from_yaml(tmp_path, f"tdd:\n  implementer_continuations: {bad}\n")
+        config = _config_from_yaml(
+            tmp_path, f"tdd:\n  implementer_continuations: {bad}\n"
+        )
         assert config.implementer_continuations == 1
 
 

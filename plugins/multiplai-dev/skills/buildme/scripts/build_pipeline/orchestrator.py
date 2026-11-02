@@ -1251,7 +1251,9 @@ def _merge_newer_specs(
         return False
     git = functools.partial(git_ops._run, cwd=worktree)
     if git(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok:
-        log.warning("A merge is in progress in %s; not merging origin/%s", worktree, branch)
+        log.warning(
+            "A merge is in progress in %s; not merging origin/%s", worktree, branch
+        )
         return False
     status = git(["git", "status", "--porcelain", "--untracked-files=no"])
     if not status.ok:

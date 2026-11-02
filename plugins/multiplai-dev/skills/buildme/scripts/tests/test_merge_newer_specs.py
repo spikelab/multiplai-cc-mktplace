@@ -75,7 +75,9 @@ def test_a_parked_planning_build_merges_and_moves_its_issues_aside(tmp_path):
     change = wt / REL
     assert (change / "specs.md").read_text() == "revised\n"
     assert not (change / "spec-issues.md").exists()
-    assert (change / "spec-issues.resolved-bbbbbbbbbbbb.md").read_text() == "## Design: a problem\n"
+    assert (
+        change / "spec-issues.resolved-bbbbbbbbbbbb.md"
+    ).read_text() == "## Design: a problem\n"
     assert _git(wt, "status", "--porcelain", "--untracked-files=no") == ""
 
 
@@ -102,7 +104,9 @@ def test_S7_another_tracked_edit_is_left_as_it_was(tmp_path):
 
 def test_S7_a_change_yaml_edit_beyond_spec_issues_is_left_as_it_was(tmp_path):
     wt = _setup(tmp_path)
-    (wt / REL / ".change.yaml").write_text("spec_revision: zzz\nspec_status: ready\nspec_issues: x\n")
+    (wt / REL / ".change.yaml").write_text(
+        "spec_revision: zzz\nspec_status: ready\nspec_issues: x\n"
+    )
     before = _tree(wt)
     assert _merge_newer_specs(_state(), wt, REL, BRANCH, "b" * 16) is False
     assert _tree(wt) == before
@@ -120,14 +124,19 @@ def test_a_conflicting_merge_is_aborted_and_both_files_put_back(tmp_path):
     assert _merge_newer_specs(_state(), wt, REL, BRANCH, "b" * 16) is False
     assert _tree(wt) == before
     assert _git(wt, "rev-parse", "HEAD") == head
-    assert subprocess.run(
-        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd=wt
-    ).returncode != 0
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd=wt, check=False
+        ).returncode
+        != 0
+    )
 
 
 def test_S6_a_merge_in_progress_is_not_touched(tmp_path):
     wt = _setup(tmp_path)
-    (wt / ".git" / "MERGE_HEAD").write_text(_git(wt, "rev-parse", f"origin/{BRANCH}") + "\n")
+    (wt / ".git" / "MERGE_HEAD").write_text(
+        _git(wt, "rev-parse", f"origin/{BRANCH}") + "\n"
+    )
     before = _tree(wt)
     assert _merge_newer_specs(_state(), wt, REL, BRANCH, "b" * 16) is False
     assert _tree(wt) == before

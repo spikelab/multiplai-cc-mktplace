@@ -35,7 +35,11 @@ def _repo(tmp_path, name="tests/test_a.py", text=ORIGINAL):
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "tests")
     sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     config = BuildConfig(project_dir=tmp_path)
     config.specs_dir = tmp_path / "specs"
@@ -75,7 +79,9 @@ def test_appended_tests_pass_flagged_with_a_claim(tmp_path):
 def test_a_changed_line_still_fails(tmp_path):
     name = "tests/test_a.py"
     config, block, state = _repo(tmp_path)
-    (tmp_path / name).write_text(ORIGINAL.replace("== 1", "== 2") + "\ndef test_b():\n    pass\n")
+    (tmp_path / name).write_text(
+        ORIGINAL.replace("== 1", "== 2") + "\ndef test_b():\n    pass\n"
+    )
     assert _gate(config, block, state, name) is False
     assert block.test_change_claims == []
 

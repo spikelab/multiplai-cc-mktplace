@@ -853,7 +853,12 @@ class TestTheCopyTheBuildReads:
         build's itself, moves spec-issues.md aside, and goes on from the
         revised specs."""
         _handoff(repo)
-        models = Models(design=[f"# Design\n\n{ISSUE_LINE}\n", "# Design\n\n## Decisions\nReturn it.\n"])
+        models = Models(
+            design=[
+                f"# Design\n\n{ISSUE_LINE}\n",
+                "# Design\n\n## Decisions\nReturn it.\n",
+            ]
+        )
         assert await _build(repo, models) == 4
         wt = _worktree(tmp_path)
         built = wt / "specs" / "changes" / CHANGE
@@ -869,7 +874,10 @@ class TestTheCopyTheBuildReads:
         assert "Requirement: Store" in "\n".join(models.prompts[asked:])
         assert not (built / "spec-issues.md").exists()
         assert list(built.glob("spec-issues.resolved-*.md"))
-        assert _git(wt, "merge-base", "--is-ancestor", f"origin/ENG-1-{CHANGE}", "HEAD") == ""
+        assert (
+            _git(wt, "merge-base", "--is-ancestor", f"origin/ENG-1-{CHANGE}", "HEAD")
+            == ""
+        )
 
     @pytest.mark.asyncio
     async def test_S7_a_worktree_someone_edited_still_refuses_naming_the_branch(
@@ -884,7 +892,9 @@ class TestTheCopyTheBuildReads:
         wt = _worktree(tmp_path)
         built = wt / "specs" / "changes" / CHANGE
         _revise_on_branch(repo, tmp_path / "pm-spec")
-        (built / "proposal.md").write_text((built / "proposal.md").read_text() + "\nA note.\n")
+        (built / "proposal.md").write_text(
+            (built / "proposal.md").read_text() + "\nA note.\n"
+        )
         capsys.readouterr()
         asked = len(models.prompts)
         before = _tree(built)

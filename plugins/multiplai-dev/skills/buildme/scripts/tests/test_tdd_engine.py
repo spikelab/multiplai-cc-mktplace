@@ -1481,7 +1481,9 @@ class TestRunBlockTDD:
                 new_callable=AsyncMock,
                 side_effect=[self._capped()],
             ) as impl,
-            patch("build_pipeline.tdd_engine._git_commit_block_phase", return_value=None),
+            patch(
+                "build_pipeline.tdd_engine._git_commit_block_phase", return_value=None
+            ),
         ):
             assert await run_block_tdd(block, config, state, progress) is False
         assert impl.await_count == 1
@@ -1496,7 +1498,9 @@ class TestRunBlockTDD:
         async def implementer(**kw):
             if kw["continuation"]:
                 saved.append(
-                    BuildState.load(config.state_file_path()).tdd.blocks[0].implement_continuations
+                    BuildState.load(config.state_file_path())
+                    .tdd.blocks[0]
+                    .implement_continuations
                 )
                 return ok
             return self._capped()

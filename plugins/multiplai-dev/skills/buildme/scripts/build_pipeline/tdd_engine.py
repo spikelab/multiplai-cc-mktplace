@@ -2698,7 +2698,16 @@ def _only_added_lines(config: BuildConfig, block: BlockInfo, path: str) -> bool:
     if hashlib.sha256(shown.stdout).hexdigest() != block.test_file_hashes.get(path):
         return False
     diff = subprocess.run(
-        ["git", "diff", "--no-color", "--no-ext-diff", "-U0", block.test_commit, "--", path],
+        [
+            "git",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "-U0",
+            block.test_commit,
+            "--",
+            path,
+        ],
         cwd=config.project_dir,
         capture_output=True,
         text=True,

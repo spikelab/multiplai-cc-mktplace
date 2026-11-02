@@ -123,7 +123,9 @@ def fetch(repo: Path) -> str | None:
         if wait is None:
             return why
         log.warning(
-            "EPIC retry git fetch origin attempt=%d reason=%s", attempt, why.splitlines()[0]
+            "EPIC retry git fetch origin attempt=%d reason=%s",
+            attempt,
+            why.splitlines()[0],
         )
         time.sleep(wait)
 

@@ -57,7 +57,9 @@ def test_a_fetch_that_fails_then_answers_is_not_a_failure(monkeypatch, tmp_path)
     from build_pipeline import feature_branch
 
     calls, run = _results(
-        (False, "remote: Invalid username or token."), (False, "fatal: unable to access"), (True, "")
+        (False, "remote: Invalid username or token."),
+        (False, "fatal: unable to access"),
+        (True, ""),
     )
     monkeypatch.setattr(feature_branch.git_ops, "_run", run)
     assert feature_branch.fetch(tmp_path) is None
@@ -95,7 +97,9 @@ async def test_the_coordinators_fetch_runs_again_after_a_lost_ref_lock(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_the_coordinators_fetch_runs_again_after_an_expired_credential(monkeypatch):
+async def test_the_coordinators_fetch_runs_again_after_an_expired_credential(
+    monkeypatch,
+):
     """Run 14 of DFACCMGMT-1 set two children aside on one `Invalid username or
     token`: the fetch is now run again after each wait."""
     from build_pipeline.epic import coordinator
@@ -157,7 +161,9 @@ def test_a_gh_read_that_always_fails_gives_none_after_the_waits(monkeypatch):
 
     def run_gh(argv, cwd=None, timeout=None):
         calls.append(argv)
-        return GitResult(argv=argv, returncode=1, stdout="", stderr="HTTP 401: Bad credentials")
+        return GitResult(
+            argv=argv, returncode=1, stdout="", stderr="HTTP 401: Bad credentials"
+        )
 
     monkeypatch.setattr(coordinator.git_ops, "_run_gh", run_gh)
     assert coordinator._gh(Path("/repo"), "pr", "list") is None
