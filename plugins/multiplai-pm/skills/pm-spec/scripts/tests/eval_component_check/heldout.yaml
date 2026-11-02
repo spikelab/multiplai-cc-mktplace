@@ -1,0 +1,29 @@
+note: Held-out requirements problems. The eval runs them and reports them apart from P1-P10; they
+  are never used to edit the component check's prompt until they have been measured once (README.md).
+  `commit` is the feature-branch commit the build read; `why` says how it was found.
+problems:
+- id: H1
+  repo: /Users/spike/Documents/knowhere/PROJECTS/multiplai-voice
+  change: voice
+  component: voice-pipeline-page
+  raised_by: plan review
+  commit: 2219e55f
+  heading: 'Plan review: specs/registry/command-line-entry.md#command-line-entry: Exit code reflects presence
+    of arguments; No-subcommands notice on stderr'
+  source: buildme-voice-voice-pipeline-page/specs/changes/voice/components/voice-pipeline-page/spec-issues.resolved-131ff678312a.md
+  why: the build worktree's (branch MLT-13-voice-voice-pipeline-page) merge-base with origin/MLT-8-voice
+    is 2219e55f, the feature branch's head. The registry file the issue names was written on the build
+    branch (8efe9460, spec-extract from the code at 2219e55f) and is not at 2219e55f; the code it describes
+    (src/multiplai_voice/cli.py, tests/test_package.py) is. Resolved by 38eb5a7f on the build branch.
+  text: |
+    # Spec issues: voice/voice-pipeline-page
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise voice`, then run the build again.
+
+    ## Plan review: specs/registry/command-line-entry.md#command-line-entry: Exit code reflects presence of arguments; No-subcommands notice on stderr
+
+    [major] Block 1 breaks two registry requirements that no spec delta in this change modifies or removes.
+
+    Suggested change: Have the requirements author add a MODIFIED/REMOVED delta for command-line-entry: `main([])` prints usage to stderr and returns 0, an unknown argument returns 2, and `--help` returns 0. Then point Block 1 at that delta.
+
+    Raised by buildme's plan review.
