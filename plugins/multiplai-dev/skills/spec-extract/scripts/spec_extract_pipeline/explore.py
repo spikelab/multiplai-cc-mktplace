@@ -133,6 +133,7 @@ async def run(
         allowed_tools=list(sdk.READ_ONLY_TOOLS),
         max_turns=sdk.EXPLORE_MAX_TURNS,
         cwd=str(snapshot),
+        read_roots=[str(snapshot)],
         model=model,
     )
     stopped: list[str] = []

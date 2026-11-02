@@ -85,6 +85,22 @@ def test_unparsable_answer_is_reformatted_once_without_tools(monkeypatch):
     assert core_budget.get().cost_usd == 1.0
 
 
+def test_read_roots_reach_run_agent_on_both_runs(monkeypatch):
+    fake = FakeRunAgent(_result("not json"), _result('{"value": 3}'))
+    monkeypatch.setattr(sdk, "run_agent", fake)
+    core_budget.start(80.0, None, ledger_cls=sdk.SpecExtractBudget)
+    asyncio.run(
+        _REAL_CALL("prompt", Answer, allowed_tools=["Read"], read_roots=["/snap"])
+    )
+    assert [c["read_roots"] for c in fake.calls] == [["/snap"], ["/snap"]]
+
+
+def test_no_read_roots_installs_no_read_limit(monkeypatch):
+    fake, go = _call(monkeypatch, _result('{"value": 7}'))
+    asyncio.run(go())
+    assert fake.calls[0]["read_roots"] is None
+
+
 def test_a_failed_run_raises_call_failed_without_a_rerun(monkeypatch):
     # The dispatch rule asks the unit once more (plan, item 7); the wrapper does not re-run it
     # too, or each attempt could cost two agent runs.

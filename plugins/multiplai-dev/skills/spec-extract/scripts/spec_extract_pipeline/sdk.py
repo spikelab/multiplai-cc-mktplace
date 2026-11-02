@@ -204,6 +204,7 @@ async def _run(
     call_timeout: float,
     budget_label: str,
     run_label: str = "",
+    read_roots: list[str] | None = None,
 ) -> str:
     require_trusted_repo()
     core_budget.check(budget_label)
@@ -215,6 +216,8 @@ async def _run(
             model=model,
             effort=effort,
             cwd=cwd,
+            # None installs no hook; a list makes run_agent deny reads outside those folders.
+            read_roots=read_roots,
             timeout_s=call_timeout,
             label=run_label or budget_label or "spec-extract",
             component="spec-extract",
@@ -249,6 +252,7 @@ async def agent_call_structured(
     cwd: str | None = None,
     budget_label: str = "",
     call_timeout: float = DEFAULT_CALL_TIMEOUT_S,
+    read_roots: list[str] | None = None,
 ) -> T:
     """Run an agent and parse its final message into *schema* (the `CallFn` code_facts calls).
 
@@ -266,6 +270,7 @@ async def agent_call_structured(
         cwd=cwd,
         call_timeout=call_timeout,
         budget_label=budget_label,
+        read_roots=read_roots,
     )
     text = await _run(
         prompt, allowed_tools=allowed_tools, max_turns=max_turns, **common

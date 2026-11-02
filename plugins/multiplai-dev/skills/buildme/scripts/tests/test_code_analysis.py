@@ -250,6 +250,7 @@ class TestRunCodebaseAnalysis:
         assert "`conventions`" in prompt
         assert kwargs["allowed_tools"] == ["Read", "Glob", "Grep"]
         assert kwargs["cwd"] == str(project)
+        assert kwargs["read_roots"] == [str(project)]
         assert "vendor/lib.py" not in prompt
         # The test file is only pointed at for test style, never listed as a file to explain.
         listing = prompt.split("Files in your part of the module:", 1)[1].split(
@@ -341,6 +342,7 @@ class TestRunCodebaseAnalysis:
         assert kwargs["budget_label"] == "codebase_analysis"
         assert kwargs["model"] == config.model_for("codebase_analysis")
         assert kwargs["effort"] == config.spec_effort
+        assert kwargs["read_roots"] == [str(project)]
 
     @pytest.mark.asyncio
     async def test_a_project_without_a_commit_says_so(self, tmp_path):

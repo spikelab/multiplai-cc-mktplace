@@ -132,6 +132,7 @@ def test_write_prompt_tools_and_facts(tmp_path, fake_call):
     kwargs = next(k for k in fake_call.kwargs if k["budget_label"] == "write:calc")
     assert kwargs["allowed_tools"] == ["Read", "Glob", "Grep"]
     assert kwargs["cwd"].endswith("/snapshot")
+    assert kwargs["read_roots"] == [kwargs["cwd"]]
     prompt = fake_call.prompts["write:calc"]
     assert UNTRUSTED_RULES in prompt
     assert "- src/calc.py::mul (function, line 9)" in prompt

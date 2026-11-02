@@ -242,6 +242,7 @@ async def agent_call(
     cwd: str | None = None,
     call_timeout: float = DEFAULT_AGENT_CALL_TIMEOUT_S,
     budget_label: str = "",
+    read_roots: list[str] | None = None,
 ) -> AgentResult:
     """Multi-turn agent call with file tools. For TDD agents.
 
@@ -278,6 +279,8 @@ async def agent_call(
                     model=model,
                     effort=effort,
                     cwd=cwd,  # None → run_agent's isolated hook-sessions dir
+                    # None installs no hook; a list makes run_agent deny reads outside those folders.
+                    read_roots=read_roots,
                     timeout_s=call_timeout,
                     label="agent",
                     component="buildme",
@@ -392,6 +395,7 @@ async def agent_call_structured(
     cwd: str | None = None,
     call_timeout: float = DEFAULT_AGENT_CALL_TIMEOUT_S,
     budget_label: str = "",
+    read_roots: list[str] | None = None,
 ) -> T:
     """Agent call with tools and Pydantic-validated structured output.
 
@@ -418,6 +422,7 @@ async def agent_call_structured(
             cwd=cwd,
             call_timeout=call_timeout,
             budget_label=budget_label,
+            read_roots=read_roots,
         )
         try:
             if not result.success:
