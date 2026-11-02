@@ -22,6 +22,29 @@ def test_lists_every_change_with_its_write_checkout(shared_fx):
     assert found["export-csv"].branch == "TCK-1-export-csv"
 
 
+def test_another_repos_worktree_under_the_root_is_not_listed(fx, tmp_path):
+    # A second repo whose worktree shares the worktrees root with fx's repo.
+    other = tmp_path / "other"
+    git(tmp_path, "init", "-q", "-b", "main", str(other))
+    git(other, "config", "user.name", "Other Runner")
+    git(other, "config", "user.email", "other@example.org")
+    git(other, "config", "commit.gpgsign", "false")
+    (other / "README.md").write_text("# Other\n", encoding="utf-8")
+    git(other, "add", "-A")
+    git(other, "commit", "-q", "-m", "initial")
+    git(other, "branch", "TCK-9-elsewhere")
+    wt = fx["wt"] / "pm-spec-TCK-9-elsewhere"
+    git(other, "worktree", "add", "-q", "--detach", str(wt), "TCK-9-elsewhere")
+    d = wt / "specs" / "changes" / "elsewhere"
+    d.mkdir(parents=True)
+    (d / ".change.yaml").write_text("branch: TCK-9-elsewhere\n", encoding="utf-8")
+
+    found = list_changes(fx["repo"], fx["wt"])
+    assert "elsewhere" not in found
+    # fx's own detached pm-spec worktrees are still found.
+    assert found["export-csv"].write.kind == "pm-spec"
+
+
 def test_waiting_stop_at_each_stage(shared_fx):
     expect = {
         "export-csv": (1, ["Pat Planner"]),
