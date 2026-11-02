@@ -34,7 +34,9 @@ from conftest import (
 from multiplai_core.specs import set_spec_issues
 from pm_spec_pipeline import component_check as CK
 from pm_spec_pipeline import layout, runlock
+from pm_spec_pipeline.consistency import ConsistencyAnswer
 from pm_spec_pipeline.run import MARKER_BLOCKED, MARKER_WARN
+from pydantic import ValidationError
 from test_resume_rows import (
     FLOW,
     RESUME,
@@ -230,6 +232,39 @@ def test_infeasible_is_a_finding_type(repo, model, capsys):
     assert run(repo, *RESUME) == 4
     step = state(change_dir(repo))["steps"]["consistency"]
     assert step["blocking_findings"][0]["category"] == "infeasible"
+
+
+def test_a_finding_with_one_place_passes_with_its_spec_added(repo, model):
+    # The consistency agent's schema wants two places; a component finding that
+    # cites only the code it conflicts with used to fail validation, go to a
+    # reformat call, and could stop the run there.
+    two(model)
+    model["component_check:api"] = answer(
+        {
+            **API_GAP,
+            "type": "infeasible",
+            "places": [{"file": "server/limits.py", "where": "Limiter.allow"}],
+        }
+    )
+    go(repo, FLOW[:4])
+    assert run(repo, *RESUME) == 4
+    assert model.calls_to("component_check:api:reformat") == 0
+    step = state(change_dir(repo))["steps"]["consistency"]
+    [finding] = step["blocking_findings"]
+    assert finding["component"] == "api"
+    assert finding["places"] == [
+        {"file": "components/api/specs.md", "where": ""},
+        {"file": "server/limits.py", "where": "Limiter.allow"},
+    ]
+
+
+def test_the_consistency_agent_still_rejects_a_finding_with_one_place():
+    one = {**API_GAP, "places": API_GAP["places"][:1]}
+    with pytest.raises(ValidationError, match="places"):
+        ConsistencyAnswer.model_validate({"findings": [one]})
+    assert (
+        len(CK.ComponentCheckAnswer.model_validate({"findings": [one]}).findings) == 1
+    )
 
 
 def test_the_auto_rewrite_rewrites_the_spec_a_component_finding_cites(repo, model):

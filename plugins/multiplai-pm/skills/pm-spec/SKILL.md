@@ -192,8 +192,10 @@ after the third stop runs the consistency check and the handoff.
    one that cannot be met as written (`infeasible`). Each finding names the
    requirement, what it conflicts with, and the change to the requirement
    that would fix it, for a PM to decide; it gives no design or code advice
-   and rewrites nothing. Its findings are the consistency check's own, tagged
-   with their component: the same block, `--accept`, round cap and
+   and rewrites nothing. How well the check does is measured by a replay
+   eval on problems buildme raised after past handoffs:
+   `scripts/tests/eval_component_check/README.md`. Its findings are the
+   consistency check's own, tagged with their component: the same block, `--accept`, round cap and
    `SPEC:WARN` rules. Each component's result is saved in the run state with
    a digest of the files it read, and one line `COMPONENT_CHECK <id>
    findings=<n> cost=<usd>` goes to `.pm-spec/progress.md`; a result whose
