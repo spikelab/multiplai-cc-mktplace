@@ -21,6 +21,14 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-11-02
+
+### Fixed
+- **pm-spec**: a component-check finding that cites one place, such as only the code a requirement conflicts with, is now kept as a finding, with the component's own `specs.md` added as its first place. Before, the check rejected it and asked the model to rewrite its answer, and when the rewrite came back as JSON that would not parse, the handoff stopped with `no valid answer after a reformat` and `resume` stopped the same way. The cross-component consistency check still wants two places per finding.
+
+### Added
+- **pm-spec**: the component check's replay eval (`scripts/tests/eval_component_check/`, run only with `PM_SPEC_EVAL=1`; it makes paid model calls) now reports, beside the buildme problems it catches, how many findings people verified as real it still raises and how many verified as false it raises, from the labelled findings in `labels.yaml`. Findings with no label are listed for someone to label, and `--rescore` recounts a run after labelling with no model call. Problems from other changes in `heldout.yaml` are reported on their own. Its `README.md` says how to run it, label findings and add problems from a new epic; nothing changes in how pm-spec itself runs.
+
 ## [0.16.1] - 2026-11-02
 
 ### Fixed
