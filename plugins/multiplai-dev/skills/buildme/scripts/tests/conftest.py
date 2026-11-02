@@ -27,6 +27,18 @@ def gh_can_open_prs(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_retry_waits(monkeypatch):
+    """A failed `git fetch` or `gh` read is run again after waits of up to a
+    minute. Tests keep the attempts and drop the waits; a test of the waits
+    themselves puts its own in."""
+    from build_pipeline import feature_branch
+    from build_pipeline.epic import coordinator
+
+    monkeypatch.setattr(feature_branch, "TRANSIENT_WAITS", (0, 0, 0))
+    monkeypatch.setattr(coordinator, "GH_WAITS", (0, 0, 0))
+
+
+@pytest.fixture(autouse=True)
 def no_real_walkthrough_run(monkeypatch):
     """After a build, a stale walkthrough may be regenerated with a paid
     `walkthrough_pipeline run`. No test may start one: a test that regenerates
