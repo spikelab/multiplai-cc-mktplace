@@ -44,7 +44,6 @@ from .gates import (
     final_verification,
     integration_gate,
     parse_diff_paths,
-    parse_handoff_note,
     parse_implementation_note,
     parse_recurring,
     parse_searched,
@@ -76,7 +75,6 @@ from .models import (
     FindingAdjudication,
     FixOnPassState,
     GateResult,
-    HandoffNote,
     MutationResult,
     ReviewFinding,
     ReviewResult,
@@ -719,16 +717,6 @@ def _trim_evidence(output: str) -> str:
     return output[-MAX_EVIDENCE_CHARS:]
 
 
-# Notes for later blocks (`carry_block_notes`). Starting values, not measured:
-# the notes-forward benchmark records the real sizes.
-HANDOFF_NOTE_MAX_CHARS = 1500
-HANDOFF_SECTION_MAX_CHARS = 12000
-HANDOFF_HEADING = (
-    "## Notes from earlier blocks (written by their agents; "
-    "check them against the code before relying on them)"
-)
-
-
 # Weak test patterns for Phase A.5 quality check (line-level; per-function
 # mock heuristics live in _scan_test_function)
 WEAK_TEST_PATTERNS = [
@@ -899,44 +887,6 @@ PROTOTYPE_RULE = (
 )
 
 
-def _handoff_section(block: BlockInfo, blocks: list[BlockInfo]) -> str:
-    """Earlier blocks' notes for later blocks, in block order, under
-    `HANDOFF_SECTION_MAX_CHARS`: the oldest blocks' notes are left out first,
-    and the section names them. "" when no earlier block has a note."""
-    chunks = []
-    for b in blocks:
-        if b.number >= block.number or not b.handoff_notes:
-            continue
-        body = "\n\n".join(
-            f"From the {n.role}"
-            + (f" (round {n.round})" if n.round else "")
-            + f":\n{n.text}"
-            for n in b.handoff_notes
-        )
-        chunks.append(
-            (f"Block {b.number} ({b.name})", f"### Block {b.number}: {b.name}\n{body}")
-        )
-    if not chunks:
-        return ""
-    left_out = []
-    while (
-        len(chunks) > 1 and sum(len(c) for _, c in chunks) > HANDOFF_SECTION_MAX_CHARS
-    ):
-        left_out.append(chunks.pop(0)[0])
-    if left_out:
-        log.info(
-            "Handoff notes left out for block %d: %s", block.number, ", ".join(left_out)
-        )
-    lines = [HANDOFF_HEADING]
-    if left_out:
-        lines.append(
-            f"Left out, over the {HANDOFF_SECTION_MAX_CHARS}-character limit: "
-            f"the notes of {', '.join(left_out)}."
-        )
-    lines += [c for _, c in chunks]
-    return "\n\n".join(lines)
-
-
 def prototype_section(config: BuildConfig) -> str:
     """`## Prototype`: `PROTOTYPE_RULE` and the files under
     `change_root(change_dir)/prototype/`, relative to the project when they
@@ -1081,15 +1031,6 @@ def assemble_context(
                 "\n## Interfaces from earlier blocks (use these signatures verbatim)\n"
                 + "\n".join(prior)
             )
-
-    # What earlier blocks' agents wrote for later blocks (`carry_block_notes`).
-    # The implementer role only (the review-fix, integration-fix and fix-on-pass
-    # agents get it too): the test writer stays black-box, and the refactorer
-    # changes no behaviour.
-    if config.carry_block_notes and role == "implementer" and blocks:
-        handoff = _handoff_section(block, blocks)
-        if handoff:
-            parts.append("\n" + handoff)
 
     # Design document
     if config.design_path.exists():
@@ -1960,48 +1901,6 @@ def _record_implementation_note(
     return False
 
 
-def _record_handoff_note(
-    block: BlockInfo,
-    config: BuildConfig,
-    state: BuildState,
-    role: str,
-    round_: int,
-    output: str,
-) -> None:
-    """Save an agent's `NOTES_FOR_LATER_BLOCKS:` section on the block and
-    checkpoint (`carry_block_notes` only). One note per (role, round): a re-run
-    of the same agent replaces its note, so a resume never doubles it. A note
-    over `HANDOFF_NOTE_MAX_CHARS` keeps its end. A missing section is logged,
-    never fatal."""
-    if not config.carry_block_notes:
-        return
-    text = parse_handoff_note(output)
-    if text is None:
-        log.info(
-            "No notes for later blocks block=%d role=%s round=%d",
-            block.number,
-            role,
-            round_,
-        )
-        return
-    if len(text) > HANDOFF_NOTE_MAX_CHARS:
-        log.info(
-            "Handoff note cut block=%d role=%s from %d to %d characters",
-            block.number,
-            role,
-            len(text),
-            HANDOFF_NOTE_MAX_CHARS,
-        )
-        text = text[-HANDOFF_NOTE_MAX_CHARS:]
-    note = HandoffNote(role=role, round=round_, text=text)
-    keys = [(n.role, n.round) for n in block.handoff_notes]
-    if (role, round_) in keys:
-        block.handoff_notes[keys.index((role, round_))] = note
-    else:
-        block.handoff_notes.append(note)
-    state.checkpoint(config.state_file_path())
-
-
 def _impl_done(config: BuildConfig, block: BlockInfo) -> bool:
     """An earlier run of *block* committed its tests and its implementation,
     both on HEAD. The refactor runs when HEAD is the implementation commit;
@@ -2411,7 +2310,6 @@ async def run_block_tdd(
         model=config.model_for("implementer"),
         effort=config.effort_for("implementer"),
         cwd=cwd,
-        carry_notes=config.carry_block_notes,
     )
 
     if not impl_result.success:
@@ -2472,7 +2370,6 @@ async def run_block_tdd(
     ):
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
-    _record_handoff_note(block, config, state, "implementer", 0, impl_result.output)
 
     impl_sha = _git_commit_block_phase(config, "impl", block)
     if impl_sha:
@@ -3176,7 +3073,6 @@ async def _run_integration_and_review(
             model=fix_model,
             effort=config.effort_for(fix_step),
             cwd=str(config.project_dir),
-            carry_notes=config.carry_block_notes,
         )
         if escalated:
             recurring = parse_recurring(fix.output or "")
@@ -3202,9 +3098,6 @@ async def _run_integration_and_review(
             # TEST CHANGE REQUIRED declaration for this window would appear.
             block.implementer_report = _trim_evidence(
                 f"{block.implementer_report}\n\n[review-fix {iteration + 1}]\n{fix.output}"
-            )
-            _record_handoff_note(
-                block, config, state, "review-fix", iteration + 1, fix.output
             )
 
         # --- Test-integrity gate (window 2: this review-fix iteration) ---

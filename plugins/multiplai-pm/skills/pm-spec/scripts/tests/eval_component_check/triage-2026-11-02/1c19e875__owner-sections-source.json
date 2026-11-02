@@ -1,0 +1,145 @@
+[
+ {
+  "n": 1,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `owner-sections-source`, finding 1] 'Only known section names returned' says the function returns only seven stored identifiers and treats `reporting` as a legacy name that geperman never stores. In the code, `reporting` is a value of the `Section` enum. `update_link` and `create_orphan_link` keep any enum value, so a `ManagerOwnerLink` row can hold `reporting`. Rows can also still hold `ari_calendar` until `normalizza_sezione_calendario` has run. Today `AllowedSectionsView` returns whatever the live rows store. If the new function drops these values, the 'Menu entries unchanged for every owner' comparison fails for every owner whose rows contain them. If it keeps them, this requirement fails. Both cannot hold.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-resolution: Only known section names returned"
+   },
+   {
+    "file": "backend/DolceSystem/models.py",
+    "where": "Section (REPORTING = \"reporting\"); ManagerOwnerLink.sections"
+   },
+   {
+    "file": "backend/DolceSystem/endpointz/manager_owner_links.py",
+    "where": "update_link / create_orphan_link (filter against Section enum)"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-equivalence: Menu entries unchanged for every owner"
+   }
+  ],
+  "suggestion": "Say what happens to stored values outside the seven sections (`reporting`, and `ari_calendar` if the normalisation has not run). Either they are dropped from the result and the equivalence comparison ignores them, or they are cleaned out of the data before release. Also stop saying that geperman never stores `reporting`."
+ },
+ {
+  "n": 2,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `owner-sections-source`, finding 2] 'Section-independent endpoints' requires the list to contain `GET /api/allowed-permissions/` once `owner-permissions-core` adds it. It also requires every route in the list to resolve, checked by the inventory test. That route is not registered today, and `owner-permissions-core` is not a dependency of this component. If the entry is listed now, the resolution test fails. If it is not listed, the 'at least' list is incomplete. The requirement does not say which component adds the entry.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-endpoint-inventory: Section-independent endpoints"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-endpoint-inventory: Inventory entries resolve to real routes"
+   },
+   {
+    "file": "backend/DolceEngine/urls.py",
+    "where": "urlpatterns (no allowed-permissions route)"
+   }
+  ],
+  "suggestion": "Take `GET /api/allowed-permissions/` out of this component's required list, and say that `owner-permissions-core` adds it to the section-independent list when it creates the endpoint."
+ },
+ {
+  "n": 3,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 3] 'Unrecognised role gets no properties' names operators, OM users and owners as the recognised roles that keep today's list. The property index (`_get_immobili_queryset`) filters only owners and managers. Every other user, including cleaning-company users, gets every property. The DB-2143 notes call cleaning companies an unrecognised role here. `/clng/feed` calls `/api/immobily/` to look up property cities. As written, cleaning-company users would get 403, and their feed would lose city data. That conflicts with 'Cleaning-company user keeps the feed... as it is today'. The spec does not say whether cleaning-company users are a recognised role or what they should receive.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "property-index-unknown-role: Unrecognised role gets no properties"
+   },
+   {
+    "file": "backend/DolceSystem/endpointz/index_immobili.py",
+    "where": "_get_immobili_queryset"
+   },
+   {
+    "file": "frontend/src/app/clng/feed/lib/api.ts",
+    "where": "fetchPropertyCityLookup"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-resolution: Non-owner roles unaffected"
+   }
+  ],
+  "suggestion": "List every role the property index recognises, including cleaning-company users, and say which properties each one receives (for a cleaning company, for example, only the properties assigned to it). Only users with none of these roles should get 403."
+ },
+ {
+  "n": 4,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 4] 'WhatsApp attachments require the Chat section' says media_guard's access shall be no wider than the chat API's. Its scenarios cover only owners, operators and anonymous requests. Today `_whatsapp_media` lets every non-owner through without any check, including OM users and cleaning-company users. The chat API limits OMs to the properties they manage and refuses cleaning companies. 'Non-owner roles unaffected' does not mention media_guard. A builder has to guess whether OM and cleaning-company users must now be limited the way the chat API limits them, or keep today's open access.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "whatsapp-attachment-section-guard: WhatsApp attachments require the Chat section"
+   },
+   {
+    "file": "backend/DolceEngine/media_guard/resolvers.py",
+    "where": "_whatsapp_media"
+   },
+   {
+    "file": "backend/DolceSystem/auth_utils.py",
+    "where": "chat_scope_immobili_ids / can_access_chat"
+   }
+  ],
+  "suggestion": "Say what OM users and cleaning-company users get when they request a WhatsApp attachment: the same answer the chat API gives them for that conversation, or today's behaviour. Add a scenario for each."
+ },
+ {
+  "n": 5,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 5] 'Booking-sheet endpoints listed under every section that opens the sheet' points to `owner-permissions-core` (Requirement: Conversion table) for the list of entry points. That component is not a dependency of this one, and it is built later on top of this inventory. The list this requirement needs therefore sits in a component that depends on this one.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-endpoint-inventory: Booking-sheet endpoints listed under every section that opens the sheet"
+   },
+   {
+    "file": "components/owner-permissions-core/specs.md",
+    "where": "owner-permission-migration: Conversion table"
+   }
+  ],
+  "suggestion": "Put the list of booking-sheet entry points per section into this requirement, or point to a shared source this component can rely on, instead of a later component's requirement."
+ },
+ {
+  "n": 6,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 6] The spec rests every rule on 'live' `ManagerOwnerLink` rows but never defines 'live'. The code defines it in both `AllowedSectionsView` and `get_allowed_sections`: a link counts if its OM is currently assigned to one of the owner's properties, or if it is the direct link and the owner has a property with no OM. The rest of the epic will rely on this definition, so it should be written down.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-resolution: Single source for an owner's sections"
+   },
+   {
+    "file": "backend/DolceSystem/autenticazzone.py",
+    "where": "AllowedSectionsView.get"
+   }
+  ],
+  "suggestion": "Define a live link in the requirement: a link to an OM that currently manages at least one of the owner's properties, or the direct link when the owner has at least one property with no OM."
+ },
+ {
+  "n": 7,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-source`, finding 7] 'Report of owners with an empty menu' asks whether each owner is managed or direct. The fixture requirement and the proposal both allow owners who are both: some properties under an OM and some direct. The report does not say how to classify them.",
+  "places": [
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "empty-menu-owners-report: Report of owners with an empty menu"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-equivalence: Production-shaped fixture"
+   }
+  ],
+  "suggestion": "Say how an owner with both managed and direct properties is shown in the report, for example as managed with the OM's name."
+ }
+]

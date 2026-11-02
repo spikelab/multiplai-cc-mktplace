@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -67,6 +68,7 @@ __all__ = [
     "start_budget",
     "text_call",
     "text_structured",
+    "track_spend",
 ]
 
 
@@ -92,6 +94,20 @@ class _ProcessSpend:
 
 _process = _ProcessSpend()
 
+# The calls of one asyncio task, when it asked (`track_spend`): the component
+# check runs its agents in parallel and reports each one's cost.
+_task_spend: ContextVar[_ProcessSpend | None] = ContextVar(
+    "pm_spec_task_spend", default=None
+)
+
+
+def track_spend() -> _ProcessSpend:
+    """From now on, in this task (and tasks it starts), add each call's cost
+    to the returned record as well."""
+    spend = _ProcessSpend()
+    _task_spend.set(spend)
+    return spend
+
 
 def start_budget(max_usd: float | None, saved: dict | None) -> SpendLedger:
     """The run's ledger in the current context, holding the spend *saved* in state."""
@@ -110,8 +126,8 @@ def spend_marker() -> str:
 def _record(usage, label: str) -> None:
     ledger().record(usage, label=label)
     try:
-        _process.cost_usd += float(getattr(usage, "cost_usd", 0.0) or 0.0)
-        _process.tokens += sum(
+        cost = float(getattr(usage, "cost_usd", 0.0) or 0.0)
+        tokens = sum(
             int(getattr(usage, f, 0) or 0)
             for f in (
                 "input_tokens",
@@ -120,6 +136,10 @@ def _record(usage, label: str) -> None:
                 "cache_creation_tokens",
             )
         )
+        for spend in (_process, _task_spend.get()):
+            if spend is not None:
+                spend.cost_usd += cost
+                spend.tokens += tokens
     except Exception as e:  # accounting never breaks a run
         log.warning("Process spend accounting failed (ignored): %s", e)
 

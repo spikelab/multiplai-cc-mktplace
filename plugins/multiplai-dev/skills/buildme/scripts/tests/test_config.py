@@ -2115,19 +2115,3 @@ models:
         assert config.model_specs == {"spec": "claude:opus"}
         assert any("models.agent" in r.getMessage() for r in caplog.records)
         assert any("models.review" in r.getMessage() for r in caplog.records)
-
-
-class TestCarryBlockNotesConfig:
-    def test_off_by_default(self, tmp_path):
-        assert BuildConfig().carry_block_notes is False
-        assert _config_from_yaml(tmp_path, "context: x\n").carry_block_notes is False
-
-    def test_true_turns_it_on(self, tmp_path):
-        config = _config_from_yaml(tmp_path, "carry_block_notes: true\n")
-        assert config.carry_block_notes is True
-
-    def test_a_non_boolean_keeps_it_off_with_a_warning(self, tmp_path, caplog):
-        with caplog.at_level("WARNING"):
-            config = _config_from_yaml(tmp_path, "carry_block_notes: 'yes'\n")
-        assert config.carry_block_notes is False
-        assert any("carry_block_notes" in r.getMessage() for r in caplog.records)

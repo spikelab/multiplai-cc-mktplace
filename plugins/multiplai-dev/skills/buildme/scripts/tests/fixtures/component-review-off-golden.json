@@ -3,7 +3,6 @@
   {
    "block_description": "Fix review issues: Weighted average 2.0 < 3.5 threshold\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Major] off-by-one in add() (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Note] add() could be a lambda (app.py:2)\n  evidence: returns a + b + 1\n\n## Before you finish\n\n1. For each finding, check the other branches of the same function, and the\n   rest of this block's diff, for the same mistake. Fix every instance you find.\n2. Re-read `git diff` of your own changes and look for new bugs you introduced.\n3. End your report with a `SEARCHED:` section: one line per finding, saying\n   where you looked for the same mistake. For example:\n\nSEARCHED:\n- <finding>: <the functions, branches and files you checked>\n",
    "block_name": "Adder",
-   "carry_notes": false,
    "context_bundle": "# Block 1: Adder\n\nadd two numbers\n\n\n## Evaluation Rubric\n# Rubric\n\n- Q (weight 2): correct\n",
    "effort": "medium",
    "failing_tests": "Weighted average 2.0 < 3.5 threshold\n\n## Adjudicated findings (accepted \u2014 fix these)\n- [Major] off-by-one in add() (app.py:2)\n  evidence: returns a + b + 1\n- [Minor] add() has no docstring (app.py:2)\n  evidence: returns a + b + 1\n- [Note] add() could be a lambda (app.py:2)\n  evidence: returns a + b + 1",
