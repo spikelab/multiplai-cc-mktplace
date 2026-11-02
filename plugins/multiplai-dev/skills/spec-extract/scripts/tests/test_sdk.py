@@ -89,7 +89,9 @@ def test_read_roots_reach_run_agent_on_both_runs(monkeypatch):
     fake = FakeRunAgent(_result("not json"), _result('{"value": 3}'))
     monkeypatch.setattr(sdk, "run_agent", fake)
     core_budget.start(80.0, None, ledger_cls=sdk.SpecExtractBudget)
-    asyncio.run(_REAL_CALL("prompt", Answer, allowed_tools=["Read"], read_roots=["/snap"]))
+    asyncio.run(
+        _REAL_CALL("prompt", Answer, allowed_tools=["Read"], read_roots=["/snap"])
+    )
     assert [c["read_roots"] for c in fake.calls] == [["/snap"], ["/snap"]]
 
 

@@ -15,6 +15,18 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.154.1] - 2026-11-02
+
+### Fixed
+
+- **codebase-walkthrough**, **spec-extract** and **buildme**: agents that read
+  the code under study can no longer read files outside the folder they work
+  in. codebase-walkthrough's explore agents read only the run's snapshot and
+  its docs agents only the docs cache; spec-extract's explore and write agents
+  read only the snapshot; buildme's codebase analysis reads only the project
+  folder. Only walkthrough's trace and diagram stages and the review skill
+  were limited this way before.
+
 ## [0.154.0] - 2026-11-02
 
 ### Changed
