@@ -262,7 +262,9 @@ def test_the_consistency_agent_still_rejects_a_finding_with_one_place():
     one = {**API_GAP, "places": API_GAP["places"][:1]}
     with pytest.raises(ValidationError, match="places"):
         ConsistencyAnswer.model_validate({"findings": [one]})
-    assert len(CK.ComponentCheckAnswer.model_validate({"findings": [one]}).findings) == 1
+    assert (
+        len(CK.ComponentCheckAnswer.model_validate({"findings": [one]}).findings) == 1
+    )
 
 
 def test_the_auto_rewrite_rewrites_the_spec_a_component_finding_cites(repo, model):
