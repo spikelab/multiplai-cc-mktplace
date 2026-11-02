@@ -1,0 +1,95 @@
+[
+ {
+  "n": 2,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `account-attribution`, finding 2] Today, rows with no user show 'Sistema'. Both `UserChip` and the compact calendar log table do this, and `CalendarOpsJob` rows from scheduled tasks are written with `requested_by=None` so they show as 'sistema'. The spec's fallback shows 'Utente eliminato' whenever the user reference is empty and the snapshot is empty. Rows written by a system process (which the spec itself keeps, with empty user and snapshot) look exactly like rows of a deleted user. After the change they would read 'Utente eliminato' instead of 'Sistema'. `UserChip` is also used by the DolceOps property history (auditlog), which this spec excludes, so that view would change too.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-name-display: Fallback when the user has no name"
+   },
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-account-recording: Actor without an account (Scenario: Action with no user)"
+   },
+   {
+    "file": "frontend/src/components/audit/user-chip.tsx",
+    "where": "UserChip label fallback ('Sistema')"
+   },
+   {
+    "file": "backend/DolceChannex/tasks.py",
+    "where": "CalendarOpsJob.objects.create(requested_by=None)"
+   }
+  ],
+  "suggestion": "Say how a row that never had a user (written by a system process) is shown, keeping today's 'Sistema'. Say that 'Utente eliminato' applies only to rows whose user once existed and was deleted. Say whether the property history view, which also uses this chip, keeps its current labels."
+ },
+ {
+  "n": 3,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `account-attribution`, finding 3] The spec says the account reference and the actor snapshot are fixed once a row is written. But `Cleaning.updated_by`, which is in the plan's list of fields, records the most recent person to update the cleaning. It is overwritten on every status update (`cleaning.updated_by = request.user` in `backend/DolceSystem/dolcecleaning/endpoints.py`). If the account and snapshot stay as first written, they no longer match the user beside them. If they follow the user, they break the 'fixed' rule.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-account-recording: Account reference is fixed at the time of the action"
+   },
+   {
+    "file": "backend/DolceSystem/dolcecleaning/endpoints.py",
+    "where": "cleaning status update (cleaning.updated_by = request.user)"
+   }
+  ],
+  "suggestion": "Say that for 'last updated by' fields, the account reference and snapshot are replaced together with the user each time the field is written, and stay fixed only between writes. Or limit 'fixed' to fields that are written once."
+ },
+ {
+  "n": 4,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `account-attribution`, finding 4] The automated inventory check has to find every field 'that references the user model and records who performed an action'. The project has two user models: `auth.User` (used by Cleaning, BookingNote, DolcePricing, DolceFinance and UtenteLoginHistory) and `DolceSystem.Utente` (used by CalendarChangeLog, AutoResponseToggleLog, CalendarOpsJob and CleaningMessageLog). Many links to these models are not actor fields at all, such as `Utente.user`, `Manager.user`, `Operatore.user` and `Account.titolare`. The spec gives no way to tell actor fields from the rest automatically, so the builder has to guess what the check counts and what it ignores.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-field-inventory: Written inventory of existing actor fields (Scenario: Every actor field is in the inventory)"
+   },
+   {
+    "file": "backend/DolceSystem/models.py",
+    "where": "Utente.user, UtenteLoginHistory.user, Cleaning.updated_by, Account.titolare"
+   }
+  ],
+  "suggestion": "Say that the check covers links to both `auth.User` and `DolceSystem.Utente`. Say that it fails on any such link that is neither listed in the inventory nor on a named list of non-actor links (for example the login-profile and Owner links)."
+ },
+ {
+  "n": 5,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `account-attribution`, finding 5] The spec says rows survive user deletion with their user reference set to empty. `UtenteLoginHistory.user` is required and is deleted together with its user today (CASCADE). An earlier review records this cascade as deliberate for cleaning-company deletion. To meet the spec, login history would have to start being kept after a user is deleted, which is new behaviour. Neither this spec nor the account-model and account-user-api specs mention it. A builder would have to guess whether login history really counts as an actor field under this rule.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-name-display: Rows survive deletion of the user"
+   },
+   {
+    "file": "backend/DolceSystem/models.py",
+    "where": "UtenteLoginHistory.user (on_delete=CASCADE, not nullable)"
+   }
+  ],
+  "suggestion": "Say explicitly whether a deleted user's login history is kept (user cleared, account and snapshot kept) or deleted with the user as today. If it is deleted, take it out of the deletion-survival rule."
+ },
+ {
+  "n": 6,
+  "severity": "minor",
+  "type": "infeasible",
+  "description": "[component `account-attribution`, finding 6] The scenario 'Every inventoried write path records the account' asks for each listed action to be done 'through a user of an account'. Some inventoried fields are written only from operator tools or by the system. For example, `CalendarOpsJob.requested_by` is written by the operator calendar-ops panel (`calsync_ops.py`) and by scheduled tasks. Operators have no account, so for these fields the test cannot be done as written.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-account-recording: Record the acting user and their account (Scenario: Every inventoried write path records the account)"
+   },
+   {
+    "file": "backend/DolceSystem/endpointz/calsync_ops.py",
+    "where": "CalendarOpsJob.objects.create(requested_by=utente)"
+   }
+  ],
+  "suggestion": "Limit the scenario to write paths that client users can reach. For operator-only paths, require the test to show that the user is recorded and the account reference is empty."
+ }
+]

@@ -1,0 +1,91 @@
+[
+ {
+  "n": 1,
+  "severity": "critical",
+  "type": "contradiction",
+  "description": "[component `account-attribution`, finding 1] The spec says the account reference on a row never changes after it is written, and that when a user is deleted the rows survive and keep that reference. But the account itself is deleted whenever its cleaning company, owner or manager is deleted: `_elimina_account_prima_dell_entita` deletes it on pre_delete, and `Account.impresa_pulizie/proprietario/manager` cascade. The account-model spec says deleting a cleaning company deletes all its users and 'SHALL NOT be refused'. So the rows written by those users can't keep their account reference. Either the deletion is blocked (breaks account-model), the rows are deleted (breaks 'Rows survive deletion'), or the reference is emptied (breaks 'fixed at the time of the action').",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-account-recording: Account reference is fixed at the time of the action"
+   },
+   {
+    "file": "components/account-model/specs.md",
+    "where": "account-entity: Deleting a cleaning company deletes its users"
+   },
+   {
+    "file": "backend/DolceSystem/accounts.py",
+    "where": "_elimina_account_prima_dell_entita / elimina_utenti_impresa"
+   }
+  ],
+  "suggestion": "Say what happens to rows that point to an account when the account itself is deleted with its cleaning company, owner or OM. Either the rows are kept, the account reference is emptied and the actor snapshot stays, or the account is kept, and the 'fixed' rule names this exception."
+ },
+ {
+  "n": 2,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `account-attribution`, finding 2] The inventory has to include `Cleaning.updated_by`. That field records the last user to change a cleaning and is overwritten on every update (`DolceSystem/dolcecleaning/endpoints.py` sets `updated_by = request.user`, or None for anonymous updates). The spec says the account reference and snapshot are taken when the row is written and SHALL NOT change afterwards. For a 'last updated by' field, a later update by another account's user would leave the user and the account out of step.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-account-recording: Account reference is fixed at the time of the action"
+   },
+   {
+    "file": "backend/DolceSystem/models.py",
+    "where": "Cleaning.updated_by"
+   }
+  ],
+  "suggestion": "Say that for 'last updated by' fields such as Cleaning.updated_by, the account reference and snapshot are updated together with the user on every later update. 'Fixed' should apply only to log rows that are written once."
+ },
+ {
+  "n": 4,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `account-attribution`, finding 4] Once the user is gone, the views show the stored name, then the stored username, then 'Utente eliminato'. But rows written by a system process (no user, empty snapshot) and rows whose user was already deleted before the release (user already emptied, backfill had nothing to copy) look exactly like a deleted user with no snapshot. They would all show 'Utente eliminato'. Today the shared chip shows 'Sistema' for these (`user-chip.tsx`, `audit_history._autore`). Nothing says how system actions should be shown or told apart.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-name-display: Fallback when the user has no name"
+   },
+   {
+    "file": "frontend/src/components/audit/user-chip.tsx",
+    "where": "UserChip label fallback ('Sistema')"
+   }
+  ],
+  "suggestion": "Say what the views show for a row written with no user (for example 'Sistema', as today) and for rows whose user was already gone before the release. Make clear 'Utente eliminato' is only for rows whose user was deleted after being recorded."
+ },
+ {
+  "n": 5,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `account-attribution`, finding 5] The spec puts `UtenteLoginHistory.user` in the inventory and says deleting a user SHALL NOT delete the rows that record them, setting the user to empty instead. Today the field is `on_delete=CASCADE`, so deleting a user deletes their login history. The spec doesn't say this behaviour changes, or that logins count as recorded actions rather than out-of-scope 'reads'. Keeping it would also keep a deleted person's IP addresses and locations.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-name-display: Rows survive deletion of the user"
+   },
+   {
+    "file": "backend/DolceSystem/models.py",
+    "where": "UtenteLoginHistory.user (on_delete=CASCADE)"
+   }
+  ],
+  "suggestion": "Say whether login history is part of the inventory. If it is, say clearly that a deleted user's login history (including IP and location) is now kept rather than deleted. If it isn't, take it out of the inventory."
+ },
+ {
+  "n": 6,
+  "severity": "minor",
+  "type": "contradiction",
+  "description": "[component `account-attribution`, finding 6] While the user exists, the views show the user's current name; after deletion, they show the name stored when the row was written. So a user renamed from 'Giulia Rossi' to 'Giulia Bianchi' shows as 'Bianchi' until deleted, then goes back to 'Rossi' on the same entries. Both rules are stated, but together they make the displayed name jump back, and a reader may not expect that.",
+  "places": [
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-name-display: Views show the acting person's name"
+   },
+   {
+    "file": "components/account-attribution/specs.md",
+    "where": "actor-name-display: Rows survive deletion of the user"
+   }
+  ],
+  "suggestion": "Confirm that after deletion the name shown is the one stored when the action was recorded, even if the user was renamed later. Or say the snapshot is updated to the user's last name when they are deleted."
+ }
+]

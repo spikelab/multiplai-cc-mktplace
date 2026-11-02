@@ -26,6 +26,8 @@ What each field is for, by the plan's stop-and-resume rows:
   pushed, `skipped` under `--auto`; `tickets` is `pending` at the ticket wait.
   A run started before the stages existed gets each of them `skipped`, reason
   "before the staged flow" (row S14).
+- `component_checks`: one saved result per component of the component check
+  (rows S1-S10 of its table), with the digest of the files it read.
 - `checked_digests`: row S40, what the last consistency check read, so the
   next one reads in full only what changed.
 - `handoff`: row S8, the revision the ready record was written at, whether its
@@ -107,6 +109,20 @@ class StepOutcome(BaseModel):
     reviewed_blocks: int = 0
 
 
+class ComponentCheck(BaseModel):
+    """One component's saved component-check result. `digest` is the sha256
+    over the files it read (`component_check.digest`); a result whose digest
+    still matches is reused with no call. `findings` and `prior_assessments`
+    are the agent's answer as it gave them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    digest: str
+    findings: list[dict] = Field(default_factory=list)
+    prior_assessments: list[dict] = Field(default_factory=list)
+    cost_usd: float = 0.0
+
+
 class EpicChild(BaseModel):
     id: str
     title: str
@@ -167,6 +183,9 @@ class RunState(BaseModel):
     # saved leaves none, and the next check reads everything (row S40). None
     # (no check yet, or a state saved before 0.15.0): a full check.
     checked_digests: dict[str, str] | None = None
+    # The component check's result per component id (the change name for a
+    # change with no components), each saved as it arrives.
+    component_checks: dict[str, ComponentCheck] = Field(default_factory=dict)
 
     def step(self, name: str) -> StepOutcome:
         return self.steps.setdefault(name, StepOutcome())

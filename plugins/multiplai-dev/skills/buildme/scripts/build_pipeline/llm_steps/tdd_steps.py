@@ -12,7 +12,6 @@ from ..models import AgentResult
 from ..prompts.implementation import (
     IMPLEMENTER_PROMPT_CLEAN,
     IMPLEMENTER_PROMPT_MINIMUM,
-    NOTES_FOR_LATER_BLOCKS_REQUEST,
     REFACTOR_ALL_PROMPT,
     REFACTOR_PROMPT,
     TEST_CHANGE_DECLARATION,
@@ -129,12 +128,10 @@ async def run_implementer(
     model: str | None = None,
     effort: str | None = None,
     cwd: str | None = None,
-    carry_notes: bool = False,
 ) -> AgentResult:
     """Spawn an implementation agent for a block.
 
     Uses CLEAN prompt for advanced tier, MINIMUM for standard tier.
-    ``carry_notes`` (`carry_block_notes`) also asks for notes for later blocks.
     """
     template = (
         IMPLEMENTER_PROMPT_CLEAN
@@ -148,8 +145,6 @@ async def run_implementer(
         context_bundle=context_bundle,
         test_command=test_command,
     )
-    if carry_notes:
-        prompt += NOTES_FOR_LATER_BLOCKS_REQUEST
     log.info("Spawning implementer (%s) for block: %s", prompt_style, block_name)
     return await agent_call(
         prompt,

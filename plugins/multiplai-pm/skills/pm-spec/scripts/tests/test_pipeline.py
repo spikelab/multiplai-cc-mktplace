@@ -49,6 +49,7 @@ def test_the_order_of_the_calls(repo, model):
         "components",
         "prototype",
         "spec:specs:throttle",
+        "component_check:throttle",
         "consistency",
     ]
 

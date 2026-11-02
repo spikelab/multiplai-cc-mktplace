@@ -205,3 +205,9 @@ def dirty(cwd: Path, paths: list[str]) -> list[str]:
 def toplevel(cwd: Path) -> Path | None:
     out = ok(cwd, "rev-parse", "--show-toplevel")
     return Path(out) if out else None
+
+
+def common_dir(cwd: Path) -> Path | None:
+    """The repository's shared git dir, the same for every worktree of it."""
+    out = ok(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    return Path(out).resolve() if out else None

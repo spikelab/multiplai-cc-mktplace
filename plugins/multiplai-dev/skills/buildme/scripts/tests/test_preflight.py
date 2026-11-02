@@ -143,6 +143,18 @@ def test_a_runner_in_a_directory_that_does_not_exist_fails(repo):
     assert failed.check == "test-runner" and "does not exist" in failed.reason
 
 
+def test_no_test_command_fails_unless_tdd_is_disabled(repo):
+    """An empty test command makes every test gate pass without running
+    anything (2026-11-01, change `voice`), so the build refuses it unless
+    `tdd.enabled: false` says to go on without tests."""
+    failed = preflight.run(_config(repo, test_command=""), publishes=False, target=None)
+    assert _checks(failed) == ["test-command"]
+    assert "tdd.test_command" in failed[0].reason
+    assert "tdd.enabled: false" in failed[0].reason
+    config = _config(repo, test_command="", tdd_enabled=False)
+    assert preflight.run(config, publishes=False, target=None) == []
+
+
 def test_a_target_branch_origin_lacks_fails(repo):
     (failed,) = preflight.run(_config(repo), publishes=True, target="ENG-1-feat")
     assert failed.check == "target-branch"

@@ -838,6 +838,21 @@ def parse_parallel(value: object) -> str:
     return "auto"
 
 
+def parse_tdd_enabled(value: object) -> bool:
+    """`tdd.enabled` from config.yaml as a bool. YAML reads a bare `off` / `no`
+    as false; anything it cannot read as true or false warns and is true."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("off", "no", "false", "0"):
+        return False
+    if text not in ("on", "yes", "true", "1"):
+        log.warning(
+            "Unrecognized tdd.enabled value %r in config.yaml — using true", value
+        )
+    return True
+
+
 def parse_whole_suite(value: object) -> str:
     """`tdd.whole_suite` from config.yaml as "per_block" or "end"; anything
     else warns and is "per_block"."""
@@ -952,6 +967,11 @@ class BuildConfig:
     # discovery took `test_command` from ("package.json", ...). Empty when the
     # command was configured (tdd.test_command) or set by the caller.
     test_command_discovered_from: str = ""
+    # tdd.enabled: false lets the build run with no test command, every test
+    # gate then running nothing (and saying so); true, the default, makes
+    # preflight refuse an empty one. It never turns the gates off when there
+    # is a test command.
+    tdd_enabled: bool = True
     # tdd.narrow_tests: inside a block's loop, run only the block's own test
     # files and the tests named after its changed modules (narrow_tests.py);
     # the gates that decide whether work is done keep `test_command`.
@@ -1079,12 +1099,6 @@ class BuildConfig:
     block_facts: bool = False
     regenerate_walkthroughs: bool = False
     walkthrough_max_usd: float = 10.0
-    # `carry_block_notes`: ask each block's implementer and review-fix agents
-    # for notes for later blocks, and hand every later block's implementer and
-    # review-fix agents those notes. The test writer and refactorer never get
-    # them. Off by default until the notes-forward benchmark
-    # (evals/notes_forward_compare.py) shows it helps.
-    carry_block_notes: bool = False
     # `spec_extract` / `spec_extract_max_usd`: run spec-extract inside
     # CODEBASE_ANALYSIS when specs/registry/ is empty, so the change has a
     # baseline to diff against; its spend is capped by its own --max-usd.
@@ -1522,6 +1536,7 @@ class BuildConfig:
         tdd = data.get("tdd", {})
         if tdd.get("test_command"):
             self.test_command = tdd["test_command"]
+        self.tdd_enabled = parse_tdd_enabled(tdd.get("enabled", True))
         narrow = tdd.get("narrow_tests", True)
         text = str(narrow).strip().lower()
         if isinstance(narrow, bool):
@@ -1610,9 +1625,8 @@ class BuildConfig:
         self._load_code_facts_settings(data)
 
     def _load_code_facts_settings(self, data: dict) -> None:
-        """`codebase_analysis_max_units`, `block_facts`, `carry_block_notes`,
-        `regenerate_walkthroughs`, `walkthrough_max_usd`, `spec_extract` and
-        `spec_extract_max_usd`. An
+        """`codebase_analysis_max_units`, `block_facts`, `regenerate_walkthroughs`,
+        `walkthrough_max_usd`, `spec_extract` and `spec_extract_max_usd`. An
         invalid value logs a warning and keeps the default, the same contract as
         `git.pr`. The switches take only a YAML boolean, so a typo never turns one
         on (or, for `spec_extract`, off)."""
@@ -1621,7 +1635,7 @@ class BuildConfig:
             "codebase_analysis_max_units",
             12,
         )
-        for key in ("block_facts", "carry_block_notes", "regenerate_walkthroughs"):
+        for key in ("block_facts", "regenerate_walkthroughs"):
             value = data.get(key, False)
             if isinstance(value, bool):
                 setattr(self, key, value)
@@ -1981,6 +1995,38 @@ class BuildConfig:
             board=board,
             plane_script=script.strip() if script else None,
         )
+
+    def reload_test_settings(self) -> None:
+        """`tdd.test_command`, `tdd.enabled` and test-command discovery again,
+        from `project_dir` as it is now. Called once the build has moved into
+        its worktree (`orchestrator._setup_worktree`,
+        `_rebind_to_existing_worktree`) and after bootstrap writes its stub
+        config, so the build tests what the worktree holds, not the checkout
+        it was started in. A command discovered in the old directory is
+        dropped first; one the caller set is kept unless the config sets one.
+        The rest of config.yaml is not re-read: settings used before the
+        worktree existed (`git:`, tier, models) cannot change after it, and
+        the CLI and env overrides applied on top of them would be lost. With
+        `--base-ref`, `intake.config_yaml_off_ref` makes the two files the
+        same; without it the worktree branches from HEAD, whose file
+        `config_yaml_uncommitted` makes the checkout's."""
+        if self.test_command_discovered_from:
+            self.test_command = ""
+            self.test_command_discovered_from = ""
+        tdd: dict = {}
+        path = self.specs_dir / "config.yaml"
+        if path.exists():
+            try:
+                data = yaml.safe_load(path.read_text()) or {}
+            except yaml.YAMLError:
+                log.warning("Failed to parse %s", path)
+                data = {}
+            if isinstance(data, dict) and isinstance(data.get("tdd"), dict):
+                tdd = data["tdd"]
+        if tdd.get("test_command"):
+            self.test_command = tdd["test_command"]
+        self.tdd_enabled = parse_tdd_enabled(tdd.get("enabled", True))
+        self._discover_test_command()
 
     def _discover_test_command(self) -> None:
         """Auto-detect the test command if not specified in config, and the

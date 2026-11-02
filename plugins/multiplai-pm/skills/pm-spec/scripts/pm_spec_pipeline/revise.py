@@ -43,7 +43,7 @@ from multiplai_core.specs import clear_spec_issues, component_dirs, parse_requir
 from . import consistency, handoff, layout
 from . import findings as F
 from .artifacts import sha
-from .rewrite import check_texts, cited_units, rewrite_units
+from .rewrite import check_texts, cited_units, rewrite_units, target_units
 from .run import EXIT_REFUSED, Run, Stop
 from .state import StepOutcome
 
@@ -238,15 +238,11 @@ async def run_revise(run: Run, *, from_respec: bool = False) -> None:
     F.admit_repair(run, NAME, revision, listed)
     run.state.step(NAME).source = source
     run.save()
-    named = [cited_units(change_dir, f) for f in listed]
-    units = (
-        layout.units(change_dir)
-        if not all(named)
-        else sorted({u for us in named for u in us})
-    )
-    rewritten = await rewrite_units(
-        run, run.state.step(NAME).repair_findings, units, label=NAME
-    )
+    units = target_units(change_dir, listed)
+    with F.released_on_spend_stop(run, NAME):
+        rewritten = await rewrite_units(
+            run, run.state.step(NAME).repair_findings, units, label=NAME
+        )
     if problems := rewritten.problems + check_texts(run, rewritten.files):
         blocking, _ = F.recheck_verdict(listed, [], [], deterministic=problems)
         F.block_on_findings(run, NAME, revision, BLOCK_REASON, blocking)
