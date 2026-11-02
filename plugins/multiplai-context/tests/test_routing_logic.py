@@ -99,6 +99,18 @@ class TestExpandBundles:
         for f in ["voice.md", "style.md", "py.md", "go.md"]:
             assert f in result
 
+    def test_skills_entries_keyed_by_name_are_expanded(self):
+        """Skills catalog entries carry ``name``, not ``source``; the key must
+        fall back to it as ``memory_router._entry_filename`` does."""
+        from lib.routing_logic import _entry_filename, expand_bundles
+
+        catalog = [
+            {"name": "voice", "bundle": "writing"},
+            {"name": "style", "bundle": "writing"},
+        ]
+        assert _entry_filename(catalog[0]) == "voice"
+        assert sorted(expand_bundles(["voice"], catalog)) == ["style", "voice"]
+
 
 # ---------------------------------------------------------------------------
 # expand_co_retrieve

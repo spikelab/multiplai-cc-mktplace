@@ -40,7 +40,12 @@ from .section_loader import parse_section_ref
 
 def _entry_filename(entry: dict) -> str:
     """Mirror ``memory_router._entry_filename`` so callers can use either."""
-    return entry.get("source") or entry.get("path") or entry.get("file", "")
+    return (
+        entry.get("source")
+        or entry.get("path")
+        or entry.get("name")
+        or entry.get("file", "")
+    )
 
 
 def _base(pick: str) -> str:
