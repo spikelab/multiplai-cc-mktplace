@@ -1203,10 +1203,13 @@ def _newer_on_branch(
                 if copy is not None
                 else None
             )
+            theirs = readiness.saved_revision(copy) if newer is not None else ""
     except (git_ops.GitLifecycleError, OSError) as e:
         log.warning("Could not read %s on origin/%s: %s", rel, branch, e)
         return None
     if newer is None:
+        return None
+    if _merge_newer_specs(prior, worktree, rel, branch, theirs):
         return None
     log.error(
         "REFUSED change=%s reason=newer-specs-on-branch branch=%s",
@@ -1221,6 +1224,83 @@ def _newer_on_branch(
             f"(`git -C {worktree} merge origin/{branch}`), then run the build again"
         ),
     )
+
+
+def _merge_newer_specs(
+    prior: BuildState, worktree: Path, rel: str, branch: str, theirs: str
+) -> bool:
+    """Merge `origin/<branch>`, whose specs were marked ready again (revision
+    *theirs*), into the build's worktree, the step `_newer_on_branch` would
+    otherwise ask a person to run. Only for a build that has not started TDD,
+    whose only tracked change is buildme's own park record: the `spec_issues`
+    key in the change dir's `.change.yaml`. Its `spec-issues.md` becomes
+    `spec-issues.resolved-<revision>.md`, as `pm-spec revise` names the copy
+    it resolved, and the `.change.yaml` edit is put back to `HEAD` first, so
+    the merge does not refuse. A conflict or any other failure aborts the
+    merge, puts both files back as they were, and returns False (the caller
+    refuses as before). True when merged."""
+    import functools
+
+    import yaml
+
+    from .models import BlockStatus
+
+    if prior.tdd is not None and any(
+        b.status != BlockStatus.PENDING for b in prior.tdd.blocks
+    ):
+        return False
+    git = functools.partial(git_ops._run, cwd=worktree)
+    if git(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok:
+        log.warning("A merge is in progress in %s; not merging origin/%s", worktree, branch)
+        return False
+    status = git(["git", "status", "--porcelain", "--untracked-files=no"])
+    if not status.ok:
+        return False
+    meta_rel = f"{rel}/.change.yaml"
+    tracked = [line[3:] for line in status.stdout.splitlines() if line.strip()]
+    if any(path != meta_rel for path in tracked):
+        return False
+    meta = worktree / meta_rel
+    saved_meta = meta.read_bytes() if tracked else None
+    if saved_meta is not None:
+        head = git(["git", "show", f"HEAD:{meta_rel}"])
+        if not head.ok:
+            return False
+        try:
+            ours = yaml.safe_load(saved_meta) or {}
+            base = yaml.safe_load(head.stdout) or {}
+        except yaml.YAMLError:
+            return False
+        if not isinstance(ours, dict) or not isinstance(base, dict):
+            return False
+        ours.pop("spec_issues", None)
+        base.pop("spec_issues", None)
+        if ours != base:
+            return False
+    issues = worktree / rel / "spec-issues.md"
+    resolved = worktree / rel / f"spec-issues.resolved-{theirs[:12]}.md"
+    moved = issues.is_file() and not resolved.exists()
+    if moved:
+        issues.rename(resolved)
+    if saved_meta is not None:
+        git(["git", "checkout", "HEAD", "--", meta_rel])
+    merged = git(["git", "merge", "--no-edit", f"origin/{branch}"])
+    if merged.ok:
+        log.info("MERGED newer specs from origin/%s into %s", branch, worktree)
+        return True
+    log.warning(
+        "Could not merge origin/%s into %s: %s",
+        branch,
+        worktree,
+        (merged.stderr or merged.stdout).strip()[-400:],
+    )
+    if git(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok:
+        git(["git", "merge", "--abort"])
+    if saved_meta is not None:
+        meta.write_bytes(saved_meta)
+    if moved:
+        resolved.rename(issues)
+    return False
 
 
 def _source_change_dir(

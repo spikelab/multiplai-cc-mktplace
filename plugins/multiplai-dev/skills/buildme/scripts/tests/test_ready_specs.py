@@ -844,19 +844,47 @@ class TestTheCopyTheBuildReads:
         assert await _build(repo, models) == 1
 
     @pytest.mark.asyncio
-    async def test_S7_specs_revised_on_the_feature_branch_refuse_a_resume_naming_it(
+    async def test_S7_specs_revised_on_the_feature_branch_are_merged_and_built(
         self, repo, tmp_path, capsys
     ):
         """pm-spec revised and pushed the specs on the feature branch after
-        the build's worktree was cut: the resume refuses and names the branch,
-        instead of building its older copy. Following the advice (merge the
-        branch into the build's) lets it go on, from them."""
+        the build's worktree was cut, while the build had not started TDD and
+        held only buildme's park record: the resume merges the branch into the
+        build's itself, moves spec-issues.md aside, and goes on from the
+        revised specs."""
+        _handoff(repo)
+        models = Models(design=[f"# Design\n\n{ISSUE_LINE}\n", "# Design\n\n## Decisions\nReturn it.\n"])
+        assert await _build(repo, models) == 4
+        wt = _worktree(tmp_path)
+        built = wt / "specs" / "changes" / CHANGE
+        assert (built / "spec-issues.md").is_file()
+        _revise_on_branch(repo, tmp_path / "pm-spec")
+        capsys.readouterr()
+        asked = len(models.prompts)
+
+        rc = await _build(repo, models)
+
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        assert "Requirement: Store" in "\n".join(models.prompts[asked:])
+        assert not (built / "spec-issues.md").exists()
+        assert list(built.glob("spec-issues.resolved-*.md"))
+        assert _git(wt, "merge-base", "--is-ancestor", f"origin/ENG-1-{CHANGE}", "HEAD") == ""
+
+    @pytest.mark.asyncio
+    async def test_S7_a_worktree_someone_edited_still_refuses_naming_the_branch(
+        self, repo, tmp_path, capsys
+    ):
+        """A tracked change that is not buildme's park record is someone's
+        work: the resume refuses and names the branch, as before, and changes
+        nothing. Following the advice lets it go on."""
         _handoff(repo)
         models = Models()
         await self._failed_at_tasks(repo, models)
         wt = _worktree(tmp_path)
         built = wt / "specs" / "changes" / CHANGE
         _revise_on_branch(repo, tmp_path / "pm-spec")
+        (built / "proposal.md").write_text((built / "proposal.md").read_text() + "\nA note.\n")
         capsys.readouterr()
         asked = len(models.prompts)
         before = _tree(built)
@@ -875,6 +903,7 @@ class TestTheCopyTheBuildReads:
         )
         assert len(models.prompts) == asked and _tree(built) == before
 
+        _git(wt, "checkout", "--", "specs")
         _git(wt, "merge", "-q", "--no-edit", f"origin/ENG-1-{CHANGE}")
         rc = await _build(repo, models)
         out = capsys.readouterr().out
