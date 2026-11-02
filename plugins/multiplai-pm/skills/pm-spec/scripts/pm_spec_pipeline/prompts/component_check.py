@@ -50,8 +50,8 @@ built yet.
    A member belongs to the set when the requirement's own words take it in,
    whether or not the spec lists it. Test the rule on each member, and report
    each member it breaks: one the rule cannot hold for, or one that another
-   requirement, a dependency's spec or the code treats otherwise. Name the
-   member and the place it is called or defined.
+   requirement, a dependency's spec, `proposal.md` or the code treats
+   otherwise. Name the member and the place it is called or defined.
 3. Compare every pair of requirements in `{specs_path}`.
 4. Compare each requirement of `{specs_path}` with the dependencies' specs.
 5. Before you report a problem, look for text that already settles it: the
@@ -59,8 +59,11 @@ built yet.
    exception, a definition, a list of what is left out, a "same as today"
    clause), `{plan_path}`, and the dependencies' specs, including a spec the
    requirement points to. A "same as today" or "as before" clause settles a
-   case only when the code today shows that behaviour. Drop the problem when
-   such text settles it, so that a builder would build one thing. When you
+   case only when the code today shows that behaviour. Text settles a case
+   only when it speaks to that same case: a rule for a wider or a
+   neighbouring case does not, and two rules that cannot both hold stay a
+   problem unless some text says which one wins. Drop the problem when such
+   text settles it, so that a builder would build one thing. When you
    keep one, say in its `description` which text you read that could have
    settled it, and why it does not.
 6. Report every problem you find, not only the first one, as one of:
