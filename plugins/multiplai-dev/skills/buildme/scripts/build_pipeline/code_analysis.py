@@ -617,7 +617,10 @@ async def analyse(
         answers,
         concurrency=CONCURRENCY,
         call_kwargs=dict(
-            allowed_tools=ANALYSIS_TOOLS, max_turns=MAX_TURNS, cwd=str(project_dir)
+            allowed_tools=ANALYSIS_TOOLS,
+            max_turns=MAX_TURNS,
+            cwd=str(project_dir),
+            read_roots=[str(project_dir)],
         ),
         errors=[],
         recoverable=(Exception,),

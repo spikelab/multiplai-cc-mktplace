@@ -199,6 +199,15 @@ class TestAgentCallToolPolicy:
         assert "disallowed_tools" not in run.call_args.kwargs
 
     @pytest.mark.asyncio
+    async def test_read_roots_reach_run_agent_and_default_to_none(self, monkeypatch):
+        monkeypatch.setenv("BUILDME_TRUST_REPO", "1")
+        with patch("build_pipeline.sdk.run_agent", _mock_run_agent()) as run:
+            await agent_call("build it", allowed_tools=["Read"])
+            assert run.call_args.kwargs["read_roots"] is None
+            await agent_call("build it", allowed_tools=["Read"], read_roots=["/project"])
+            assert run.call_args.kwargs["read_roots"] == ["/project"]
+
+    @pytest.mark.asyncio
     async def test_untrusted_repo_refused(self, monkeypatch):
         monkeypatch.delenv("BUILDME_TRUST_REPO", raising=False)
         with patch("build_pipeline.sdk.run_agent", _mock_run_agent()) as run:
@@ -359,6 +368,15 @@ class TestAgentCallStructured:
         assert answer.value == 1
         assert run.call_args.kwargs["allowed_tools"] == ["Read", "Grep"]
         assert "disallowed_tools" not in run.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_read_roots_reach_run_agent_on_every_attempt(self):
+        with patch("build_pipeline.sdk.run_agent", new_callable=AsyncMock) as run:
+            run.side_effect = [self._run_result("no JSON"), self._run_result('{"value": 2}')]
+            await agent_call_structured("review it", self.Answer, allowed_tools=["Read"],
+                                        read_roots=["/project"])
+
+        assert [c.kwargs["read_roots"] for c in run.await_args_list] == [["/project"], ["/project"]]
 
     @pytest.mark.asyncio
     async def test_one_retry_then_success(self):
