@@ -781,6 +781,7 @@ class TestTheCheckAgent:
         assert sorted(seen["allowed_tools"]) == ["Glob", "Grep", "Read"]
         assert seen["budget_label"] == "findings_self_check"
         assert seen["model"] == config.model_for("findings_self_check")
+        assert seen["max_turns"] == code.SELF_CHECK_MAX_TURNS == 60
         assert "diff --git a/calc.py" in seen["prompt"]
 
     @pytest.mark.asyncio

@@ -42,6 +42,9 @@ time, not derived from a tag.
   It used to run the whole jest suite, so a suite that already failed
   elsewhere in the repo failed the block. A command that reaches jest
   through an npm script, a task runner or vitest still runs whole.
+- **buildme-findings**: the check that reads a round's fixes before they
+  are pushed gets 60 turns instead of 30. A round with several fixes ran out
+  of turns while still reading, and the round stopped with nothing pushed.
 
 ## [0.153.3] - 2026-11-02
 
