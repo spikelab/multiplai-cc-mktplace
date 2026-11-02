@@ -60,7 +60,6 @@
           "type": "array"
         },
         "direct_calls": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/DirectCallTest"
           },

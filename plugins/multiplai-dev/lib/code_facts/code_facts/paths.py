@@ -244,7 +244,7 @@ class E2EListing(_Strict):
 
     e2e: list[E2ETest]
     mocks_hop_2: list[MockedE2ETest]
-    direct_calls: list[DirectCallTest] = []
+    direct_calls: list[DirectCallTest] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _disjoint(self) -> E2EListing:

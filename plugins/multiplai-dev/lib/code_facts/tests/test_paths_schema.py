@@ -177,7 +177,9 @@ def test_full_and_unscoped_documents_validate_and_parse(full_paths_doc):
         paths_name("PathsResult").model_validate(doc)
 
 
-def test_a_document_written_before_direct_calls_validates_and_parses_with_none(full_paths_doc):
+def test_a_document_written_before_direct_calls_validates_and_parses_with_none(
+    full_paths_doc,
+):
     # Additive changes keep paths.v1: a document with no `direct_calls` key is still a paths.v1 document.
     doc = copy.deepcopy(full_paths_doc)
     for path in doc["paths"]:
