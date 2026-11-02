@@ -1479,3 +1479,143 @@ labels:
     and owner rows open a sheet; cleaning-company rows redirect to DolceCleaning. Nothing says what the
     sheet API does for a cleaning-company account. If it allowed editing that account's fiscal data or
     name, it would break account-model, where a cleaning company's name is edited only in DolceCleaning.
+- id: 12d3faa9/account-attribution/A-2026-11-02-round1-1
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 1
+  severity: critical
+  verdict: real
+  reason: PropertyClosure.created_by/cancelled_by are CharFields filled with the acting username, which
+    the requirement's words (every existing field that records which user performed an action) take in,
+    but the automated check counts only fields referencing the user model, the plan's list leaves them
+    out, and set-null and current-name display cannot apply to text; nothing settles whether they are
+    in scope. Overstated for the Alloggiati and Ross utente fields, which hold process labels.
+  evidence: account-attribution specs.md:5-11,17-19,25-30,158; plan.md:24-35; backend/DolceChannex/models.py:1342,1357,1409;
+    backend/DolceChannex/api_closures.py:56-59,556,710; backend/DolceAlloggiati/models.py:502-507; backend/DolceRoss/models.py:211-216
+  description: 'The spec defines the set as ''every existing field that records which user performed an
+    action''. Several fields at the base commit record the actor as a plain text username, not as a link
+    to a user. Examples: `PropertyClosure.created_by` and `cancelled_by` (backend/DolceChannex/models.py;
+    api_closures.py fills them from `_get_username(request)`), `ChannexActivityLog.user`, the DolceAlloggiati
+    audit log''s `utente`, and the DolceRoss send log''s `utente`, which holds values like ''console:admin@email''.
+    These fields are in the set by its own words, so they would need an account reference and a name,
+    surname and username snapshot. But the automated check counts only ''fields that reference the user
+    model'', and plan.md''s list of changed code leaves them all out. For text fields, ''set the user
+    reference to empty on deletion'' and ''show the current name while the user exists'' cannot work,
+    because nothing links the row to a user. The check and the requirement define two different sets,
+    and a builder cannot satisfy both.'
+- id: 1c19e875/owner-sections-source/A-2026-11-02-round1-6
+  commit: 1c19e875
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 6
+  severity: minor
+  verdict: false
+  reason: The requirement says the constants SHALL no longer exist in the codebase, and plan.md says the
+    same, so the target is their definitions and uses in code; mentions in specs and the proposal leave
+    the builder guessing nothing that changes behaviour.
+  evidence: owner-sections-source specs.md:21-26; plan.md:10,15,33; backend/DolceSystem/auth_utils.py:56,66,226,236,239;
+    backend/DolceSystem/tests/test_owner_chat_access.py:79
+  description: The scenario 'Constants gone' says a search of the codebase for `LIMITED_SECTIONS` and
+    `FULL_SECTIONS` finds no definition or reference. The repository's specs (this spec, the proposal,
+    and the bookings, property-pages and core specs) name both constants, and so does a comment in `backend/DolceSystem/tests/test_owner_chat_access.py`.
+    A search of the whole repository can therefore never come back empty.
+- id: 2f28c367/owner-sections-source/A-2026-11-02-round1-2
+  commit: 2f28c367
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 2
+  severity: minor
+  verdict: false
+  reason: specs.md and plan.md both say 403 with no property returned, which settles it; the finding misreads
+    'the ticket wins' (proposal.md:18), which ranks the input ticket over the PRD, not the generated tickets.json.
+  evidence: owner-sections-source specs.md:147-152; plan.md:18,31; specs/changes/account-management/tickets.json:269-273;
+    proposal.md:18
+  description: The spec and plan say an unrecognised role gets HTTP 403. The ticket's done-criterion in
+    specs/changes/account-management/tickets.json says such a user 'gets an empty property index'. The
+    proposal says the ticket wins where sources differ. A builder cannot tell whether the answer is a
+    403 or a 200 with an empty list.
+- id: 2f28c367/owner-sections-source/A-2026-11-02-round1-8
+  commit: 2f28c367
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 8
+  severity: minor
+  verdict: false
+  reason: 'Same as the 1c19e875 finding on the removed constants: ''no longer exist in the codebase''
+    plus plan item 1 settle that the constants are removed from code; the builder guesses nothing that
+    changes behaviour.'
+  evidence: owner-sections-source specs.md:21-26; plan.md:15,27; backend/DolceSystem/auth_utils.py:56,66;
+    backend/DolceSystem/tests/test_owner_chat_access.py:79
+  description: 'The ''Constants gone'' scenario requires no definition or reference to `LIMITED_SECTIONS`
+    or `FULL_SECTIONS` anywhere in the codebase. Kept text still mentions them: a test comment (backend/DolceSystem/tests/test_owner_chat_access.py,
+    line 79) and other components'' specs in the repository (owner-permissions-core, owner-sections-bookings,
+    owner-sections-property-pages), which mention them on purpose to forbid the fallback.'
+- id: 12d3faa9/dolceops-account-list/A-2026-11-02-round1-4
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 4
+  severity: minor
+  verdict: real
+  reason: A user has both Utente.email and the auth User.email, which can differ after the migration;
+    the list and search requirements and account-model's specs speak of one email and never name the field,
+    so which one is shown and searched changes results (account-model design.md D6 narrows it but is not
+    a spec).
+  evidence: dolceops-account-list specs.md:26,85-97; account-model specs.md:52,175-188; backend/DolceSystem/models.py:172-177,216-218,228;
+    account-model design.md:187,195
+  description: 'The list shows ''the Owner user''s name and email'', and search matches ''the email of
+    any user of the account''. A user has two email fields: Utente.email, which is the one that must be
+    unique ignoring case, and User.email on the Django login. For older users these may differ or one
+    may be empty. Neither this spec nor the account-model uniqueness requirement says which one is shown
+    or searched.'
+- id: cdc8ec05/account-attribution/A-2026-11-02-round1-2
+  commit: cdc8ec05
+  component: account-attribution
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 2
+  severity: major
+  verdict: real
+  reason: 'Same problem as the 12d3faa9 text-actor-field finding, unresolved by the cdc8ec05 revision,
+    which only named two third-party exclusions: PropertyClosure.created_by/cancelled_by are username
+    CharFields written and displayed as the actor, and the check''s user-model wording, the plan''s list
+    and the set-null/name-display rules leave them undecided.'
+  evidence: account-attribution specs.md:5-23,33-38,125,166; plan.md:24-35; backend/DolceChannex/models.py:1342,1357;
+    backend/DolceChannex/api_closures.py:56-59,556,710; backend/DolceChannex/bulk_service.py:1572,1615;
+    frontend/src/components/dolceops/channex/closure-dialog.tsx:241
+  description: The inventory must cover 'every existing field that records which user performed an action'.
+    But the only completeness check enumerates fields 'that reference the user model'. `PropertyClosure.created_by`
+    and `PropertyClosure.cancelled_by` (`backend/DolceChannex/models.py`) are text fields holding the
+    acting username. They are written by `_get_username(request)` in `backend/DolceChannex/api_closures.py`
+    and by `bulk_closures(created_by=...)` in `bulk_service.py`. They are shown as the actor in the calendar
+    UI ('Creata da {c.created_by}' in `closure-dialog.tsx`, tooltips in `date-header-cell.tsx` and `booking-row.tsx`).
+    These are calendar actions by owners, OMs and operators, so the requirement's words take them in.
+    The automated check would not catch them, and the plan does not list them. A text field also cannot
+    have its user reference 'set to empty on deletion', and the closure views show a username, not 'name
+    and surname' as 'Views show the acting person's name' requires. A builder must guess whether closures
+    are in or out.
+- id: cdc8ec05/account-attribution/A-2026-11-02-round1-6
+  commit: cdc8ec05
+  component: account-attribution
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 6
+  severity: minor
+  verdict: false
+  reason: 'The spec gives a complete order (a live user with no name shows the username; a deleted one
+    shows the snapshots, then ''Utente eliminato''); the email and ''Utente #id'' steps are unreachable
+    for a live user because Utente.user is a required one-to-one to an auth User with a required username.
+    Same as 12d3faa9/account-attribution/A-2026-11-02-baseline-6.'
+  evidence: account-attribution specs.md:139-152; backend/DolceLog/views.py:194-206,560-571; frontend/src/components/audit/user-chip.tsx:39;
+    backend/DolceSystem/models.py:46-51
+  description: '''Fallback when the user has no name'' gives this order: name and surname, then username,
+    then for deleted users the username snapshot, then ''Utente eliminato''. Today the calendar log API
+    (`_user_info` in `backend/DolceLog/views.py`) and `UserChip` fall back from name to username, then
+    email, then ''Utente #id''. The spec drops the email and id steps without saying so. It is unclear
+    whether the existing email and id fallbacks stay.'
