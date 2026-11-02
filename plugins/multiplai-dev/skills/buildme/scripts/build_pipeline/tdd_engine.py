@@ -2644,6 +2644,41 @@ def _verify_block_refactor(
     return False
 
 
+def _only_added_lines(config: BuildConfig, block: BlockInfo, path: str) -> bool:
+    """True when the test file *path* only gained lines since it gated *block*:
+    its content at `block.test_commit` hashes to the block's snapshot (so the
+    snapshot was not re-baselined since), it is not a `conftest.py` (whose
+    added fixtures can change what every other test sees), and its diff from
+    that commit removes no line. False whenever that cannot be shown."""
+    if not block.test_commit or Path(path).name == "conftest.py":
+        return False
+    shown = subprocess.run(
+        ["git", "show", f"{block.test_commit}:{path}"],
+        cwd=config.project_dir,
+        capture_output=True,
+        timeout=60,
+    )
+    if shown.returncode != 0:
+        return False
+    if hashlib.sha256(shown.stdout).hexdigest() != block.test_file_hashes.get(path):
+        return False
+    diff = subprocess.run(
+        ["git", "diff", "--no-color", "--no-ext-diff", "-U0", block.test_commit, "--", path],
+        cwd=config.project_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if diff.returncode != 0:
+        return False
+    removed = [
+        line
+        for line in diff.stdout.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    return not removed
+
+
 def _enforce_test_integrity(
     block: BlockInfo,
     config: BuildConfig,
@@ -2678,7 +2713,12 @@ def _enforce_test_integrity(
         )
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
-    gate = unchanged_tests_gate(block.test_file_hashes, after, report)
+    gate = unchanged_tests_gate(
+        block.test_file_hashes,
+        after,
+        report,
+        additions_only=lambda path: _only_added_lines(config, block, path),
+    )
     if gate.metadata.get("flagged"):
         for claim in gate.metadata.get("claims", []):
             if claim not in block.test_change_claims:
