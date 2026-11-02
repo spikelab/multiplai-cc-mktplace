@@ -1564,6 +1564,7 @@
         counted: counted,
         mocked: (path.tests.mocks_hop_2 || []).map((t) => ({ nodeId: t.node_id, patchFile: t.patch_file,
           patchLine: t.patch_line })),
+        direct: (path.tests.direct_calls || []).map((t) => ({ nodeId: t.node_id })),
         noE2e: !counted.length,
       },
     };
@@ -1615,14 +1616,18 @@
   }
 
   /* The lines under a card's "E2E tests:": each counted test, "no e2e test"
-   * when none counts (also when only mocked ones exist), then each mocked
-   * test marked not counted. */
+   * when none counts (also when only mocked ones or direct calls exist), then
+   * each mocked test and each test that calls the handler directly, marked
+   * not counted. */
   function pathTestLines(tests) {
     const out = tests.counted.map((t) => ({ kind: "counted", text: "✓ " + t.nodeId + " (" + t.match + ")" }));
     if (tests.noE2e) out.push({ kind: "none", text: "no e2e test" });
     for (const t of tests.mocked) {
       out.push({ kind: "mocked", text: "○ " + t.nodeId + " — not counted (patched at " +
         lineLabel(t.patchFile, t.patchLine) + ")" });
+    }
+    for (const t of tests.direct) {
+      out.push({ kind: "direct", text: "○ " + t.nodeId + " — not counted (calls the handler directly)" });
     }
     return out;
   }
