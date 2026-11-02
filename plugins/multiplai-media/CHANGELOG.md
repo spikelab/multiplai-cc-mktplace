@@ -19,6 +19,15 @@ a tag.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-02
+
+### Fixed
+
+- Picks up multiplai-core 0.28.0: a model answer with a literal newline or tab
+  inside a JSON string no longer fails with `Invalid control character` (it
+  stopped pm-spec's component check). Installing this version re-resolves
+  multiplai-core; earlier installed versions stay on the core they first ran with.
+
 ## [0.16.0] - 2026-10-24
 
 ### Changed
