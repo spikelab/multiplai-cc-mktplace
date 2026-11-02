@@ -1,0 +1,1621 @@
+# Labelled findings of the component check on the DFACCMGMT-1 replay.
+# Each entry is one finding a check raised at `commit` on `component`, with a
+# verdict a person or an agent reached by reading the Dolcebot code and specs
+# at that commit (read-only). `source`: triage-2026-11-02 (the tables in
+# triage-2026-11-02/, `n` = the finding's number in its check),
+# matched-2026-11-01 (the finding the 2026-11-01 judge matched to a P problem),
+# or adjudicated-<run> (an unlabelled finding of that eval run, `n` its number).
+# `verdict` is `real` or `false` (YAML reads the bare word false as a boolean;
+# the eval takes it as the verdict false). See README.md for how to add entries.
+labels:
+- id: c5712a34/dolcecleaning-users/T2
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: triage-2026-11-02
+  n: 2
+  severity: major
+  verdict: false
+  reason: 'The code claim is right (the edit dialog has an is_active switch and PUT accepts `is_active`),
+    but the specs already settle it: the Utenti endpoints must do user management through `account-user-api`,
+    whose edit cannot change status, and deactivation must follow a confirmation and the Owner rule, so
+    a builder cannot keep a switch that deactivates; at most they choose to remove a control that no longer
+    does anything. Borderline: a one-line "the switch is removed" would make it explicit.'
+  evidence: 'dolcecleaning-users specs.md:6 (Cleaning-company user management is operator-only), :130
+    (Deactivation and reactivation from the Utenti tab), :184 (Editing a user''s details); account-user-api
+    specs.md:189 (Editable personal details: "Role, status and account SHALL NOT change"); frontend/src/app/dolceops/dolcecleaning/impresa/[impresaId]/page.tsx:142,406,1250;
+    backend/DolceCleaning/views.py:476-519'
+  description: '''Editing a user''s details'' lists name, surname, email and phone as editable. It never
+    says whether the user''s active status stays in the edit form. Today the Utenti edit dialog has an
+    active switch (editUserActive), and the edit endpoint accepts is_active. That switch lets someone
+    deactivate a user with no confirmation, and lets an operator outside the list deactivate the Owner.
+    This goes against the confirmation rule and the restricted ''deactivate Owner'' rule in this spec.
+    It also goes against account-user-api, which says status does not change through edit. A builder has
+    to guess whether the switch stays.'
+- id: c5712a34/dolcecleaning-users/T3
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: 'The finding overstates it: account-model does require that deleting a company deletes its users.
+    But that requirement says "as today", and today users are only unlinked (SET_NULL), never deleted.
+    Today''s delete is also refused while room types are linked. And no requirement says what happens
+    to the company''s account, while the component that owns the company endpoints has no delete requirement.'
+  evidence: account-model specs.md:83-89 (Deleting a cleaning company deletes its users); backend/DolceSystem/models.py:104-107
+    (`impresa_pulizie_pms` on_delete=SET_NULL); backend/DolceCleaning/views.py:277-286 (DELETE refuses
+    with 409 when CleaningInfo rows are linked, then `provider.delete()`); dolcecleaning-users plan.md:31
+    (views.py change list names create and rename, not delete)
+  description: 'This component changes the company endpoints and makes every cleaning company an account.
+    Its ''dolcecleaning-company-account'' capability covers creating and renaming a company but not deleting
+    one. account-model says deleting a company deletes every user of its account, and must not be refused
+    because the account has users. Today''s delete does neither: it refuses deletion while room types
+    are linked, and users are only unlinked from the company, not deleted. No requirement says what happens
+    to the company''s account when the company is deleted, or which component makes deletion remove the
+    users.'
+- id: c5712a34/dolcecleaning-users/T4
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: triage-2026-11-02
+  n: 4
+  severity: minor
+  verdict: real
+  reason: Today's PUT stores an empty name as None (`nome` is nullable), while account-model says every
+    account SHALL have a name and the rename rule copies the company name into the account name. A builder
+    has to guess whether to refuse an empty name or allow an account with no name.
+  evidence: backend/DolceCleaning/views.py:271-273; backend/DolcePMS/models.py:115 (`nome` null=True);
+    account-model specs.md:32 (Account has its own name); dolcecleaning-users specs.md:255 (Company name
+    is edited in DolceCleaning)
+  description: '''Company name is edited in DolceCleaning'' says a rename changes the account name. It
+    does not say what happens when the name is cleared. Today''s company edit stores an empty name as
+    no name at all, while every account must have a name. A builder has to guess whether an empty company
+    name is refused.'
+- id: c5712a34/dolcecleaning-users/T5
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: triage-2026-11-02
+  n: 5
+  severity: minor
+  verdict: false
+  reason: 'The "an active user" wording is loose, but the same requirement''s scenarios settle the Owner
+    case: no deactivate action for operators outside the list, and Owner deactivation for listed operators.
+    The account-team rule gives the same visible result, so a builder would build the same thing either
+    way.'
+  evidence: dolcecleaning-users specs.md:150-157 (scenarios Deactivating the Owner by a non-authorised
+    / authorised operator), :162-165 (Operator outside the list), :442-447 (Ordinary deactivation not
+    offered on the Owner)
+  description: '''Deactivation and reactivation from the Utenti tab'' says the tab offers deactivation
+    of ''an active user'' after a confirmation, which includes the Owner. The account team says the ordinary
+    deactivate action is never offered on the Owner, who can only be deactivated through the restricted
+    ''deactivate Owner'' action. The Utenti scenarios seem to follow the account-team rule, but the requirement
+    text reads both ways.'
+- id: 12d3faa9/dolceops-account-list/T2
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: triage-2026-11-02
+  n: 2
+  severity: major
+  verdict: real
+  reason: The rule "the same as on the property's owner tab today" points at nothing. The tab's save sends
+    the fields as they are, and `_assign_fields` sets them and calls `save()` with no format or required
+    checks (the only check is the model's `nome` NOT NULL). So the "Invalid value refused" scenario has
+    nothing to copy.
+  evidence: dolceops-account-list specs.md:238,244-246 (Editable fiscal and payment data); backend/DolcePMS/endpointz/onboard.py:20-46
+    (`_assign_fields`), :52-68 (CAMPI_PROPRIETARIO), :355-361; tab-proprietario.tsx:86-95 (`saveProprietario`,
+    no validation); dolceops-account-list plan.md:35 (claims onboard.py "validates", which it does not)
+  description: 'The requirement says validation on the sheet is ''the same as on the property''s owner
+    tab today'' and that an invalid value, including the IBAN, is refused with a message. The owner tab
+    does no validation today. The save path writes owner fields with no checks (no IBAN format, no required
+    name), there are no required-field rules for the owner, and the tab itself checks nothing. So the
+    scenario ''a value the owner tab would reject'' has nothing to copy: a builder must either invent
+    rules or ship a check that never refuses anything.'
+- id: 12d3faa9/dolceops-account-list/T3
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: The requirement covers "the account's" fiscal and payment data on every sheet, OM sheets included,
+    but its validation rule, the sync rule and the plan cover only owner data (`Proprietario`). An OM's
+    payment data sits on `Manager` and has no registry fields. Nothing says what an OM sheet shows or
+    edits.
+  evidence: 'dolceops-account-list specs.md:238 (Editable fiscal and payment data), :249 (Sheet and property
+    owner tab stay in sync: "For owner accounts"); plan.md:23,33; backend/DolceSystem/models.py:301-325
+    (Manager iban, intestatario_conto_bancario, nome_banca)'
+  description: 'The sheet makes ''the account''s fiscal (registry) data and payment data'' editable for
+    every OM and owner account, with validation ''the same as on the property''s owner tab''. The owner
+    tab and the sync rule only cover owner data. An OM''s data is on the Manager record: IBAN, bank holder,
+    bank, BIC, email, phone and commission, but no fiscal registry fields. No requirement and no existing
+    screen says which OM fields the sheet shows or edits, or how they are validated.'
+- id: 12d3faa9/dolceops-account-list/T4
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: triage-2026-11-02
+  n: 4
+  severity: major
+  verdict: real
+  reason: 'The finding overstates one part: the spec does say properties, not units. But a cleaning company
+    is assigned per room type (`CleaningInfo.cleaning_company` is on a RoomType, which belongs to an Immobile).
+    So "the properties assigned to it" leaves a builder to guess whether a property counts when only some
+    of its units are assigned to the company.'
+  evidence: dolceops-account-list specs.md:24 (One entry per account with its summary fields); backend/DolcePMS/models.py:795-809
+    (CleaningInfo one-to-one with RoomType), :270-271 (RoomType.immobile FK)
+  description: Units are defined as 'the number of properties linked to the account (for a cleaning company,
+    the properties assigned to it)'. A cleaning company is assigned per unit (room type), through the
+    unit's cleaning details, not per property. One property can have units cleaned by different companies.
+    The column is called 'units' but the definition counts properties, so a builder must guess whether
+    to count properties or units and how to count a property that is only partly assigned.
+- id: 12d3faa9/dolceops-account-list/T5
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: triage-2026-11-02
+  n: 5
+  severity: minor
+  verdict: real
+  reason: An empty OM name is refused, but nothing covers an owner account whose registry name is empty.
+    `Proprietario.nome` accepts "" and `_assign_fields` writes it as it is, while account-model says every
+    account SHALL have a name. This overlaps finding 2 (no validation rules), but it is about a different
+    case.
+  evidence: dolceops-account-list specs.md:213-215 (Editable account name); account-model specs.md:32
+    (Account has its own name); backend/DolcePMS/models.py:23 (`nome = CharField(max_length=40)`, not
+    null but empty allowed); onboard.py:20-46
+  description: An OM account's name may not be empty. An owner account's name is the registry name (first
+    name plus surname). The owner tab accepts an empty first name today, and this spec adds no rule against
+    it. So an owner account can end up with an empty name in the list and on the sheet. Nothing says whether
+    that is refused or what is shown instead.
+- id: cdc8ec05/account-attribution/T2
+  commit: cdc8ec05
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 2
+  severity: major
+  verdict: real
+  reason: A row a system process wrote has an empty user and empty snapshots, and so does a deleted user's
+    row with no snapshot. The fallback shows "Utente eliminato" for both, where today such rows show "Sistema".
+    The plan changes the shared `UserChip`, which the excluded auditlog property history also uses.
+  evidence: 'account-attribution specs.md:79-81 (Scenario: Action with no user), :140,150-152 (Fallback
+    when the user has no name); frontend/src/components/audit/user-chip.tsx:39,42 ("Sistema"); backend/DolceChannex/tasks.py:49,121
+    (`requested_by=None`, shown as "sistema"); plan.md:33; UserChip used by storico-entry-card.tsx / storico-api.ts
+    (property history)'
+  description: Today, rows with no user show 'Sistema'. Both `UserChip` and the compact calendar log table
+    do this, and `CalendarOpsJob` rows from scheduled tasks are written with `requested_by=None` so they
+    show as 'sistema'. The spec's fallback shows 'Utente eliminato' whenever the user reference is empty
+    and the snapshot is empty. Rows written by a system process (which the spec itself keeps, with empty
+    user and snapshot) look exactly like rows of a deleted user. After the change they would read 'Utente
+    eliminato' instead of 'Sistema'. `UserChip` is also used by the DolceOps property history (auditlog),
+    which this spec excludes, so that view would change too.
+- id: cdc8ec05/account-attribution/T3
+  commit: cdc8ec05
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: '`Cleaning.updated_by` is on the plan''s list and is overwritten on every status update. So
+    the rule that the account reference never changes after the row is written either leaves the account
+    out of step with the user, or breaks.'
+  evidence: account-attribution specs.md:65-70 (Account reference is fixed at the time of the action);
+    plan.md:31; backend/DolceSystem/dolcecleaning/endpoints.py:102 (`cleaning.updated_by = request.user`);
+    backend/DolceSystem/models.py:1037
+  description: The spec says the account reference and the actor snapshot are fixed once a row is written.
+    But `Cleaning.updated_by`, which is in the plan's list of fields, records the most recent person to
+    update the cleaning. It is overwritten on every status update (`cleaning.updated_by = request.user`
+    in `backend/DolceSystem/dolcecleaning/endpoints.py`). If the account and snapshot stay as first written,
+    they no longer match the user beside them. If they follow the user, they break the 'fixed' rule.
+- id: cdc8ec05/account-attribution/T4
+  commit: cdc8ec05
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 4
+  severity: major
+  verdict: real
+  reason: The check is meant to find every field that "references the user model and records who performed
+    an action", but there are two user models. Many links to them are not actor fields, such as `Utente.user`,
+    `Manager.user`, `Operatore` and `Account.titolare`. No rule says how an automated check tells actor
+    links from the others, so the builder has to invent the classification.
+  evidence: 'account-attribution specs.md:21-23 (Scenario: Every actor field is in the inventory); backend/DolceSystem/models.py:46,130,233,302,411
+    (Utente.user, operatore, UtenteLoginHistory.user, Manager.user, Account.titolare); backend/DolceLog/models.py:81,135
+    and backend/DolceCleaning/models.py:213 (FKs to DolceSystem.Utente); backend/DolceSystem/models.py:1037
+    (FK to auth User)'
+  description: 'The automated inventory check has to find every field ''that references the user model
+    and records who performed an action''. The project has two user models: `auth.User` (used by Cleaning,
+    BookingNote, DolcePricing, DolceFinance and UtenteLoginHistory) and `DolceSystem.Utente` (used by
+    CalendarChangeLog, AutoResponseToggleLog, CalendarOpsJob and CleaningMessageLog). Many links to these
+    models are not actor fields at all, such as `Utente.user`, `Manager.user`, `Operatore.user` and `Account.titolare`.
+    The spec gives no way to tell actor fields from the rest automatically, so the builder has to guess
+    what the check counts and what it ignores.'
+- id: cdc8ec05/account-attribution/T5
+  commit: cdc8ec05
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 5
+  severity: major
+  verdict: false
+  reason: 'The code claim is right (`UtenteLoginHistory.user` is CASCADE and not nullable), but the plan
+    puts `UtenteLoginHistory.user` on the inventory explicitly, and "Rows survive deletion of the user"
+    covers every inventoried row. So the builder does not have to guess: they make it nullable with SET_NULL
+    and keep the rows. The "deliberate cascade" claim is not borne out either: the cited review only notes
+    that admin deletion cascades to login history, as a permissions finding.'
+  evidence: plan.md:31; account-attribution specs.md:165-172 (Rows survive deletion of the user); backend/DolceSystem/models.py:232-238;
+    account-model reviews/block-01-round-4.json:81
+  description: The spec says rows survive user deletion with their user reference set to empty. `UtenteLoginHistory.user`
+    is required and is deleted together with its user today (CASCADE). An earlier review records this
+    cascade as deliberate for cleaning-company deletion. To meet the spec, login history would have to
+    start being kept after a user is deleted, which is new behaviour. Neither this spec nor the account-model
+    and account-user-api specs mention it. A builder would have to guess whether login history really
+    counts as an actor field under this rule.
+- id: cdc8ec05/account-attribution/T6
+  commit: cdc8ec05
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 6
+  severity: minor
+  verdict: real
+  reason: '`CalendarOpsJob.requested_by` is written only by `start_calendar_job`, which is DRF with the
+    default `IsOperatore` permission, and by scheduled tasks with None. So the scenario "performs, through
+    a user of an account, each action listed in the inventory" cannot be done for that field.'
+  evidence: 'account-attribution specs.md:61-63 (Scenario: Every inventoried write path records the account);
+    backend/DolceSystem/endpointz/calsync_ops.py:434-472; backend/DolceEngine/settings.py:688-691 (default
+    IsAuthenticated + IsOperatore); backend/DolceEngine/tests/test_drf_default_protected.py:276; backend/DolceChannex/tasks.py:49,121'
+  description: The scenario 'Every inventoried write path records the account' asks for each listed action
+    to be done 'through a user of an account'. Some inventoried fields are written only from operator
+    tools or by the system. For example, `CalendarOpsJob.requested_by` is written by the operator calendar-ops
+    panel (`calsync_ops.py`) and by scheduled tasks. Operators have no account, so for these fields the
+    test cannot be done as written.
+- id: 12d3faa9/account-billing/T1
+  commit: 12d3faa9
+  component: account-billing
+  source: triage-2026-11-02
+  n: 1
+  severity: critical
+  verdict: real
+  reason: '`create_billing_profile` links each new profile to the caller''s login whatever the caller''s
+    role, and operators can reach the billing page; operators belong to no account, so the migration''s
+    "user has no account" check aborts on every operator-created profile, and no rule says where those
+    profiles go. Whether production holds any is a data question I could not check.'
+  evidence: backend/DolceFinance/views/billing_profiles.py:168,193; account-billing specs.md:115,117-119;
+    account-model specs.md:6 ("Every client user"), :238-239; account-attribution specs.md:65 (operator
+    "belongs to no account"); account-model codebase-analysis.md:483 (billing page reads role, operator
+    branch)
+  description: The account-billing-migration requirement 'Migration fails loudly on profiles it cannot
+    place' stops the migration if any billing profile is linked to a user that has no account. Operators
+    are users that never get an account (account-model, 'Operators keep cross-client access'). Today create_billing_profile
+    in backend/DolceFinance/views/billing_profiles.py links every new profile to whoever is logged in,
+    operators included, and operators may create profiles for clients. So any profile an operator has
+    ever created makes the migration stop. No requirement says which account an operator-created profile
+    goes to, or who fixes it, so the migration cannot finish on production-shaped data.
+- id: 12d3faa9/account-billing/T2
+  commit: 12d3faa9
+  component: account-billing
+  source: triage-2026-11-02
+  n: 2
+  severity: major
+  verdict: real
+  reason: After release, "Billing profiles belong to the account" needs an account on every new profile,
+    but an operator caller has no account and the create request carries none, so a builder has to guess
+    whether operators pick an account or lose the ability to create profiles. The plan's "by the caller's
+    account" does not cover this case.
+  evidence: account-billing specs.md:6,8-15; plan.md "Code this component changes" (billing_profiles.py
+    line); billing_profiles.py:160-209
+  description: 'The account-billing-ownership requirement ''Billing profiles belong to the account'' says
+    every new profile references ''that account'', and a profile saved without an account is refused.
+    When an operator creates a profile, there is no caller account to use: operators belong to no account,
+    and the create endpoint today takes no account from the request. Nothing says which account an operator-created
+    profile belongs to, so operators either can no longer create profiles or a builder has to guess.'
+- id: 12d3faa9/account-billing/T3
+  commit: 12d3faa9
+  component: account-billing
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: '`ProfiloFatturazione.utente` is `null=True, on_delete=SET_NULL`, so deleting a user (for example
+    `elimina_utenti_impresa`) leaves profiles with no user; the migration must abort on them, and nothing
+    says how they get placed. The only ways to get past the abort, unlinking or deleting the profiles,
+    break "Migration preserves profile identity" (SHALL NOT delete) and "Property assignments survive".
+    Whether such rows exist in production is unchecked.'
+  evidence: backend/DolceFinance/models/billing.py:232-237; backend/DolceSystem/accounts.py:162-168; account-billing
+    specs.md:96,108,115,117-119
+  description: Today the link from a profile to its user is optional and is cleared when the user is deleted
+    (ProfiloFatturazione.utente is null=True, on_delete=SET_NULL). Profiles with no user can therefore
+    already exist, and properties may still use them. The migration requirement aborts on any such profile.
+    Nothing says how these profiles get an account, so the migration may never complete. If someone unlinks
+    or deletes them to get past the stop, that breaks 'Property assignments survive the migration'.
+- id: 12d3faa9/account-billing/T5
+  commit: 12d3faa9
+  component: account-billing
+  source: triage-2026-11-02
+  n: 5
+  severity: minor
+  verdict: real
+  reason: The requirement keeps legacy-only profiles with no account, while the scenario "Profile without
+    account is rejected" refuses any save without an account; operators can update any profile, so a builder
+    has to guess whether saving such a profile is refused. Also, the plan's "required link" cannot be
+    a database NOT NULL while those rows exist.
+  evidence: account-billing specs.md:6,13-15,17-19; billing_profiles.py:231-236; plan.md ("replace ...
+    with a required link to the account")
+  description: The scenario 'Profile without account is rejected' refuses any save of a profile with no
+    account. The same requirement keeps the legacy-only profiles with no account on purpose. Operators
+    can edit any profile today (update_billing_profile). So an operator editing one of these profiles
+    would be refused, and the text does not say whether that is intended.
+- id: 12d3faa9/account-billing/T6
+  commit: 12d3faa9
+  component: account-billing
+  source: triage-2026-11-02
+  n: 6
+  severity: major
+  verdict: real
+  reason: 'The account row is deleted with its owner, OM or cleaning company (`pre_delete` receiver plus
+    `CASCADE` one-to-ones), and nothing says what happens to its billing profiles. A builder must choose
+    `on_delete`: CASCADE would hit `Immobile.profilo_fatturazione` PROTECT and refuse the deletion, SET_NULL
+    breaks the mandatory link, PROTECT refuses the deletion. "Profile stays usable..." covers user deletion
+    only.'
+  evidence: backend/DolceSystem/accounts.py:234-243,260-272; backend/DolceSystem/models.py:381-410 (Account.manager/proprietario/impresa_pulizie
+    CASCADE); backend/DolcePMS/models.py:194-196 (PROTECT); account-billing specs.md:37-51; account-model
+    specs.md:83-84
+  description: 'Today the account is deleted together with its owner, OM or cleaning company (backend/DolceSystem/accounts.py
+    removes it before the entity is deleted). account-model requires that deleting a cleaning company
+    is not refused because of its users. Once a profile''s account link is mandatory, nothing says what
+    happens to an account''s billing profiles when the account is deleted. The choices are: delete them,
+    which properties block because a property''s profile link is protected (Immobile.profilo_fatturazione
+    PROTECT); leave them with no account, which breaks the mandatory link; or refuse the deletion. ''Profile
+    stays usable when a user is deactivated or deleted'' covers deleting users only.'
+- id: 12d3faa9/account-billing/T7
+  commit: 12d3faa9
+  component: account-billing
+  source: triage-2026-11-02
+  n: 7
+  severity: minor
+  verdict: real
+  reason: 'The requirement covers only reads from a user to their profiles. `force_airbnb_host_case` goes
+    the other way (`profilo.utente.proprietario`, plus `select_related` on that path), and the API returns
+    `"utente"` for each profile. Removing the user link, which the plan does, leaves these without a stated
+    replacement. The finding''s side claim is also right: no owner-to-profiles read exists today (the
+    related name `finance_profili_fatt_del_proprietario` is not used outside migrations).'
+  evidence: backend/DolceChannex/management/commands/force_airbnb_host_case.py:99-100,297-298; billing_profiles.py:88;
+    account-billing specs.md:53-66
+  description: '''Reads of a profile through the user go through the account'' covers code that goes from
+    a user to their profiles. Other existing code goes the other way, from a profile to its user, and
+    has no replacement once the user link is removed. The force_airbnb_host_case command matches a profile
+    to a property''s owner through the profile''s user. The billing-profile API returns a ''utente'' field
+    for every profile. The scenario ''Lookup from a property''s owner'' describes a path from owner to
+    profiles that does not exist in today''s code.'
+- id: 12d3faa9/account-billing/T8
+  commit: 12d3faa9
+  component: account-billing
+  source: triage-2026-11-02
+  n: 8
+  severity: minor
+  verdict: false
+  reason: 'The rule is clear: a profile goes to its user''s account, which for logins 44 and 61 is the
+    account recorded for them. The scenario "Property keeps a profile of another account" already accepts
+    that a property may use a profile that ends up in a different account from its owner, with assignments
+    and invoices unchanged.'
+  evidence: account-billing specs.md:68-74,80-85,107-112; account-model specs.md:317-327
+  description: '''Each existing profile moves to its user''s account'' sends the profiles of logins 44
+    and 61, which are placed by a recorded multi-role decision, to the decided account, which may be an
+    OM account. The owner account those logins used to stand for would then no longer list the profiles
+    its properties use. account-model exempts these logins from the access comparison, but this spec does
+    not say whether that change to the owner''s profile list is accepted.'
+- id: cdc8ec05/account-billing/T2
+  commit: cdc8ec05
+  component: account-billing
+  source: triage-2026-11-02
+  n: 2
+  severity: critical
+  verdict: real
+  reason: 'Same as check 1 #5, and the revision left this text unchanged: the excluded legacy-only profiles
+    have no account, while "Profile without account is rejected" refuses any save without one, and operators
+    can update any profile. "Critical" overstates it, since the rows belong to inactive logins, but a
+    builder still has to guess.'
+  evidence: account-billing specs.md:6,13-15 (unchanged in diff 12d3faa9..cdc8ec05); billing_profiles.py:231-236
+  description: The requirement makes the account link mandatory for every billing profile, and the scenario
+    'Profile without account is rejected' says any save of a profile without an account is refused. The
+    same requirement keeps the legacy-only profiles with no account. Operators can update any profile
+    today (update_billing_profile allows operators on every profile). So any later save of such a profile,
+    even an unrelated field edit by an operator, must be both refused (no account) and allowed (the stated
+    exception). The plan's 'required link to the account' cannot be a database-level requirement while
+    those rows exist.
+- id: cdc8ec05/account-billing/T3
+  commit: cdc8ec05
+  component: account-billing
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: 'Same as check 1 #1 and #2 together, unchanged by the revision: no rule covers creating a profile
+    as an operator, and none places the existing operator-created profiles in the migration. Owner accounts
+    with no users (account-model) can only be served by an operator, which makes the gap larger.'
+  evidence: billing_profiles.py:118-123,168,193; account-billing specs.md:21-22,115; account-model specs.md:12-14,238-239
+  description: Profiles are listed, created, updated and deleted 'by the caller's account', but operators
+    have no client account. Operators reach the billing settings page and create-billing-profile. Today
+    a profile an operator creates is linked to the operator's own login (create_billing_profile sets utente=request.user.utente).
+    Nothing says which account a profile created by an operator belongs to, or how an operator adds a
+    profile to an account. Account-model also allows owner accounts with no users, and they can only be
+    served by an operator. The migration also aborts on any profile whose user has no account, so every
+    profile an operator created in the past stops the release, and no rule says where those profiles go.
+- id: cdc8ec05/account-billing/T4
+  commit: cdc8ec05
+  component: account-billing
+  source: triage-2026-11-02
+  n: 4
+  severity: major
+  verdict: real
+  reason: 'Same as check 1 #3, unchanged: profiles with no user still abort the migration, and no placement
+    rule or fix-by-hand route is given. The revision added a fix-by-hand route only for properties that
+    use legacy-only profiles.'
+  evidence: billing.py:232-237; account-billing specs.md:115 (cdc8ec05), 117-119
+  description: 'The migration aborts on any profile ''linked to no user at all''. Today ProfiloFatturazione.utente
+    is null=True with on_delete=SET_NULL, so every profile whose login was deleted in the past has no
+    user, and properties may still invoice with them. Legacy-only profiles get a stated way through, but
+    these do not: nothing says which account they should go to or who decides. The release is blocked
+    until someone guesses.'
+- id: cdc8ec05/account-billing/T5
+  commit: cdc8ec05
+  component: account-billing
+  source: triage-2026-11-02
+  n: 5
+  severity: major
+  verdict: real
+  reason: 'Same as check 1 #7, unchanged: reads from a profile to its user (`force_airbnb_host_case`,
+    the API''s `utente` field) have no stated replacement. For `force_airbnb_host_case` the obvious mapping,
+    the account''s `proprietario`, gives today''s result, so the guess is small; the API field is still
+    open.'
+  evidence: force_airbnb_host_case.py:99-100,297-298; billing_profiles.py:88; account-billing specs.md:53-66
+  description: 'The requirement only covers code that goes from a user to their profiles. Code also goes
+    the other way, from a profile to its user and on to the owner: force_airbnb_host_case reads profilo.utente.proprietario
+    to decide whether the profile holder is the property''s owner, and the profile API returns an ''utente''
+    field. When the user link is replaced, these lookups have no stated replacement. The plan''s list
+    of files to change omits them, and a builder must guess what ''the profile''s owner'' means once a
+    profile belongs to an account.'
+- id: cdc8ec05/account-billing/T6
+  commit: cdc8ec05
+  component: account-billing
+  source: triage-2026-11-02
+  n: 6
+  severity: minor
+  verdict: false
+  reason: The owner's property page already fills its picker from `get-billing-profiles`, which today
+    returns only the caller's own profiles, so a property whose profile belongs to another user already
+    shows it outside the list. The change keeps the UI behaviour the same, and the requirement only says
+    the assignment stays valid. A builder would change nothing here either way.
+  evidence: frontend/src/app/immobile/[immobileId]/page.tsx:132,189-208,214-216,625-638; billing_profiles.py:121-123;
+    account-billing specs.md:68-74
+  description: The requirement keeps a property on a profile that belongs to a different account and says
+    saving the property with it is not refused. But the DolceBot property page builds its profile choices
+    from get-billing-profiles, which will return only the caller's account's profiles. Nothing says whether
+    the owner sees that profile on their property, or whether they can keep it once they pick another
+    one.
+- id: 12d3faa9/account-attribution/T1
+  commit: 12d3faa9
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 1
+  severity: critical
+  verdict: real
+  reason: 'Accounts are deleted with their cleaning company, owner or OM, and account-model says a cleaning
+    company''s deletion SHALL NOT be refused, while attribution says a row''s account reference never
+    changes and rows survive. Each `on_delete` choice for the new account reference breaks one of these:
+    CASCADE deletes the rows, SET_NULL changes the reference, PROTECT refuses the deletion. Same root
+    problem as check 1 #6, in another component.'
+  evidence: account-attribution specs.md:57-58,157-158; account-model specs.md:83-89; backend/DolceSystem/accounts.py:162-168,234-243;
+    backend/DolceSystem/models.py:381-410
+  description: 'The spec says the account reference on a row never changes after it is written, and that
+    when a user is deleted the rows survive and keep that reference. But the account itself is deleted
+    whenever its cleaning company, owner or manager is deleted: `_elimina_account_prima_dell_entita` deletes
+    it on pre_delete, and `Account.impresa_pulizie/proprietario/manager` cascade. The account-model spec
+    says deleting a cleaning company deletes all its users and ''SHALL NOT be refused''. So the rows written
+    by those users can''t keep their account reference. Either the deletion is blocked (breaks account-model),
+    the rows are deleted (breaks ''Rows survive deletion''), or the reference is emptied (breaks ''fixed
+    at the time of the action'').'
+- id: 12d3faa9/account-attribution/T2
+  commit: 12d3faa9
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 2
+  severity: major
+  verdict: real
+  reason: 'The plan puts `Cleaning.updated_by` in the inventory, and the code overwrites it on every update
+    (or sets it to None). "Record the acting user and their account" asks for the new account on each
+    write, while "Account reference is fixed" says the reference SHALL NOT change after the row is written:
+    two rules for the same write.'
+  evidence: 'plan.md (`DolceSystem/models.py` line: `Cleaning.updated_by`); backend/DolceSystem/dolcecleaning/endpoints.py:102,398,401;
+    backend/DolceSystem/models.py:1037; account-attribution specs.md:36-39,57-58'
+  description: The inventory has to include `Cleaning.updated_by`. That field records the last user to
+    change a cleaning and is overwritten on every update (`DolceSystem/dolcecleaning/endpoints.py` sets
+    `updated_by = request.user`, or None for anonymous updates). The spec says the account reference and
+    snapshot are taken when the row is written and SHALL NOT change afterwards. For a 'last updated by'
+    field, a later update by another account's user would leave the user and the account out of step.
+- id: 12d3faa9/account-attribution/T4
+  commit: 12d3faa9
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 4
+  severity: major
+  verdict: real
+  reason: The fallback chain says when to show "Utente eliminato" but not what a row with no user ever
+    shows, such as a system process or a user deleted before the release. Those rows look the same as
+    a deleted user with no snapshot. Today `UserChip` and `audit_history` show "Sistema", and the plan's
+    chip change lists only stored name, then username, then "Utente eliminato", so a builder has to guess.
+  evidence: account-attribution specs.md:71-73,131-144; frontend/src/components/audit/user-chip.tsx:39,42;
+    backend/DolcePMS/audit_history.py:413-417; plan.md (user-chip.tsx line)
+  description: Once the user is gone, the views show the stored name, then the stored username, then 'Utente
+    eliminato'. But rows written by a system process (no user, empty snapshot) and rows whose user was
+    already deleted before the release (user already emptied, backfill had nothing to copy) look exactly
+    like a deleted user with no snapshot. They would all show 'Utente eliminato'. Today the shared chip
+    shows 'Sistema' for these (`user-chip.tsx`, `audit_history._autore`). Nothing says how system actions
+    should be shown or told apart.
+- id: 12d3faa9/account-attribution/T5
+  commit: 12d3faa9
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 5
+  severity: major
+  verdict: false
+  reason: The plan puts `UtenteLoginHistory.user` in the inventory, and "Rows survive deletion of the
+    user" says plainly that inventoried rows are kept with the user set to null. So the change from today's
+    CASCADE to SET_NULL is required, and a builder would build exactly that. Keeping a deleted person's
+    IP addresses and locations is a product or privacy question worth raising with the PM, not something
+    a builder would have to guess.
+  evidence: backend/DolceSystem/models.py:232-238 (CASCADE); plan.md (`UtenteLoginHistory.user`); account-attribution
+    specs.md:157-158
+  description: The spec puts `UtenteLoginHistory.user` in the inventory and says deleting a user SHALL
+    NOT delete the rows that record them, setting the user to empty instead. Today the field is `on_delete=CASCADE`,
+    so deleting a user deletes their login history. The spec doesn't say this behaviour changes, or that
+    logins count as recorded actions rather than out-of-scope 'reads'. Keeping it would also keep a deleted
+    person's IP addresses and locations.
+- id: 12d3faa9/account-attribution/T6
+  commit: 12d3faa9
+  component: account-attribution
+  source: triage-2026-11-02
+  n: 6
+  severity: minor
+  verdict: false
+  reason: 'Both rules are explicit, and the scenarios fix the result: current name while the user exists,
+    stored name after deletion. The finding itself says "Both rules are stated", so a builder builds the
+    same thing whatever the reader expects.'
+  evidence: account-attribution specs.md:117,123-125,160,166-168
+  description: While the user exists, the views show the user's current name; after deletion, they show
+    the name stored when the row was written. So a user renamed from 'Giulia Rossi' to 'Giulia Bianchi'
+    shows as 'Bianchi' until deleted, then goes back to 'Rossi' on the same entries. Both rules are stated,
+    but together they make the displayed name jump back, and a reader may not expect that.
+- id: 1c19e875/owner-sections-source/T1
+  commit: 1c19e875
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 1
+  severity: major
+  verdict: real
+  reason: '`Section` includes `reporting`, the link-save code accepts every enum value, and `AllowedSectionsView`
+    returns stored values as they are. So "only seven names" and "menu identical for every owner" give
+    different answers for any row holding `reporting` or an un-normalised `ari_calendar`. The spec does
+    not say which wins. (The later built `get_owner_sections` intersects with `OWNER_SECTIONS`, which
+    shows the builder had to pick one.)'
+  evidence: backend/DolceSystem/models.py:950 (REPORTING), :954-960 (ari_calendar left until `normalizza_sezione_calendario`
+    runs); backend/DolceSystem/endpointz/manager_owner_links.py:130-131, :236-237, :337-338; backend/DolceSystem/autenticazzone.py:53-72
+    (`sections.update(link.sections)`); spec "Only known section names returned" vs "Menu entries unchanged
+    for every owner"; 12d3faa9 backend/DolceSystem/auth_utils.py:214
+  description: '''Only known section names returned'' says the function returns only seven stored identifiers
+    and treats `reporting` as a legacy name that geperman never stores. In the code, `reporting` is a
+    value of the `Section` enum. `update_link` and `create_orphan_link` keep any enum value, so a `ManagerOwnerLink`
+    row can hold `reporting`. Rows can also still hold `ari_calendar` until `normalizza_sezione_calendario`
+    has run. Today `AllowedSectionsView` returns whatever the live rows store. If the new function drops
+    these values, the ''Menu entries unchanged for every owner'' comparison fails for every owner whose
+    rows contain them. If it keeps them, this requirement fails. Both cannot hold.'
+- id: 1c19e875/owner-sections-source/T2
+  commit: 1c19e875
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 2
+  severity: major
+  verdict: false
+  reason: The text says "once `owner-permissions-core` adds it", so the entry is plainly not listed now
+    and the route-resolution test is not broken. owner-permissions-core:297 also treats it as section-independent.
+    The builder of this component builds the same thing whichever way it is read.
+  evidence: spec "Section-independent endpoints" (line 109); owner-permissions-core/specs.md:297; backend/DolceEngine/urls.py
+    (no allowed-permissions route)
+  description: '''Section-independent endpoints'' requires the list to contain `GET /api/allowed-permissions/`
+    once `owner-permissions-core` adds it. It also requires every route in the list to resolve, checked
+    by the inventory test. That route is not registered today, and `owner-permissions-core` is not a dependency
+    of this component. If the entry is listed now, the resolution test fails. If it is not listed, the
+    ''at least'' list is incomplete. The requirement does not say which component adds the entry.'
+- id: 1c19e875/owner-sections-source/T3
+  commit: 1c19e875
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: The index today serves cleaning companies, and logins with no profile, every property, and its
+    own comment says it serves "imprese". The spec lists only operators, OMs and owners as recognised
+    and never says what a cleaning-company user gets. Yet `/clng/feed` calls `/api/immobily/`, so a 403
+    would break the feed.
+  evidence: backend/DolceSystem/endpointz/index_immobili.py:25-26, :278-286; frontend/src/app/clng/feed/lib/api.ts:14;
+    spec "Unrecognised role gets no properties" scenario "Recognised roles unchanged"
+  description: '''Unrecognised role gets no properties'' names operators, OM users and owners as the recognised
+    roles that keep today''s list. The property index (`_get_immobili_queryset`) filters only owners and
+    managers. Every other user, including cleaning-company users, gets every property. The DB-2143 notes
+    call cleaning companies an unrecognised role here. `/clng/feed` calls `/api/immobily/` to look up
+    property cities. As written, cleaning-company users would get 403, and their feed would lose city
+    data. That conflicts with ''Cleaning-company user keeps the feed... as it is today''. The spec does
+    not say whether cleaning-company users are a recognised role or what they should receive.'
+- id: 1c19e875/owner-sections-source/T4
+  commit: 1c19e875
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 4
+  severity: major
+  verdict: real
+  reason: '`_whatsapp_media` returns True for every non-owner. Its docstring says it is wider than `can_access_chat`
+    for managers and cleaning companies. The spec demands "no wider than the chat API''s" but has scenarios
+    only for owners, operators and anonymous callers. Whether OMs and cleaning companies get narrowed
+    is left to guess.'
+  evidence: backend/DolceEngine/media_guard/resolvers.py:165-194; backend/DolceSystem/auth_utils.py:242-267;
+    spec "WhatsApp attachments require the Chat section"
+  description: '''WhatsApp attachments require the Chat section'' says media_guard''s access shall be
+    no wider than the chat API''s. Its scenarios cover only owners, operators and anonymous requests.
+    Today `_whatsapp_media` lets every non-owner through without any check, including OM users and cleaning-company
+    users. The chat API limits OMs to the properties they manage and refuses cleaning companies. ''Non-owner
+    roles unaffected'' does not mention media_guard. A builder has to guess whether OM and cleaning-company
+    users must now be limited the way the chat API limits them, or keep today''s open access.'
+- id: 1c19e875/owner-sections-source/T5
+  commit: 1c19e875
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 5
+  severity: minor
+  verdict: false
+  reason: 'The requirement itself names the six sections, and the endpoints come from the booking-sheet
+    code. The pointer is only a reference, and it is valid: owner-permissions-core''s Conversion table
+    requirement does list the entry points with file references. Build order does not stop a builder reading
+    another spec.'
+  evidence: spec "Booking-sheet endpoints listed under every section that opens the sheet"; owner-permissions-core/specs.md:196-204
+  description: '''Booking-sheet endpoints listed under every section that opens the sheet'' points to
+    `owner-permissions-core` (Requirement: Conversion table) for the list of entry points. That component
+    is not a dependency of this one, and it is built later on top of this inventory. The list this requirement
+    needs therefore sits in a component that depends on this one.'
+- id: 1c19e875/owner-sections-source/T6
+  commit: 1c19e875
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 6
+  severity: minor
+  verdict: false
+  reason: '"Live" is defined the same way in both existing implementations, and the equivalence test against
+    the pre-change `AllowedSectionsView` pins it, so a builder builds the same rule either way. The built
+    code later copied it exactly.'
+  evidence: backend/DolceSystem/autenticazzone.py:53-72; backend/DolceSystem/auth_utils.py:203-219; spec
+    "Identical menus"; 12d3faa9 backend/DolceSystem/auth_utils.py:186-213
+  description: 'The spec rests every rule on ''live'' `ManagerOwnerLink` rows but never defines ''live''.
+    The code defines it in both `AllowedSectionsView` and `get_allowed_sections`: a link counts if its
+    OM is currently assigned to one of the owner''s properties, or if it is the direct link and the owner
+    has a property with no OM. The rest of the epic will rely on this definition, so it should be written
+    down.'
+- id: 1c19e875/owner-sections-source/T7
+  commit: 1c19e875
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 7
+  severity: minor
+  verdict: real
+  reason: The fixture must include owners with both managed and direct links, and the report must label
+    each owner "managed or direct". The report's content for those owners is left to the builder.
+  evidence: spec "Production-shaped fixture" (owners with both) vs "Report of owners with an empty menu"
+  description: '''Report of owners with an empty menu'' asks whether each owner is managed or direct.
+    The fixture requirement and the proposal both allow owners who are both: some properties under an
+    OM and some direct. The report does not say how to classify them.'
+- id: 2f28c367/owner-sections-source/T1
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 1
+  severity: critical
+  verdict: real
+  reason: Same as check 1 finding 1. The code facts are the same at this commit.
+  evidence: backend/DolceSystem/models.py:950, :954-960; manager_owner_links.py:130-131, :236-237, :337-338;
+    autenticazzone.py:53-72
+  description: 'The section function may return only the seven listed names. But geperman stores more
+    than seven: the save code accepts every value of the `Section` list, and that list includes an eighth
+    one, `reporting`. Older rows may also still hold `ari_calendar` until a cleanup command runs. Today
+    `AllowedSectionsView` returns whatever a live link holds. Another requirement says `/api/allowed-sections/`
+    must return exactly the same sections as before for every owner. For any owner whose links hold `reporting`
+    or `ari_calendar`, a builder must break one of the two rules. The claim that geperman stores only
+    seven names is also not true of the code.'
+- id: 2f28c367/owner-sections-source/T2
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 2
+  severity: critical
+  verdict: real
+  reason: 'This revision''s booking-sheet requirement has a scenario: "only Calendario pulizie → HTTP
+    403". But `depends_on: []`, the component adds no check to those endpoints, and `can_access_booking`
+    checks only property ownership. So the scenario cannot hold when this component lands. Fixed in 1c19e875,
+    which removed both scenarios and says `owner-sections-bookings` applies the check.'
+  evidence: '2f28c367 owner-sections-source/specs.md:95-111; .change.yaml `depends_on: []`; backend/DolceSystem/auth_utils.py:497-527;
+    diff 2f28c367..1c19e875'
+  description: The booking-sheet requirement says an owner whose only section is Calendario pulizie gets
+    HTTP 403 from the booking-sheet endpoints. Owners with only Chat must get the same responses as before.
+    This component writes only an inventory; it puts no check on the booking-sheet endpoints. Today those
+    endpoints check only that the booking is on the owner's property, so this owner gets 200. The checks
+    that would refuse come from owner-sections-bookings and owner-sections-property-pages. This component
+    declares no dependencies, so its 403 scenario cannot hold when it is delivered. The rule it gives
+    as the reason ('a shared endpoint admits an owner holding any section whose inventory lists it') is
+    also defined only in those later components.
+- id: 2f28c367/owner-sections-source/T3
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: 'Same as check 1 finding 4. The code observation is also right: the owner path already requires
+    Chat (resolvers.py:193), and the wider access is all on the non-owner side.'
+  evidence: backend/DolceEngine/media_guard/resolvers.py:168-194
+  description: 'The WhatsApp attachment requirement says access must be ''no wider than the chat API''s'',
+    and the plan says attachments are reachable more widely than the chat API today. In the code the owner
+    path already requires the Chat section. The actual extra access is for everyone who is not an owner:
+    OM users and cleaning-company users get every attachment without any check, while the chat API limits
+    them to their own properties. The scenarios cover only owners, operators and anonymous requests. So
+    a builder must guess whether OM and cleaning-company users are now limited, which would change their
+    behaviour, or left as they are, which would break the ''no wider'' rule. The ''Non-owner roles unaffected''
+    requirement covers only the chat and cleaning-feed checks, not `media_guard`.'
+- id: 2f28c367/owner-sections-source/T4
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 4
+  severity: major
+  verdict: real
+  reason: Same as check 1 finding 3. It also correctly notes that "no recognised role", including a login
+    with no `Utente`, is undefined (index_immobili.py:278-279 returns all properties).
+  evidence: backend/DolceSystem/endpointz/index_immobili.py:278-286
+  description: The property index must answer 403 to a role it 'does not recognise', and keep today's
+    list for operators, OM users and owners. Cleaning-company users are not mentioned. Today `_get_immobili_queryset`
+    gives them, and logins with no profile, every property, and the code comment says the index serves
+    cleaning companies. The spec does not say whether a cleaning-company user counts as a recognised role
+    (and keeps some list) or an unrecognised one (and gets 403). It also does not define what 'no recognised
+    role' means, for example a login with no `Utente` profile.
+- id: 2f28c367/owner-sections-source/T5
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 5
+  severity: major
+  verdict: false
+  reason: Same as check 1 finding 5. The referenced entry-point list exists at this commit, and the requirement
+    does not need it to be built.
+  evidence: owner-permissions-core/specs.md:196-204
+  description: The inventory must list every endpoint the booking sheet calls under each of six sections.
+    The list of places that open the sheet is only referenced, in owner-permissions-core's Conversion
+    table. owner-sections-source does not depend on that component, and a later component is described
+    as building on this inventory. So the input this requirement needs is defined downstream of it.
+- id: 2f28c367/owner-sections-source/T6
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 6
+  severity: major
+  verdict: real
+  reason: '"The review check for this component fails" is the only mention of the page-coverage check.
+    Nothing says whether it is an automated test or a manual review, or how page calls are found. The
+    later revision (cdc8ec05 owner-sections-source/specs.md:87) had to add "The coverage check SHALL be
+    a frontend test".'
+  evidence: 2f28c367 owner-sections-source/specs.md "Inventory covers every endpoint a section's pages
+    call"; cdc8ec05 owner-sections-source/specs.md:87
+  description: One scenario says the review check fails when a page calls an endpoint missing from the
+    inventory. No requirement defines this check, how it finds the calls a page makes, or which pages
+    belong to each section. Only the check that listed routes exist is described as an automated test.
+    A builder cannot tell whether this coverage check is automated or a manual review.
+- id: 2f28c367/owner-sections-source/T7
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 7
+  severity: minor
+  verdict: false
+  reason: For a login with both roles, `AllowedSectionsView` takes the owner branch, and `chat_scope_immobili_ids`
+    already unions owner scope (via the section function) with manager scope. Replacing the section function
+    in place keeps both, and the equivalence test pins the menu. A builder builds the same thing either
+    way.
+  evidence: backend/DolceSystem/autenticazzone.py:53, :75; backend/DolceSystem/auth_utils.py:242-267
+  description: The single function 'governs owners only', and other roles keep today's behaviour. Some
+    logins are both owner and OM (logins 44 and 61). Today `AllowedSectionsView` gives them owner sections
+    only, while the chat scope adds their managed properties. The spec does not say which rule applies
+    to a login with both roles, so builders could treat them differently in the menu and in the checks.
+- id: 2f28c367/owner-sections-source/T8
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 8
+  severity: minor
+  verdict: real
+  reason: '`media_guard` refuses with 404 on purpose, this spec says "access-denied response", and owner-permissions-core
+    expects 403 for the same request. A builder must choose a status that a later test checks.'
+  evidence: backend/DolceEngine/media_guard/views.py:10, :71; owner-permissions-core/specs.md:320-322
+  description: The WhatsApp scenarios say 'refused with an access-denied response'. owner-permissions-core
+    expects 403 for the same situation. `media_guard` today answers every refusal with 404 'Risorsa non
+    trovata', on purpose. So the expected status reads two ways.
+- id: 2f28c367/owner-sections-source/T9
+  commit: 2f28c367
+  component: owner-sections-source
+  source: triage-2026-11-02
+  n: 9
+  severity: minor
+  verdict: false
+  reason: Same as check 1 finding 6.
+  evidence: autenticazzone.py:53-72; auth_utils.py:203-219
+  description: 'The spec relies on ''live'' `ManagerOwnerLink` rows in several requirements but never
+    defines ''live''. The code defines it as: a link to an OM that manages at least one of the owner''s
+    properties today, or a direct link when the owner has at least one property with no OM. A builder
+    would have to work the rule out from the code.'
+- id: 12d3faa9/owner-sections-bookings/T1
+  commit: 12d3faa9
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 1
+  severity: critical
+  verdict: false
+  reason: 'Every refuse requirement carries the shared-endpoint exception ("except where… / unless the
+    endpoint is shared…"), and the write-effect requirements apply only to "a refused owner request".
+    The write scenarios hold for an owner holding none of the endpoint''s sections. The inventory facts
+    are right: Front office has only `GET /api/frontoffizz/` of its own, and Prenotazioni only `GET /api/prenotaziony/`.
+    That makes those scenarios thin examples, not a contradiction.'
+  evidence: bookings/specs.md:6, :43, :59-60, :101, :107-109, :123, :156; backend/DolceSystem/owner_sections_inventory.json
+    sections.frontoffice/.prenotazioni
+  description: 'The write requirements for Prenotazioni, Front office and Immobili say any write endpoint
+    in the section''s inventory returns HTTP 403 to an owner without that section, with no exception for
+    shared endpoints. In the committed inventory every Prenotazioni and Front office write is shared:
+    POST /api/verify-whatsapp-number/, POST /api/save-whatsapp-to-customer/ and POST /api/channex/direct-booking/create/,
+    which are booking-sheet or shell endpoints listed under six sections. Front office has no write endpoint
+    of its own; the only Prenotazioni-only endpoint is the read GET /api/prenotaziony/. The Immobili writes
+    owners can use, such as POST /api/toggle-task-completed/ (shared with Dashboard) and the booking-sheet
+    writes, are shared too. Under ''An endpoint shared by several sections admits any of them'', an owner
+    without Front office but with Calendario must be served by these endpoints. Under the write requirements
+    and their scenarios (''Owner without Front office attempts a write'', ''Owner without Prenotazioni
+    tries to edit a booking'', ''Owner without Immobili attempts to edit a property''), the same owner
+    must get 403 and nothing may change.'
+- id: 12d3faa9/owner-sections-bookings/T2
+  commit: 12d3faa9
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 2
+  severity: major
+  verdict: real
+  reason: '"Each endpoint answers if and only if the menu shows at least one of its sections" cannot hold.
+    Many inventoried endpoints refuse every owner today (`operator_only: true`, e.g. bulk calendar jobs,
+    operator-tools, direct-booking modify/cancel), and legal-status is `HasAnyRole(ROLE_MANAGER)`. The
+    "as before" requirements keep those refusals.'
+  evidence: owner_sections_inventory.json (operator_only entries); backend/DolceWebsite/checkbox_legal.py:1299-1302;
+    bookings/specs.md:151-153 vs :26-27
+  description: '''Server and menu agree'' requires each endpoint in the five inventories to answer if
+    and only if the menu shows the owner at least one of its sections. Many inventoried endpoints refuse
+    every owner today, whatever their sections. The inventory marks them operator_only (for example POST
+    /api/channex/calendar/update-availability/, the bulk calendar jobs, PATCH /api/immobile/add-or-update-profile/
+    and the operator-tools routes). GET /api/booking/<uuid>/legal-status/ is limited to OMs (HasAnyRole(ROLE_MANAGER)
+    in DolceWebsite/checkbox_legal.py get_booking_legal_status). The ''answer as before'' requirements
+    keep these refusals for owners who hold the section, so the ''if and only if'' cannot hold.'
+- id: 12d3faa9/owner-sections-bookings/T4
+  commit: 12d3faa9
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 4
+  severity: major
+  verdict: real
+  reason: The spec requires each endpoint to "declare the matching class, with exactly the sections" and
+    a test comparing declared sections with the inventory. The plan says to add five per-section classes.
+    But the existing `OwnerSectionsFromInventory` (D5) takes no sections and looks each route and method
+    up in the inventory at request time. The builder must guess which design is meant and what the test
+    checks.
+  evidence: backend/DolceEngine/endpoint_guard/permissions.py:67-96; bookings/specs.md:264-273; bookings/plan.md
+    "Code this component changes" (first bullet)
+  description: 'The requirement says every inventoried endpoint shall declare ''the matching class, with
+    exactly the sections whose inventories list it'', and that a test fails if the declared sections differ
+    from the inventory. The plan speaks of five separate section classes. The code already has one guard,
+    OwnerSectionsFromInventory (decision D5). It declares no sections: at request time it looks the route
+    up in the inventory and refuses any unlisted route or method. With that guard, ''declares sections
+    different from its inventory'' has no meaning, and nothing says whether per-section classes or the
+    single inventory-driven guard is meant. The builder has to guess what the coverage test checks.'
+- id: 12d3faa9/owner-sections-bookings/T5
+  commit: 12d3faa9
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 5
+  severity: major
+  verdict: real
+  reason: 'The spec covers every endpoint in the five inventories, and owner-sections-source says this
+    component guards `/api/trovalecose/`. The plan''s code list leaves out the files that serve many of
+    them: SearchView, api_rateplans, api_direct_booking, DolceChannex/views.py, operator_tools, checkbox_legal
+    and DolceAlloggiati/DolcePMS/DolceFinance. So scope is unclear.'
+  evidence: bookings/plan.md "Code this component changes"; backend/DolceEngine/urls.py:421 (SearchView),
+    :207, :328-336; backend/DolceChannex/urls.py:20, :23, :53, :63-75; backend/DolceWebsite/urls.py:44;
+    owner-sections-source/specs.md "Data-bearing shell endpoints…"
+  description: 'The spec requires the guard on every endpoint in the Calendario, Prenotazioni, Dashboard,
+    Front office and Immobili inventories, and the dependency''s spec says GET /api/trovalecose/ is guarded
+    by this component. The plan''s ''Code this component changes'' list leaves out the files that serve
+    many of those endpoints. Missing are: SearchView, in DolceSystem/views.py but not among the listed
+    views; DolceChannex/api_rateplans.py (properties, properties/resolve, rate-plans, room-types); DolceChannex/api_direct_booking.py;
+    DolceChannex/views.py (verify-whatsapp-number, save-whatsapp-to-customer); DolceSystem/endpointz/operator_tools;
+    DolceWebsite/checkbox_legal.py (legal-status); and DolcePMS/views.py together with DolceFinance tourist_tax_settings
+    (Immobili operator-only endpoints). It is unclear whether those endpoints are in scope.'
+- id: 12d3faa9/owner-sections-bookings/T6
+  commit: 12d3faa9
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 6
+  severity: minor
+  verdict: false
+  reason: The claim is right that no endpoint is listed only under Prenotazioni and serves a booking detail.
+    But the scenario itself says the booking-sheet endpoints are not such endpoints, so it has no instance
+    to test and changes nothing a builder builds. It is dead text, not a defect.
+  evidence: bookings/specs.md:50-53; inventory sections.prenotazioni (only `GET /api/prenotaziony/` is
+    unshared)
+  description: 'The scenario ''Owner without Prenotazioni opens a booking detail'' tests a booking detail
+    served by an endpoint listed only in the Prenotazioni inventory. The inventory has no such endpoint:
+    the only Prenotazioni-only endpoint is the list GET /api/prenotaziony/, and every booking-detail endpoint
+    is a shared booking-sheet endpoint. The scenario cannot be exercised.'
+- id: 12d3faa9/owner-sections-bookings/T7
+  commit: 12d3faa9
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 7
+  severity: minor
+  verdict: false
+  reason: The sentence says the refusal is "raised by an `endpoint_guard` permission class before any
+    … data is read". A DRF permission class runs before the view by construction, so a builder implements
+    it the same way, and the guard's own section lookup is clearly not "property data" in that sense.
+  evidence: bookings/specs.md:79, :101, :123; backend/DolceEngine/endpoint_guard/permissions.py:79-96
+  description: The Immobili and Front office requirements say the refusal is raised 'before any property
+    data is read or written', and Dashboard says 'before any Dashboard data is read'. For shared endpoints
+    the guard admits owners of other sections, and the existing guard itself reads the owner's properties
+    and live links to work out their sections. The wording can be read as 'before the endpoint's own work'
+    or as 'before any database read', which leaves an ambiguity a test could pick up.
+- id: cdc8ec05/owner-sections-bookings/T1
+  commit: cdc8ec05
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 1
+  severity: major
+  verdict: real
+  reason: Same problem as check 3 finding 4, with the same text. `OwnerSectionsFromInventory.has_permission`
+    takes no per-endpoint sections, so "declares sections different from its inventory" cannot be tested.
+  evidence: backend/DolceEngine/endpoint_guard/permissions.py:67-96; bookings/specs.md "Checks are endpoint_guard
+    permission classes"
+  description: 'The requirement says every inventoried endpoint declares ''the matching class, with exactly
+    the sections whose inventories list it''. It also requires a test that catches any endpoint declaring
+    ''sections different from its inventory entries''. The plan talks of separate Calendario, Prenotazioni,
+    Dashboard, Front office and Immobili classes. The code has one class, OwnerSectionsFromInventory.
+    It takes no sections when an endpoint declares it: on each request it looks up that endpoint''s sections
+    in owner_sections_inventory.json. So an endpoint cannot declare a set of sections, and a test cannot
+    find one that differs from the inventory. The only thing that can be checked is whether the class
+    is there or not.'
+- id: cdc8ec05/owner-sections-bookings/T3
+  commit: cdc8ec05
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 3
+  severity: major
+  verdict: real
+  reason: Same problem as check 3 finding 5. The plan's code list is unchanged apart from the billing-profiles
+    line, and it still omits the shell, booking-sheet and Channex files.
+  evidence: bookings/plan.md "Code this component changes"; owner-sections-source/specs.md:148-149; backend/DolceEngine/urls.py:421;
+    backend/DolceChannex/urls.py:20-75
+  description: 'The spec requires every endpoint in the five inventories to carry the check. That includes
+    the booking-sheet and shell endpoints: GET /api/trovalecose/ (SearchView), /api/verify-whatsapp-number/
+    and /api/save-whatsapp-to-customer/ (DolceChannex/views.py), /api/booking/<id>/legal-status/ (DolceWebsite/checkbox_legal.py),
+    /api/cancellaprenodyretta/ and /api/pagaprenodyretta/, the operator-tools endpoints, and the Channex
+    direct-booking, rate-plan and room-type endpoints. It also includes Immobili and Calendario endpoints
+    in DolceFinance, DolcePMS and DolceAlloggiati. The component''s code scope covers none of these files
+    and none of these views (in views.py it names only the dashboard functions and ProfiloImmobileSingoloJson).
+    Owner-sections-source says this component applies the check to the search and booking-sheet endpoints,
+    and nothing else covers them. Read with its plan, the spec leaves these endpoints unguarded.'
+- id: cdc8ec05/owner-sections-bookings/T4
+  commit: cdc8ec05
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 4
+  severity: minor
+  verdict: real
+  reason: The existing class refuses an owner on any route or method missing from the inventory, even
+    one holding the section. DRF runs permissions before it routes the method, so an owner holding the
+    section who sends an accepted but unlisted method gets 403 where today they got 200 or 405. OPTIONS,
+    which `@api_view` always accepts, is one such method. That breaks "same status … for the same request",
+    and nothing says which rule wins.
+  evidence: backend/DolceEngine/endpoint_guard/permissions.py:87-89 (`endpoint is None` → False); bookings/specs.md
+    "Calendario endpoints answer an owner with the section as before", "Every Calendario endpoint is covered"
+  description: The 'Every Calendario/Prenotazioni endpoint is covered' scenarios call each endpoint 'with
+    each HTTP method the endpoint accepts', and the 'as before' requirements cover any request. The inventory
+    lists only the methods the pages call. The existing class refuses an owner on any method the inventory
+    does not list, even an owner who holds the section. No requirement says what an owner who holds the
+    section gets for a method the endpoint accepts but the inventory does not list. A builder would have
+    to guess between 'refused' and 'as before'.
+- id: cdc8ec05/owner-sections-bookings/T5
+  commit: cdc8ec05
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 5
+  severity: minor
+  verdict: false
+  reason: 'Both specs describe the same end state: billing profiles section-independent and carrying no
+    check. The bookings spec says outright that this component makes the move, and the inventory still
+    has the entry under Immobili (grep: 1 occurrence). So whichever component runs first, the behaviour
+    is the same. The source scenario only goes red until bookings lands.'
+  evidence: cdc8ec05 bookings/specs.md:125; owner-sections-source/specs.md:112, :120, :135-138; backend/DolceSystem/owner_sections_inventory.json
+  description: Two components claim the same inventory change. This component says it moves GET /api/get-billing-profiles/
+    from Immobili to the section-independent list. The owner-sections-source spec already requires it
+    to be section-independent, with a scenario that checks this. A dependency's spec is supposed to describe
+    what already holds. In the current inventory, though, the endpoint is still under Immobili and missing
+    from section_independent. So it is unclear which component owns the change, and the dependency's scenario
+    fails until this component lands.
+- id: cdc8ec05/owner-sections-bookings/T6
+  commit: cdc8ec05
+  component: owner-sections-bookings
+  source: triage-2026-11-02
+  n: 6
+  severity: minor
+  verdict: false
+  reason: 'The code claim is right: `get_billing_profiles` filters by the calling `utente`. But the scenario''s
+    main clause is "same status and body as before", and the requirement says the endpoint keeps today''s
+    access rules. So the builder does not change the view, and the "owner''s own" wording changes nothing
+    that gets built.'
+  evidence: backend/DolceFinance/views/billing_profiles.py:110-129; bookings/specs.md "Owner with only
+    Chat reads their billing profiles"
+  description: The scenario 'Owner with only Chat reads their billing profiles' expects the response to
+    contain 'the owner's own billing profiles'. Today get_billing_profiles filters profiles by the calling
+    login (utente), not by the owner account. So an Admin user of an owner account gets no profiles until
+    account-billing moves profiles to the account. Whether 'the owner's own' means the login's profiles
+    or the account's is left open.
+- id: c5712a34/dolcecleaning-users/P1
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: matched-2026-11-01
+  n: 1
+  problem: P1
+  severity: major
+  verdict: real
+  reason: 'It is P1, which buildme raised after the handoff (buildme-account-management-account-attribution-2/specs/changes/account-management/components/dolcecleaning-users/spec-issues.resolved-9ea0b62ff851.md);
+    the 2026-11-01 judge matched it: Both say the ''Anonymous caller'' scenario in dolcecleaning-user-endpoint-access
+    requires HTTP 401, while the DRF handler in endpoint_guard/drf.py maps NotAuthenticated to 419 and
+    test_anonimo_419 asserts 419 for these routes.'
+  evidence: fixtures.yaml P1
+  description: The 'Anonymous caller' scenario says a caller with no valid session gets HTTP 401. The
+    code already in place uses a different code for this case. The DRF exception handler turns NotAuthenticated
+    into 419, which is the status the frontend relies on to send the user back to login. The existing
+    test for these exact DolceCleaning user routes checks for 419, and the endpoint audit counts a 401
+    as a wrong status. The spec and the code cannot both hold. account-user-api only says 'refused as
+    unauthenticated' and gives no code.
+- id: 12d3faa9/account-attribution/P4
+  commit: 12d3faa9
+  component: account-attribution
+  source: matched-2026-11-01
+  n: 3
+  problem: P4
+  severity: major
+  verdict: real
+  reason: 'It is P4, which buildme raised after the handoff (buildme-account-management-account-attribution-3/specs/changes/account-management/components/account-attribution/spec-issues.resolved-19a3173ddb12.md);
+    the 2026-11-01 judge matched it: Both describe the same problem: the actor-field inventory check sweeps
+    in the third-party django-auditlog LogEntry.actor field, which cannot be given account reference and
+    snapshot columns, so the requirement "Each inventoried actor field has an account reference" cannot
+    hold. Both propose excluding it or limiting the scope of the check.'
+  evidence: fixtures.yaml P4
+  description: The automated check must find every field that references the user model and records who
+    performed an action, and each one must get an account reference and name snapshot on the same model.
+    The code has such a field in the third-party django-auditlog `LogEntry.actor`. It is filled by `AuditlogMiddleware`
+    and shown in the property change history (`DolcePMS/audit_history.py` `_autore`, through the shared
+    UserChip). It isn't in the plan's list, and fields can't simply be added to a third-party model. The
+    spec also doesn't say whether 'the user model' means `auth.User`, `DolceSystem.Utente` or both; today's
+    actor fields use both.
+- id: 12d3faa9/account-billing/P5
+  commit: 12d3faa9
+  component: account-billing
+  source: matched-2026-11-01
+  n: 4
+  problem: P5
+  severity: critical
+  verdict: real
+  reason: 'It is P5, which buildme raised after the handoff (buildme-account-management-account-billing-3/specs/changes/account-management/components/account-billing/spec-issues.resolved-19a3173ddb12.md);
+    the 2026-11-01 judge matched it: Finding 4 describes the same conflict: the ''no code path SHALL use
+    them for billing'' rule for excluded legacy-only profiles contradicts ''Property assignments survive
+    the migration'' and ''Invoices keep their billing profile'' when a property uses such a profile, and
+    it proposes essentially the same fixes.'
+  evidence: fixtures.yaml P5
+  description: '''Billing profiles belong to the account'' says no code path shall use the profiles of
+    inactive legacy-only logins (profile L) for billing. ''Property assignments survive the migration''
+    and ''Invoices keep their billing profile'' say every property keeps its current profile and invoices
+    with it. ''Property-to-profile choice is not restricted by the move'' says no new restriction on which
+    profile a property may use. Operators can see and assign any profile today (get_billing_profiles returns
+    every profile to operators, and onboard lists them all). If a property uses L today, or an operator
+    assigns L later, both rules cannot hold.'
+- id: 12d3faa9/dolceops-account-list/P6
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: matched-2026-11-01
+  n: 1
+  problem: P6
+  severity: major
+  verdict: real
+  reason: 'It is P6, which buildme raised after the handoff (buildme-account-management-dolceops-account-list-3/specs/changes/account-management/components/dolceops-account-list/spec-issues.resolved-19a3173ddb12.md);
+    the 2026-11-01 judge matched it: Both say the ''Anonymous caller is refused'' scenario requires HTTP
+    401, which conflicts with the project''s DRF exception handler that sends anonymous callers 419.'
+  evidence: fixtures.yaml P6
+  description: The list API requirement says an anonymous caller (no valid session) is refused with HTTP
+    401. The project's API setup does something else. Its exception handler sends anonymous callers a
+    419 with the check_auth body, kept that way on purpose for the frontend, and keeps 403 for callers
+    who are logged in but not allowed. A builder would have to break either this scenario or the project-wide
+    rule for anonymous callers.
+- id: 12d3faa9/owner-sections-bookings/P7
+  commit: 12d3faa9
+  component: owner-sections-bookings
+  source: matched-2026-11-01
+  n: 3
+  problem: P7
+  severity: major
+  verdict: real
+  reason: 'It is P7, which buildme raised after the handoff (buildme-account-management-owner-sections-bookings-3/specs/changes/account-management/components/owner-sections-bookings/spec-issues.resolved-19a3173ddb12.md);
+    the 2026-11-01 judge matched it: Both say that putting the Immobili guard on GET /api/get-billing-profiles/
+    would cut owners without Immobili off from their billing profiles on the account settings page, which
+    is not part of any section.'
+  evidence: fixtures.yaml P7
+  description: The Immobili requirement puts the section check on GET /api/get-billing-profiles/, as the
+    inventory and plan list it. The same endpoint is also called by the account settings billing page
+    (frontend/src/components/dashboard/settings/billing.tsx, rendered at /organization/billing and linked
+    from the settings sidebar), which is not part of any section. After the change, an owner without Immobili
+    could no longer list their billing profiles in settings, although they can today. That breaks the
+    proposal's goal that owners keep seeing the same kinds of data. It also breaks the dependency's rule
+    that the inventory covers only the calls made by a section's pages.
+- id: cdc8ec05/account-attribution/P8
+  commit: cdc8ec05
+  component: account-attribution
+  source: matched-2026-11-01
+  n: 1
+  problem: P8
+  severity: critical
+  verdict: real
+  reason: 'It is P8, which buildme raised after the handoff (buildme-account-management-account-attribution-3/specs/changes/account-management/components/account-attribution/spec-issues.md);
+    the 2026-11-01 judge matched it: Both describe the ''Rows survive deletion of the user'' requirement
+    conflicting with account-model''s company deletion, which cascades the Account, so the account reference
+    cannot be kept, and both propose clearing the account reference and keeping a snapshot.'
+  evidence: fixtures.yaml P8
+  description: 'The spec says the account reference on a row never changes after it is written, and that
+    the rows and their account reference survive when the user is deleted. In the code, deleting a cleaning
+    company or an owner also deletes its Account (`_elimina_account_prima_dell_entita` in `backend/DolceSystem/accounts.py`).
+    The account-model spec says deleting a cleaning company deletes all its users and must not be refused.
+    So when a company is deleted, the attributed rows can only do one of three things: be deleted with
+    the account (breaks ''rows survive''), lose their account reference (breaks ''account reference kept
+    and fixed''), or block the deletion (breaks the account-model rule). All the rules cannot hold together.'
+- id: cdc8ec05/account-billing/P9
+  commit: cdc8ec05
+  component: account-billing
+  source: matched-2026-11-01
+  n: 1
+  problem: P9
+  severity: critical
+  verdict: real
+  reason: 'It is P9, which buildme raised after the handoff (buildme-account-management-account-billing-3/specs/changes/account-management/components/account-billing/spec-issues.md);
+    the 2026-11-01 judge matched it: Finding 1 describes the same conflict: the ''No code path SHALL use
+    them for billing'' rule clashes with the rule against new restrictions on property-to-profile choice,
+    because operators can still assign legacy-only profiles after release, and it proposes the same either/or
+    fix.'
+  evidence: fixtures.yaml P9
+  description: 'The requirement says the billing profiles of inactive logins linked only to a legacy cleaning
+    company are left with no account and ''No code path SHALL use them for billing''. Another requirement
+    says the change ''SHALL NOT add any new restriction on which billing profile a property may use''.
+    Today operators can give a property any profile: the DolceOps property picker lists every ProfiloFatturazione
+    through lookup_onboard, and get_billing_profiles returns objects.all() for operators. The migration''s
+    precheck only blocks properties already assigned such a profile before release. After release an operator
+    can still assign one, and it would then be used for invoicing. A builder must either break the ''no
+    new restriction'' rule by blocking these profiles, or break the ''never used for billing'' rule.'
+- id: cdc8ec05/owner-sections-bookings/P10
+  commit: cdc8ec05
+  component: owner-sections-bookings
+  source: matched-2026-11-01
+  n: 2
+  problem: P10
+  severity: major
+  verdict: real
+  reason: 'It is P10, which buildme raised after the handoff (buildme-account-management-owner-sections-bookings-3/specs/changes/account-management/components/owner-sections-bookings/spec-issues.md);
+    the 2026-11-01 judge matched it: Both describe the ''Server and menu agree'' scenario''s ''if and
+    only if'' requirement conflicting with inventoried endpoints that are operator-only or manager-only
+    (e.g. legal-status) and refuse owners regardless of their sections.'
+  evidence: fixtures.yaml P10
+  description: 'The ''Server and menu agree'' scenario says each endpoint in the five inventories answers
+    an owner ''if and only if'' the menu shows them one of its sections. The inventory marks many of those
+    endpoints operator_only, and today they refuse every owner whatever their sections. Examples: PATCH
+    /api/immobile/add-or-update-profile/…, /api/get-tassa-soggiorno-by-city/…, the room-type instruction
+    endpoints, /api/dolcealloggiati/lookup/proprietari/ (operator-only by default), and /api/booking/<id>/legal-status/
+    (managers only). An owner who holds the section still gets a refusal from these. That scenario and
+    ''serve an owner holding the section as before'' cannot both hold.'
+- id: 12d3faa9/account-billing/A-2026-11-02-baseline-5
+  commit: 12d3faa9
+  component: account-billing
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 5
+  severity: major
+  verdict: false
+  reason: 'The account migration is already its own atomic migration (0027_migra_account), so billing
+    cannot share its transaction, but the harm does not follow: specs.md:115 says the billing migration
+    stops without committing any billing-profile change, and 0027 keeps the legacy links, so an aborted
+    billing step leaves a consistent database; the release-checklist point concerns only the permission
+    migration.'
+  evidence: specs/changes/account-management/components/account-billing/specs.md:115-119; account-model/specs.md:395-400;
+    backend/DolceSystem/migrations/0027_migra_account.py:1-3,12-19; owner-permissions-core/specs.md:506-511;
+    account-billing/.change.yaml
+  description: The billing migration runs 'after the account migration' and stops without committing any
+    billing change. The account migration is one all-or-nothing transaction. Nothing says whether the
+    billing step is part of that same transaction. If it isn't, the accounts could be saved while the
+    billing step stops. Profiles would then still be tied to users while the code reads them by account,
+    so every user would see no profiles until someone steps in. The release-checklist order in owner-permissions-core
+    doesn't mention billing either.
+- id: 12d3faa9/account-billing/A-2026-11-02-baseline-8
+  commit: 12d3faa9
+  component: account-billing
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 8
+  severity: major
+  verdict: false
+  reason: 'A second run has nothing to guess: the scenario only requires that no billing profile''s links
+    or data change, which skipping placed profiles or stopping both meet, and nothing requires keeping
+    the original user for audit (specs.md:11 rules out only a user link that determines who can use it).'
+  evidence: specs/changes/account-management/components/account-billing/specs.md:8-11,80-81,121-126; account-billing/plan.md:12,19
+  description: '''Re-run is a no-op'' assumes the migration can be run again on migrated data. The plan
+    replaces the profile''s user link with the account link, and the only rule for placing a profile is
+    ''the account of the user it is linked to today''. Once the user link is gone, a second run has nothing
+    to place profiles by. It''s unclear whether a re-run should check, skip or fail. It''s also unclear
+    whether a profile''s original user is kept anywhere, for example for audit.'
+- id: cdc8ec05/account-billing/A-2026-11-02-baseline-6
+  commit: cdc8ec05
+  component: account-billing
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 6
+  severity: major
+  verdict: real
+  reason: 'Same problem as 12d3faa9/account-billing/T6, text unchanged at cdc8ec05: deleting an owner,
+    OM or cleaning company deletes its account first (pre_delete receiver) while properties, receipts
+    and stay-tax payments PROTECT their billing profile, so deleting, unlinking or refusing each clashes
+    with the mandatory account link or account-model''s rule that deleting a cleaning company is not refused.'
+  evidence: backend/DolceSystem/accounts.py:234-243,260-272; backend/DolcePMS/models.py:194-196; backend/DolceFinance/models/billing.py:55,77-79;
+    backend/DolceFinance/models/stay_tax.py:580,598-600; account-billing/specs.md:6,37-51; account-model/specs.md:83-84
+  description: 'The spec protects profiles when a user is deactivated or deleted. It says nothing about
+    what happens when the account itself goes away. account-model says deleting a cleaning company deletes
+    its users and ''SHALL NOT be refused''. If the company''s account is removed too, its profiles must
+    be deleted or unlinked, and either one conflicts with this spec: the account link is mandatory, and
+    properties and receipts protect the profiles from deletion. Nothing says whether the deletion keeps
+    the profiles, gets refused, or detaches them.'
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-3
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 3
+  severity: major
+  verdict: real
+  reason: The 'Every actor field is in the inventory' scenario asks an automated check to find every field
+    that references the user model and records who performed an action, but no spec or plan gives a rule
+    a check can apply, and many links to auth User and Utente record no action (Utente.user, Manager.user,
+    Operatore.user, Account.titolare, CleaningMessageDestination.utente, ProfiloFatturazione.utente);
+    the login-history half is overstated (plan.md lists UtenteLoginHistory.user). Related to P4 but not
+    P4.
+  evidence: account-attribution specs.md:17-19,25-30; plan.md:24-35; backend/DolceSystem/models.py:46-50,232-237,302,411,501;
+    backend/DolceCleaning/models.py:42-49; backend/DolceFinance/models/billing.py:232-236
+  description: 'The inventory check must ''enumerate every model field that references the user model
+    and records who performed an action'' and fail if one is missing. The code has two user models (auth
+    User and DolceSystem.Utente), and many fields point to them without recording an action: Utente.user,
+    Manager/Operatore user links, Account.titolare, CleaningMessageDestination.utente. No requirement
+    says how a field is classed as an actor field, so an automated check cannot tell which missing fields
+    count. The scope is also unclear for UtenteLoginHistory.user, a login record, against the out-of-scope
+    ''logging reads''.'
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-5
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 5
+  severity: minor
+  verdict: false
+  reason: 'Both rules are explicit: after deletion the view shows the username snapshot (scenario with
+    mundus.ops2) and account-model frees the username; the deleted user''s row reference is null so it
+    can never point to a new user with the same username; a ''(eliminato)'' marker is a product choice,
+    not a conflict.'
+  evidence: account-attribution specs.md:132,138-140,158-160; account-model specs.md:190-195
+  description: After deletion, the view shows the stored username snapshot. The account-model spec frees
+    a deleted user's username for reuse. A new user can take that username, so old log entries show a
+    username that now belongs to a different person, and the spec does not say whether that is acceptable
+    or how such entries should be shown.
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-6
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 6
+  severity: minor
+  verdict: false
+  reason: 'The spec settles the order: for an existing user with no name it SHALL show the username (scenario
+    mundus.ops2); Utente.user is a required one-to-one to an auth User, which always has a username, so
+    the email and ''Utente #id'' fallbacks can never be reached.'
+  evidence: account-attribution specs.md:131-136; backend/DolceLog/views.py:194-206,560-571; backend/DolceSystem/models.py:46-51
+  description: 'The spec says that when a user exists with no first name or surname, the view shows the
+    username. The current calendar log API falls back to username, then email, then ''Utente #id''. The
+    plan only partly states which order replaces it, and the spec does not say whether the email step
+    stays.'
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-7
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 7
+  severity: minor
+  verdict: false
+  reason: The code claim is right (the text filter and options list use only linked users), but the specs
+    require only what the views display and add no search requirement, and the plan's views.py change
+    is display only, so leaving the filters breaks no rule. Borderline.
+  evidence: account-attribution specs.md:116-117,157-160; plan.md:27; backend/DolceLog/views.py:120-134,245-260
+  description: The spec says that while the user exists, views show the user's current name, and the snapshot
+    only after deletion. The calendar log view also has a user filter, which searches the user's name,
+    username and email, and a list of users to filter by. The spec does not say whether entries by deleted
+    users can still be found by their stored name, or whether they appear in that list.
+- id: 12d3faa9/account-attribution/A-2026-11-02-baseline-8
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 8
+  severity: minor
+  verdict: false
+  reason: The order is settled (the backfill runs after users are assigned to accounts and leaves rows
+    it cannot fill empty and counted); a backfill inside account-model's transaction or in a later dependent
+    migration both meet every stated requirement. Borderline.
+  evidence: account-attribution specs.md:79-80,94-95; account-model specs.md:395-400; account-attribution
+    plan.md:13,40
+  description: The spec says the backfill runs 'after users have been assigned to accounts'. The account-model
+    migration is one all-or-nothing transaction. The spec does not say whether the backfill belongs to
+    that transaction or runs as a separate later step, and so whether a failed backfill must also undo
+    the account migration.
+- id: c5712a34/dolcecleaning-users/A-2026-11-02-baseline-3
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 3
+  severity: major
+  verdict: false
+  reason: 'The plan settles it: views.py returns role and last access on top of what the endpoint returns
+    today (id, user_id, tel), and the team user type extends today''s user type; ''SHALL carry'' lists
+    required fields and does not forbid more. Borderline.'
+  evidence: dolcecleaning-users specs.md:6,46,184-188,409-414; plan.md:30,37; account-user-api specs.md:47-53,59-60;
+    backend/DolceCleaning/views.py:291-312; frontend/src/lib/dolcecleaning/types.ts:46-55
+  description: The edit requirements need the tab and the team table to show a user's phone, and to fill
+    the edit form with it. In the Utenti tab, 'the tab shows the new phone'. On the team, 'the user's
+    details show the new phone'. Today the edit dialog fills tel and the other fields from the list response.
+    But the list endpoint the spec makes these screens use (account-user-api, account-user-list) returns
+    only name and surname, username, email, role, status and last access. It returns no phone and no user
+    identifier, yet every row action (edit, deactivate, change Owner, delete, reset) has to name a user.
+    Neither the spec nor account-user-api gives the phone or an id to the screens.
+- id: c5712a34/dolcecleaning-users/A-2026-11-02-baseline-6
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 6
+  severity: minor
+  verdict: false
+  reason: provider_user_create_api accepts any non-empty password, but the spec routes user management
+    through account-user-api, which requires today's password validation, and its plan reuses validate_password_strength,
+    which exists at this commit.
+  evidence: dolcecleaning-users specs.md:6,84-103; account-user-api specs.md:126-141; account-user-api
+    plan.md:34; backend/DolceSystem/endpointz/update_user.py:185; backend/DolceCleaning/views.py:405-422
+  description: 'The ''Password chosen'' scenarios rely on ''today''s validation''. But today the DolceCleaning
+    create-user endpoint applies no password validation at all: it accepts any non-empty string. So it
+    is unclear which rule ''today''s validation'' means for cleaning users.'
+- id: c5712a34/dolcecleaning-users/A-2026-11-02-baseline-7
+  commit: c5712a34
+  component: dolcecleaning-users
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 7
+  severity: minor
+  verdict: false
+  reason: '''as today'' applies only to the checkbox label; the same requirement says on confirmation
+    the form SHALL ask account-user-api for the welcome email when checked, and the ''Checked sends the
+    welcome email'' scenario says one email is sent.'
+  evidence: dolcecleaning-users specs.md:109-127; frontend/src/app/dolceops/dolcecleaning/impresa/[impresaId]/page.tsx:132,353-372,1174-1181
+  description: The welcome-email requirement says the checkbox works 'as today'. On the DolceCleaning
+    form today, the checkbox is shown but its value is never sent, and no welcome email goes out. The
+    'Checked sends the welcome email' scenario is therefore new behaviour for the Utenti tab, not a kept
+    one, and the wording reads two ways.
+- id: 1c19e875/owner-sections-source/A-2026-11-02-baseline-4
+  commit: 1c19e875
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 4
+  severity: major
+  verdict: false
+  reason: The code claims hold (_whatsapp_media is wider than can_access_chat's single-booking choice),
+    but the requirement already says media_guard's access SHALL be no wider than the chat API's, which
+    forbids keeping the wider rule.
+  evidence: owner-sections-source specs.md:133-147; backend/DolceEngine/media_guard/resolvers.py:165-215;
+    backend/DolceSystem/auth_utils.py:242-310; backend/DolceSystem/chatz/chatz_v2.py:83
+  description: The requirement and the 'other client's property' scenario depend on the property of 'a
+    conversation', which the data does not define. Today WhatsApp messages are linked to a contact's phone
+    number, not to a property. The resolver serves an owner any attachment whose contact matches a customer
+    of any booking on the owner's properties. The chat API instead resolves the phone number to one booking
+    (`booking_for_chat_phone`). For a guest with bookings at two clients' properties, the two rules give
+    different answers, and the spec does not say which booking decides.
+- id: 1c19e875/owner-sections-source/A-2026-11-02-baseline-5
+  commit: 1c19e875
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 5
+  severity: minor
+  verdict: real
+  reason: The scenario says 'the review check for this component fails and reports that endpoint' but
+    nothing says what that check is, while neighbouring requirements say 'an automated test', so a builder
+    must guess between a scanner and a manual review; the page-to-section half is overstated (route-permissions.ts
+    maps routes to sections).
+  evidence: owner-sections-source specs.md:73-74,84-93,114-120; plan.md:35; frontend/src/lib/route-permissions.ts:1-39
+  description: The coverage requirement says a 'review check' fails when a section's page calls an endpoint
+    that is not in the inventory. It does not say whether this check is automated or manual. It also does
+    not say what decides which DolceBot pages belong to which section (for example, the route-to-section
+    map the frontend already uses).
+- id: 12d3faa9/dolceops-account-list/A-2026-11-02-baseline-4
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: adjudicated-2026-11-02-baseline
+  run: 2026-11-02-baseline
+  n: 4
+  severity: minor
+  verdict: real
+  reason: The sheet API reads and updates a sheet for any account and the fiscal/payment requirement covers
+    'the account's' data, yet only OM and owner rows open a sheet and nothing says what the API returns
+    or allows for a cleaning-company id; the name part is overstated. Different from T3 (OM sheets).
+  evidence: dolceops-account-list specs.md:141-153,159-175,212-215,237-249; plan.md:18-23; account-model
+    specs.md:31-32
+  description: The account sheet API reads and updates 'an account sheet' for any account id. Only OM
+    and owner rows open a sheet; cleaning-company rows redirect to DolceCleaning. Nothing says what the
+    sheet API does for a cleaning-company account. If it allowed editing that account's fiscal data or
+    name, it would break account-model, where a cleaning company's name is edited only in DolceCleaning.
+- id: 12d3faa9/account-attribution/A-2026-11-02-round1-1
+  commit: 12d3faa9
+  component: account-attribution
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 1
+  severity: critical
+  verdict: real
+  reason: PropertyClosure.created_by/cancelled_by are CharFields filled with the acting username, which
+    the requirement's words (every existing field that records which user performed an action) take in,
+    but the automated check counts only fields referencing the user model, the plan's list leaves them
+    out, and set-null and current-name display cannot apply to text; nothing settles whether they are
+    in scope. Overstated for the Alloggiati and Ross utente fields, which hold process labels.
+  evidence: account-attribution specs.md:5-11,17-19,25-30,158; plan.md:24-35; backend/DolceChannex/models.py:1342,1357,1409;
+    backend/DolceChannex/api_closures.py:56-59,556,710; backend/DolceAlloggiati/models.py:502-507; backend/DolceRoss/models.py:211-216
+  description: 'The spec defines the set as ''every existing field that records which user performed an
+    action''. Several fields at the base commit record the actor as a plain text username, not as a link
+    to a user. Examples: `PropertyClosure.created_by` and `cancelled_by` (backend/DolceChannex/models.py;
+    api_closures.py fills them from `_get_username(request)`), `ChannexActivityLog.user`, the DolceAlloggiati
+    audit log''s `utente`, and the DolceRoss send log''s `utente`, which holds values like ''console:admin@email''.
+    These fields are in the set by its own words, so they would need an account reference and a name,
+    surname and username snapshot. But the automated check counts only ''fields that reference the user
+    model'', and plan.md''s list of changed code leaves them all out. For text fields, ''set the user
+    reference to empty on deletion'' and ''show the current name while the user exists'' cannot work,
+    because nothing links the row to a user. The check and the requirement define two different sets,
+    and a builder cannot satisfy both.'
+- id: 1c19e875/owner-sections-source/A-2026-11-02-round1-6
+  commit: 1c19e875
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 6
+  severity: minor
+  verdict: false
+  reason: The requirement says the constants SHALL no longer exist in the codebase, and plan.md says the
+    same, so the target is their definitions and uses in code; mentions in specs and the proposal leave
+    the builder guessing nothing that changes behaviour.
+  evidence: owner-sections-source specs.md:21-26; plan.md:10,15,33; backend/DolceSystem/auth_utils.py:56,66,226,236,239;
+    backend/DolceSystem/tests/test_owner_chat_access.py:79
+  description: The scenario 'Constants gone' says a search of the codebase for `LIMITED_SECTIONS` and
+    `FULL_SECTIONS` finds no definition or reference. The repository's specs (this spec, the proposal,
+    and the bookings, property-pages and core specs) name both constants, and so does a comment in `backend/DolceSystem/tests/test_owner_chat_access.py`.
+    A search of the whole repository can therefore never come back empty.
+- id: 2f28c367/owner-sections-source/A-2026-11-02-round1-2
+  commit: 2f28c367
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 2
+  severity: minor
+  verdict: false
+  reason: specs.md and plan.md both say 403 with no property returned, which settles it; the finding misreads
+    'the ticket wins' (proposal.md:18), which ranks the input ticket over the PRD, not the generated tickets.json.
+  evidence: owner-sections-source specs.md:147-152; plan.md:18,31; specs/changes/account-management/tickets.json:269-273;
+    proposal.md:18
+  description: The spec and plan say an unrecognised role gets HTTP 403. The ticket's done-criterion in
+    specs/changes/account-management/tickets.json says such a user 'gets an empty property index'. The
+    proposal says the ticket wins where sources differ. A builder cannot tell whether the answer is a
+    403 or a 200 with an empty list.
+- id: 2f28c367/owner-sections-source/A-2026-11-02-round1-8
+  commit: 2f28c367
+  component: owner-sections-source
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 8
+  severity: minor
+  verdict: false
+  reason: 'Same as the 1c19e875 finding on the removed constants: ''no longer exist in the codebase''
+    plus plan item 1 settle that the constants are removed from code; the builder guesses nothing that
+    changes behaviour.'
+  evidence: owner-sections-source specs.md:21-26; plan.md:15,27; backend/DolceSystem/auth_utils.py:56,66;
+    backend/DolceSystem/tests/test_owner_chat_access.py:79
+  description: 'The ''Constants gone'' scenario requires no definition or reference to `LIMITED_SECTIONS`
+    or `FULL_SECTIONS` anywhere in the codebase. Kept text still mentions them: a test comment (backend/DolceSystem/tests/test_owner_chat_access.py,
+    line 79) and other components'' specs in the repository (owner-permissions-core, owner-sections-bookings,
+    owner-sections-property-pages), which mention them on purpose to forbid the fallback.'
+- id: 12d3faa9/dolceops-account-list/A-2026-11-02-round1-4
+  commit: 12d3faa9
+  component: dolceops-account-list
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 4
+  severity: minor
+  verdict: real
+  reason: A user has both Utente.email and the auth User.email, which can differ after the migration;
+    the list and search requirements and account-model's specs speak of one email and never name the field,
+    so which one is shown and searched changes results (account-model design.md D6 narrows it but is not
+    a spec).
+  evidence: dolceops-account-list specs.md:26,85-97; account-model specs.md:52,175-188; backend/DolceSystem/models.py:172-177,216-218,228;
+    account-model design.md:187,195
+  description: 'The list shows ''the Owner user''s name and email'', and search matches ''the email of
+    any user of the account''. A user has two email fields: Utente.email, which is the one that must be
+    unique ignoring case, and User.email on the Django login. For older users these may differ or one
+    may be empty. Neither this spec nor the account-model uniqueness requirement says which one is shown
+    or searched.'
+- id: cdc8ec05/account-attribution/A-2026-11-02-round1-2
+  commit: cdc8ec05
+  component: account-attribution
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 2
+  severity: major
+  verdict: real
+  reason: 'Same problem as the 12d3faa9 text-actor-field finding, unresolved by the cdc8ec05 revision,
+    which only named two third-party exclusions: PropertyClosure.created_by/cancelled_by are username
+    CharFields written and displayed as the actor, and the check''s user-model wording, the plan''s list
+    and the set-null/name-display rules leave them undecided.'
+  evidence: account-attribution specs.md:5-23,33-38,125,166; plan.md:24-35; backend/DolceChannex/models.py:1342,1357;
+    backend/DolceChannex/api_closures.py:56-59,556,710; backend/DolceChannex/bulk_service.py:1572,1615;
+    frontend/src/components/dolceops/channex/closure-dialog.tsx:241
+  description: The inventory must cover 'every existing field that records which user performed an action'.
+    But the only completeness check enumerates fields 'that reference the user model'. `PropertyClosure.created_by`
+    and `PropertyClosure.cancelled_by` (`backend/DolceChannex/models.py`) are text fields holding the
+    acting username. They are written by `_get_username(request)` in `backend/DolceChannex/api_closures.py`
+    and by `bulk_closures(created_by=...)` in `bulk_service.py`. They are shown as the actor in the calendar
+    UI ('Creata da {c.created_by}' in `closure-dialog.tsx`, tooltips in `date-header-cell.tsx` and `booking-row.tsx`).
+    These are calendar actions by owners, OMs and operators, so the requirement's words take them in.
+    The automated check would not catch them, and the plan does not list them. A text field also cannot
+    have its user reference 'set to empty on deletion', and the closure views show a username, not 'name
+    and surname' as 'Views show the acting person's name' requires. A builder must guess whether closures
+    are in or out.
+- id: cdc8ec05/account-attribution/A-2026-11-02-round1-6
+  commit: cdc8ec05
+  component: account-attribution
+  source: adjudicated-2026-11-02-round1
+  run: 2026-11-02-round1
+  n: 6
+  severity: minor
+  verdict: false
+  reason: 'The spec gives a complete order (a live user with no name shows the username; a deleted one
+    shows the snapshots, then ''Utente eliminato''); the email and ''Utente #id'' steps are unreachable
+    for a live user because Utente.user is a required one-to-one to an auth User with a required username.
+    Same as 12d3faa9/account-attribution/A-2026-11-02-baseline-6.'
+  evidence: account-attribution specs.md:139-152; backend/DolceLog/views.py:194-206,560-571; frontend/src/components/audit/user-chip.tsx:39;
+    backend/DolceSystem/models.py:46-51
+  description: '''Fallback when the user has no name'' gives this order: name and surname, then username,
+    then for deleted users the username snapshot, then ''Utente eliminato''. Today the calendar log API
+    (`_user_info` in `backend/DolceLog/views.py`) and `UserChip` fall back from name to username, then
+    email, then ''Utente #id''. The spec drops the email and id steps without saying so. It is unclear
+    whether the existing email and id fallbacks stay.'

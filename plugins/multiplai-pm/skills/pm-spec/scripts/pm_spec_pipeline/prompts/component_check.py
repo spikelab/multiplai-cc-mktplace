@@ -40,9 +40,33 @@ built yet.
 1. For each requirement of `{specs_path}`, find in the repository (Read, Glob,
    Grep) the models, endpoints and functions it changes or relies on, and
    decide whether it can hold as written given that code.
-2. Compare every pair of requirements in `{specs_path}`.
-3. Compare each requirement of `{specs_path}` with the dependencies' specs.
-4. Report every problem you find, not only the first one, as one of:
+2. For each requirement that applies one rule to every member of a set
+   ("every endpoint …", "every field that …", "each page that …", "all …
+   that …"), list the set's members from the code before you judge the rule.
+   Find them from both sides: the callee's side (the endpoints, models,
+   fields or functions the set is made of, where they are defined) and the
+   caller's side (each place in the code that calls, renders, writes or uses
+   them, such as every client call site under the screens the set names).
+   A member belongs to the set when the requirement's own words take it in,
+   whether or not the spec lists it. Test the rule on each member, and report
+   each member it breaks: one the rule cannot hold for, or one that another
+   requirement, a dependency's spec, `proposal.md` or the code treats
+   otherwise. Name the member and the place it is called or defined.
+3. Compare every pair of requirements in `{specs_path}`.
+4. Compare each requirement of `{specs_path}` with the dependencies' specs.
+5. Before you report a problem, look for text that already settles it: the
+   other scenarios of the same requirement, the rest of `{specs_path}` (an
+   exception, a definition, a list of what is left out, a "same as today"
+   clause), `{plan_path}`, and the dependencies' specs, including a spec the
+   requirement points to. A "same as today" or "as before" clause settles a
+   case only when the code today shows that behaviour. Text settles a case
+   only when it speaks to that same case: a rule for a wider or a
+   neighbouring case does not, and two rules that cannot both hold stay a
+   problem unless some text says which one wins. Drop the problem when such
+   text settles it, so that a builder would build one thing. When you
+   keep one, say in its `description` which text you read that could have
+   settled it, and why it does not.
+6. Report every problem you find, not only the first one, as one of:
    - `contradiction`: the requirement and another requirement, a
      dependency's spec or the code give different rules for the same
      situation, so both cannot hold.
@@ -57,10 +81,13 @@ capability and requirement name) first, then what it conflicts with: another
 requirement, a dependency's `specs.md` and its requirement, or a file `path`
 with the function or class in it. The `suggestion` is the change to the
 requirement's text that would fix it, worded for a product manager: what the
-requirement should say, never how to build it. Severity: `critical` when a
-builder would have to break one of two rules, `major` when a builder would
-have to guess or could not build it as written, `minor` for wording that reads
-two ways but would be built the same.
+requirement should say, never how to build it. Severity:
+- `critical` only when two stated rules cannot both hold: two requirements,
+  a requirement and a dependency's spec, or a requirement and code this
+  change keeps;
+- `major` when a builder would have to guess something that changes
+  behaviour, or the requirement cannot be built as written;
+- `minor` otherwise.
 {prior_section}{accepted_section}
 Return ONLY JSON matching this schema (an empty `findings` list is a real
 answer when every requirement can hold):
