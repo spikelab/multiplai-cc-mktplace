@@ -57,7 +57,8 @@ pointing at the commit where that version lands on `main`, **and** an entry in
 and the entry on every pull request
 ([`scripts/check_changelog.py`](scripts/check_changelog.py), runnable locally
 as `uv run --no-project scripts/check_changelog.py --base origin/main`);
-the tag is cut by hand at release. Full detail, including the gate's escape
+whoever merges a version bump (human or agent) tags it on the merge commit
+and pushes the tag in the same session. Full detail, including the gate's escape
 hatch for genuinely docs-only changes, is in
 [`CLAUDE.md`](CLAUDE.md#release-convention).
 
