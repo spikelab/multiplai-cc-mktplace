@@ -722,6 +722,8 @@ Use `--branch <name>` (reviewed against its merge-base with `origin/HEAD`) or
 `--pr <number>` instead of `--range`. To review code that is not a change, use
 `--tree [COMMIT] [--path <dir>] [--trim]` or `--dir /abs/path [--trim]` (no
 `--repo`) instead.
+`--base-branch <name>` (with `--branch`) reviews against the merge-base with
+`origin/<name>` instead of `origin/HEAD`.
 
 `--exclude <glob>` (repeatable, change reviews only) leaves the changed paths
 matching a git glob, read from the top of the repository, out of the diff,
