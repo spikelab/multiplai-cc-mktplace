@@ -69,39 +69,6 @@ reaches the pipeline SDK adapter (replaced by the double), and preserves staged/
 in the source checkout after worktree creation. This checks harness startup; it does not execute the installed core runner or
 provider CLI and does not establish model effectiveness. No live pilot has been run.
 
-# Notes-forward benchmark
-
-`notes_forward_compare.py` measures `carry_block_notes`. Each run copies one
-of five fixtures under `fixtures/multiblock/` into a fresh git repository and
-runs `python -m build_pipeline tdd` on its frozen change directory, with the
-option off (`current`) or on (`notes`). Planning is not run, so both arms
-build the same four blocks; mutation testing is off in both. Four fixtures
-hide a fact about the starting code that the spec does not state, which an
-early block must find and a later block must respect; `control-text` has none.
-The held-out tests in each fixture's `acceptance/` run after the build, from
-outside the checkout.
-
-Per run it reports acceptance, claimed and false success, cost and tokens
-(the `SPEND:` line), elapsed time, and per block the review rounds, the size of
-the saved notes, and the implementer's turns and end-of-call context, read
-from the Claude Code transcripts of the checkout. The report's first line is
-`COMPARABLE` or `NOT COMPARABLE`, and it ends with the two verdicts the plan's
-decision rules give: the option's default, and whether to propose session
-resume.
-
-```sh
-python evals/notes_forward_compare.py --self-check
-uv run --project . python evals/notes_forward_compare.py --control-run \
-  --model '<model id>' --effort '<effort>' --per-run-usd 50 --output /tmp/nf-control.json
-uv run --project . python evals/notes_forward_compare.py \
-  --model '<model id>' --effort '<effort>' --window-tokens '<window>' \
-  --per-run-usd '<3x control>' --max-total-usd '<10x control>' --output /tmp/nf.json
-```
-
-The fixtures are small, so an agent can often find a planted fact by reading
-the code; expect the benefit to show more in implementer turns than in
-acceptance. No live run has been made.
-
 # Epic metrics
 
 `epic_metrics.py` reads what an epic run left on disk and prints one JSON

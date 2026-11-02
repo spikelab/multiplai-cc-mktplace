@@ -2,7 +2,7 @@
 
 Models and efforts come from `specs/config.yaml`, under `models:` and
 `efforts:`. The keys are a step (`interview`, `spec_artifact`, `epic_split`,
-`consistency`, `prototype`), a stage (`spec`, `agent`) or `default`, so a
+`consistency`, `component_check`, `prototype`), a stage (`spec`, `agent`) or `default`, so a
 config written for buildme keeps working: buildme's `interview` step and `spec`
 stage, and its `prototype` step in the `agent` stage, mean the same here. The
 chain for one step, first set link wins: `models.<step>`, `models.<stage>`,
@@ -12,6 +12,7 @@ choice to the CLI).
 `interview:` (`self` | `user` | `ticket`) and `prototype: {enabled: auto |
 true | false}` are read from the same file; a command-line flag wins.
 `consistency: {max_rounds: N}` caps the blocked checks after the specs review.
+`component_check: {max_parallel: N}` is how many component checks run at once.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ STEP_STAGES: dict[str, str] = {
     "spec_artifact": "spec",
     "epic_split": "spec",
     "consistency": "spec",
+    "component_check": "spec",
     "prototype": "agent",
 }
 
@@ -43,6 +45,7 @@ PROTOTYPE_MODES = ("auto", "true", "false")
 
 RUN_DIR = ".pm-spec"
 DEFAULT_MAX_ROUNDS = 5
+DEFAULT_MAX_PARALLEL = 4
 
 
 def read_specs_config(specs_dir: Path) -> dict:
@@ -133,6 +136,15 @@ class SpecConfig:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
         return DEFAULT_MAX_ROUNDS
+
+    @property
+    def component_check_max_parallel(self) -> int:
+        """`component_check: {max_parallel: N}`: the component checks that run
+        at once (default 4)."""
+        value = self._table("component_check").get("max_parallel")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return DEFAULT_MAX_PARALLEL
 
     def _table(self, key: str) -> dict:
         value = self.data.get(key)

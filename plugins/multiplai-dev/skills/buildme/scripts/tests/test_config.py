@@ -1096,6 +1096,73 @@ class TestWholeSuiteConfig:
         assert "falls back" not in caplog.text
 
 
+class TestTddEnabledConfig:
+    """`tdd.enabled`: false lets a build run with no test command (every test
+    gate then runs nothing); true, the default, makes preflight refuse it."""
+
+    def test_true_by_default(self, tmp_path):
+        assert BuildConfig().tdd_enabled is True
+        assert _config_from_yaml(tmp_path, "tdd:\n  test_command: x\n").tdd_enabled
+
+    @pytest.mark.parametrize("value", ["false", "off", "no"])
+    def test_false_turns_it_off(self, tmp_path, value):
+        config = _config_from_yaml(tmp_path, f"tdd:\n  enabled: {value}\n")
+        assert config.tdd_enabled is False
+
+    def test_an_unusable_value_warns_and_keeps_true(self, tmp_path, caplog):
+        config = _config_from_yaml(tmp_path, "tdd:\n  enabled: maybe\n")
+        assert config.tdd_enabled is True
+        assert "tdd.enabled" in caplog.text
+
+
+class TestReloadTestSettings:
+    """After the build moves into its worktree, the test command and
+    `tdd.enabled` come from the worktree, not the checkout it started in."""
+
+    def test_discovery_runs_again_in_the_new_project_dir(self, tmp_path):
+        start, wt = tmp_path / "start", tmp_path / "wt"
+        start.mkdir()
+        wt.mkdir()
+        (wt / "pyproject.toml").write_text("[project]\nname='x'\n")
+        config = BuildConfig(project_dir=start)
+        config._discover_test_command()
+        assert config.test_command == ""
+        config.rebind_project_dir(wt)
+        config.reload_test_settings()
+        assert config.test_command == "pytest -xvs"
+        assert config.test_command_discovered_from == "pyproject.toml"
+
+    def test_a_command_discovered_in_the_old_dir_is_dropped(self, tmp_path):
+        start, wt = tmp_path / "start", tmp_path / "wt"
+        start.mkdir()
+        wt.mkdir()
+        (start / "package.json").write_text("{}\n")
+        config = BuildConfig(project_dir=start)
+        config._discover_test_command()
+        assert config.test_command == "npm test"
+        config.rebind_project_dir(wt)
+        config.reload_test_settings()
+        assert config.test_command == ""
+        assert config.test_command_discovered_from == ""
+
+    def test_the_worktree_config_sets_the_command_and_enabled(self, tmp_path):
+        wt = tmp_path / "wt"
+        (wt / "specs").mkdir(parents=True)
+        (wt / "specs" / "config.yaml").write_text(
+            "tdd:\n  test_command: uv run pytest -q\n  enabled: false\n"
+        )
+        config = BuildConfig(project_dir=tmp_path)
+        config.rebind_project_dir(wt)
+        config.reload_test_settings()
+        assert config.test_command == "uv run pytest -q"
+        assert config.tdd_enabled is False
+
+    def test_a_command_the_caller_set_is_kept(self, tmp_path):
+        config = BuildConfig(project_dir=tmp_path, test_command="true")
+        config.reload_test_settings()
+        assert config.test_command == "true"
+
+
 class TestTestTimeoutConfig:
     """`tdd.test_timeout`: the seconds each full-suite run gets; 300 when unset."""
 
@@ -2048,19 +2115,3 @@ models:
         assert config.model_specs == {"spec": "claude:opus"}
         assert any("models.agent" in r.getMessage() for r in caplog.records)
         assert any("models.review" in r.getMessage() for r in caplog.records)
-
-
-class TestCarryBlockNotesConfig:
-    def test_off_by_default(self, tmp_path):
-        assert BuildConfig().carry_block_notes is False
-        assert _config_from_yaml(tmp_path, "context: x\n").carry_block_notes is False
-
-    def test_true_turns_it_on(self, tmp_path):
-        config = _config_from_yaml(tmp_path, "carry_block_notes: true\n")
-        assert config.carry_block_notes is True
-
-    def test_a_non_boolean_keeps_it_off_with_a_warning(self, tmp_path, caplog):
-        with caplog.at_level("WARNING"):
-            config = _config_from_yaml(tmp_path, "carry_block_notes: 'yes'\n")
-        assert config.carry_block_notes is False
-        assert any("carry_block_notes" in r.getMessage() for r in caplog.records)

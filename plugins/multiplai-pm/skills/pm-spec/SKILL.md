@@ -170,6 +170,28 @@ after the third stop runs the consistency check and the handoff.
    that stopped before its result was saved. On such a check a new major
    finding that cites only unchanged files, and that no earlier check raised,
    is advisory; a new critical finding still blocks.
+   **The component check** runs before the consistency agent: one read-only
+   agent per component (`component_check`), at most 4 at once
+   (`component_check: {max_parallel: N}` in `specs/config.yaml`). Each reads
+   its component's `plan.md` and `specs.md` in full, the `specs.md` of every
+   component it depends on (directly or through others) in full,
+   `proposal.md`, the capability names and requirement titles of the other
+   components, and the repository. For each requirement it finds the models,
+   endpoints and functions it changes or relies on, and reports each
+   requirement that contradicts another requirement of the same spec, a
+   dependency's spec or the code as it is (`contradiction`, `gap`), and each
+   one that cannot be met as written (`infeasible`). Each finding names the
+   requirement, what it conflicts with, and the change to the requirement
+   that would fix it, for a PM to decide; it gives no design or code advice
+   and rewrites nothing. Its findings are the consistency check's own, tagged
+   with their component: the same block, `--accept`, round cap and
+   `SPEC:WARN` rules. Each component's result is saved in the run state with
+   a digest of the files it read, and one line `COMPONENT_CHECK <id>
+   findings=<n> cost=<usd>` goes to `.pm-spec/progress.md`; a result whose
+   files are unchanged is reused with no call, so a check stopped part way
+   (a kill, the spend cap) runs only the components left, and an edit runs
+   that component and every one that depends on it again. A change with no
+   components is one check.
    **After the specs review stop** (step 11) the check rewrites no file: the
    specs are what reviewers read and edited. A critical or major finding
    stops the run with `SPEC:BLOCKED:<change_dir>`, exit 4, the findings
@@ -224,7 +246,14 @@ changes nothing, and prints the `git pull --rebase` to run.
 `specs.md` files it names, rechecks with the consistency agent, and once
 every issue is `resolved` clears `spec_issues` in `.change.yaml`, moves the
 file to `spec-issues.resolved-<revision>.md` (or `respec.resolved-<revision>.md`)
-and hands off again. The issues file may be in the change dir or in a
+and hands off again. Before the recheck it runs the component check on each
+component whose `specs.md` the rewrite was given and on each component that
+depends on one of them; a new critical or major finding there blocks
+(exit 4), as the rewrite caused it, while a new major finding the
+consistency agent raises elsewhere stays advisory. A spend-cap stop before
+the rewrite is written leaves the rewrite unspent, so `revise <name>
+--max-usd <higher>` runs it (the same holds for the check's own rewrite).
+The issues file may be in the change dir or in a
 component's (`components/<id>/spec-issues.md`, where buildme writes a
 component's issues): name the change, `revise <name>`, never
 `<name>/<component>`, which is refused. An issues file written after that is a
@@ -340,7 +369,7 @@ skill, tell the user as below.
 Never create or edit a ticket before the user says yes to the tickets shown.
 
 **It sends the repository to a model.** The self and ticket interview agents,
-the prototype agent and the consistency check read the repository with
+the prototype agent, the component check and the consistency check read the repository with
 `Read`, `Glob` and `Grep` (the prototype agent also writes, only in
 `prototype/`), so the run needs the user to say they trust the repository:
 `--trust-repo`, or `PM_SPEC_TRUST_REPO=1`. Without it the run stops before

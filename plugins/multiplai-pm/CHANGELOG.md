@@ -21,6 +21,15 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-01
+
+### Added
+- **pm-spec**: before the handoff, a component check runs one read-only agent per component, in parallel (at most `component_check: {max_parallel: N}`, default 4). Each reads its component's plan and specs, the specs of every component it depends on, the proposal and the repository, and reports each requirement that contradicts another requirement, a dependency's spec or the code as it is, or that cannot be met as written (`infeasible`), with the change to the requirement that would fix it. Its findings block, can be accepted with `--accept` and count toward the round cap like the consistency check's. A result whose files are unchanged is reused with no call; `.pm-spec/progress.md` gets one `COMPONENT_CHECK <id> findings=<n> cost=<usd>` line per component.
+- **pm-spec**: `revise` runs the component check on each component its rewrite was given and on each one that depends on them, and blocks on a new critical or major finding there.
+
+### Fixed
+- **pm-spec**: a `revise` (or a check's rewrite) stopped by the spend cap before the rewrite was written no longer counts the rewrite as spent, so running it again with a higher `--max-usd` rewrites instead of refusing.
+
 ## [0.15.1] - 2026-10-31
 
 ### Fixed

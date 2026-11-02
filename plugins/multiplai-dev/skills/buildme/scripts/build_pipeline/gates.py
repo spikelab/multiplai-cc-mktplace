@@ -117,6 +117,19 @@ def _test_directory(test_command: str, project_dir: Path) -> Path:
 # Seconds a full test run gets when `tdd.test_timeout` sets nothing.
 DEFAULT_TEST_TIMEOUT = 300
 
+# What the TDD engine writes to build-progress.md, and publish to the PR body
+# (`orchestrator.no_test_command_section`), when the build has no test
+# command and `tdd.enabled: false` (preflight refuses it otherwise): every
+# test gate below then passes without running anything.
+NO_TEST_COMMAND_WARNING = (
+    "No test command: specs/config.yaml sets no tdd.test_command and discovery "
+    "found no root file it knows (pytest.ini, pyproject.toml, setup.py, "
+    "Package.swift, Cargo.toml, go.mod, package.json), and tdd.enabled is "
+    "false, so the build went on: the baseline, RED, integration and mutation "
+    "gates ran no tests and passed. Set tdd.test_command in specs/config.yaml "
+    "to have them run."
+)
+
 # Runs of the test command that may end with no test results (the runner
 # crashed, the test database is down, the project failed to start) before the
 # block stops: the first run and two retries.
@@ -1148,7 +1161,7 @@ TEST_CHANGE_MARKER = "TEST CHANGE REQUIRED:"
 # Every REQUIRED slot label an agent report can carry — used as the stop
 # boundary when reading the free-text SURPRISES and SEARCHED slots, together
 # with `_TEST_CHANGE_LINE` below.
-_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|RED_EXPECTED|SURPRISES|SPEC_IMPACT|SEARCHED|RECURRING|NOTES_FOR_LATER_BLOCKS"
+_REPORT_SLOT_LABELS = "STATUS|TESTS_RUN|GREEN|FILES|TEST_COUNT|RED_EXPECTED|SURPRISES|SPEC_IMPACT|SEARCHED|RECURRING"
 
 # The colon after a slot label is MANDATORY — every legitimate slot form
 # carries one (`SURPRISES: x`, `- **SURPRISES:** x`, `**SURPRISES**: x`).
@@ -1258,34 +1271,6 @@ def parse_implementation_note(
         surprises=surprises,
         spec_impact=spec_impact,
     )
-
-
-# --- Notes for later blocks (NOTES_FOR_LATER_BLOCKS: slot) ---
-
-# Asked for only under `carry_block_notes`. Same label grammar as SURPRISES:
-# the colon is mandatory, and the section runs to the next slot label or the end.
-_HANDOFF_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:\*\*)?NOTES_FOR_LATER_BLOCKS" + _SLOT_COLON + r"[ \t]*"
-    r"(.*?)"
-    r"(?=^\s*(?:[-*]\s*)?(?:\*\*)?(?:"
-    + _REPORT_SLOT_LABELS
-    + r")"
-    + _SLOT_COLON
-    + r"|"
-    + _TEST_CHANGE_LINE
-    + r"|\Z)",
-    re.MULTILINE | re.IGNORECASE | re.DOTALL,
-)
-
-
-def parse_handoff_note(output: str) -> str | None:
-    """The agent's `NOTES_FOR_LATER_BLOCKS:` section, or None when it has none
-    or says nothing ("none", an echoed placeholder). The last section wins, as
-    in `parse_implementation_note`."""
-    matches = _HANDOFF_RE.findall(output or "")
-    if not matches:
-        return None
-    return _clean_surprises(matches[-1]) or None
 
 
 # --- Review fix: where the agent looked (SEARCHED: slot) ---

@@ -1,0 +1,145 @@
+[
+ {
+  "n": 1,
+  "severity": "critical",
+  "type": "gap",
+  "description": "[component `account-billing`, finding 1] The account-billing-migration requirement 'Migration fails loudly on profiles it cannot place' stops the migration if any billing profile is linked to a user that has no account. Operators are users that never get an account (account-model, 'Operators keep cross-client access'). Today create_billing_profile in backend/DolceFinance/views/billing_profiles.py links every new profile to whoever is logged in, operators included, and operators may create profiles for clients. So any profile an operator has ever created makes the migration stop. No requirement says which account an operator-created profile goes to, or who fixes it, so the migration cannot finish on production-shaped data.",
+  "places": [
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-migration: Migration fails loudly on profiles it cannot place"
+   },
+   {
+    "file": "backend/DolceFinance/views/billing_profiles.py",
+    "where": "create_billing_profile (utente=utente_corrente, whatever the caller's role)"
+   },
+   {
+    "file": "components/account-model/specs.md",
+    "where": "session-account-resolution: Operators keep cross-client access"
+   }
+  ],
+  "suggestion": "Say how a profile linked today to an operator's login is placed: for example, in the account of the owner of the properties that use it, or by a decision recorded per profile before the run. Also say that profiles that cannot be placed are listed and resolved by a person before the migration runs again."
+ },
+ {
+  "n": 2,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `account-billing`, finding 2] The account-billing-ownership requirement 'Billing profiles belong to the account' says every new profile references 'that account', and a profile saved without an account is refused. When an operator creates a profile, there is no caller account to use: operators belong to no account, and the create endpoint today takes no account from the request. Nothing says which account an operator-created profile belongs to, so operators either can no longer create profiles or a builder has to guess.",
+  "places": [
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-ownership: Billing profiles belong to the account"
+   },
+   {
+    "file": "backend/DolceFinance/views/billing_profiles.py",
+    "where": "create_billing_profile"
+   },
+   {
+    "file": "components/account-model/specs.md",
+    "where": "session-account-resolution: Operators keep cross-client access"
+   }
+  ],
+  "suggestion": "Add that an operator who creates a billing profile chooses the account it belongs to. A client user's profile goes to that user's own account."
+ },
+ {
+  "n": 3,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `account-billing`, finding 3] Today the link from a profile to its user is optional and is cleared when the user is deleted (ProfiloFatturazione.utente is null=True, on_delete=SET_NULL). Profiles with no user can therefore already exist, and properties may still use them. The migration requirement aborts on any such profile. Nothing says how these profiles get an account, so the migration may never complete. If someone unlinks or deletes them to get past the stop, that breaks 'Property assignments survive the migration'.",
+  "places": [
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-migration: Migration fails loudly on profiles it cannot place"
+   },
+   {
+    "file": "backend/DolceFinance/models/billing.py",
+    "where": "ProfiloFatturazione.utente (null=True, on_delete=SET_NULL)"
+   },
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-migration: Property assignments survive the migration"
+   }
+  ],
+  "suggestion": "Say how profiles with no user are placed before the run: for example, in the account of the owner of the properties that use them, or by a recorded per-profile decision. Profiles no property uses could have their own stated rule."
+ },
+ {
+  "n": 5,
+  "severity": "minor",
+  "type": "contradiction",
+  "description": "[component `account-billing`, finding 5] The scenario 'Profile without account is rejected' refuses any save of a profile with no account. The same requirement keeps the legacy-only profiles with no account on purpose. Operators can edit any profile today (update_billing_profile). So an operator editing one of these profiles would be refused, and the text does not say whether that is intended.",
+  "places": [
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-ownership: Billing profiles belong to the account"
+   },
+   {
+    "file": "backend/DolceFinance/views/billing_profiles.py",
+    "where": "update_billing_profile"
+   }
+  ],
+  "suggestion": "Say whether the legacy-only profiles kept with no account can still be edited, or are read-only, and limit the 'refused without account' rule to newly created profiles if that is the intent."
+ },
+ {
+  "n": 6,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `account-billing`, finding 6] Today the account is deleted together with its owner, OM or cleaning company (backend/DolceSystem/accounts.py removes it before the entity is deleted). account-model requires that deleting a cleaning company is not refused because of its users. Once a profile's account link is mandatory, nothing says what happens to an account's billing profiles when the account is deleted. The choices are: delete them, which properties block because a property's profile link is protected (Immobile.profilo_fatturazione PROTECT); leave them with no account, which breaks the mandatory link; or refuse the deletion. 'Profile stays usable when a user is deactivated or deleted' covers deleting users only.",
+  "places": [
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-ownership: Profile stays usable when a user is deactivated or deleted"
+   },
+   {
+    "file": "backend/DolceSystem/accounts.py",
+    "where": "_elimina_account_prima_dell_entita"
+   },
+   {
+    "file": "components/account-model/specs.md",
+    "where": "account-entity: Deleting a cleaning company deletes its users"
+   },
+   {
+    "file": "backend/DolcePMS/models.py",
+    "where": "Immobile.profilo_fatturazione (on_delete=PROTECT)"
+   }
+  ],
+  "suggestion": "Say what happens to an account's billing profiles when the account's owner, OM or cleaning company is deleted: whether the deletion is refused while the account has profiles, and whether profiles that properties use are kept."
+ },
+ {
+  "n": 7,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `account-billing`, finding 7] 'Reads of a profile through the user go through the account' covers code that goes from a user to their profiles. Other existing code goes the other way, from a profile to its user, and has no replacement once the user link is removed. The force_airbnb_host_case command matches a profile to a property's owner through the profile's user. The billing-profile API returns a 'utente' field for every profile. The scenario 'Lookup from a property's owner' describes a path from owner to profiles that does not exist in today's code.",
+  "places": [
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-ownership: Reads of a profile through the user go through the account"
+   },
+   {
+    "file": "backend/DolceChannex/management/commands/force_airbnb_host_case.py",
+    "where": "_profile_matches_owner (profilo.utente.proprietario)"
+   },
+   {
+    "file": "backend/DolceFinance/views/billing_profiles.py",
+    "where": "_serialize_profile ('utente' field)"
+   }
+  ],
+  "suggestion": "Widen the requirement so it also covers code that goes from a profile to its user: say it uses the profile's account instead (for an owner account, that account's owner). Also say what the billing-profile list shows where it shows the user today."
+ },
+ {
+  "n": 8,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `account-billing`, finding 8] 'Each existing profile moves to its user's account' sends the profiles of logins 44 and 61, which are placed by a recorded multi-role decision, to the decided account, which may be an OM account. The owner account those logins used to stand for would then no longer list the profiles its properties use. account-model exempts these logins from the access comparison, but this spec does not say whether that change to the owner's profile list is accepted.",
+  "places": [
+   {
+    "file": "components/account-billing/specs.md",
+    "where": "account-billing-migration: Each existing profile moves to its user's account"
+   },
+   {
+    "file": "components/account-model/specs.md",
+    "where": "account-migration: Multi-role logins need a recorded decision"
+   }
+  ],
+  "suggestion": "State that profiles of logins placed by a recorded decision go to the account recorded for that login, and that the migration lists these profiles separately. Alternatively, record a separate target account for each of these profiles."
+ }
+]

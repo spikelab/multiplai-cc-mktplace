@@ -130,6 +130,16 @@ def cited_units(change_dir: Path, finding: dict) -> list[str]:
     return found
 
 
+def target_units(change_dir: Path, findings: list[dict]) -> list[str]:
+    """The spec files a rewrite for *findings* rewrites: those they cite, or
+    every one when a finding cites none (one between the proposal and the use
+    cases, say)."""
+    named = [cited_units(change_dir, f) for f in findings]
+    if not all(named):
+        return layout.units(change_dir)
+    return sorted({u for us in named for u in us})
+
+
 def findings_lines(findings: list[dict]) -> str:
     lines = []
     for f in findings:

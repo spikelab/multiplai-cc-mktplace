@@ -2663,6 +2663,49 @@ class TestRunTDDEngineEntryPoint:
         assert result == EXIT_BUILD_FAILURE
 
     @pytest.mark.asyncio
+    async def test_no_test_command_warns_in_progress(self, tdd_setup):
+        """With no test command every test gate passes without running
+        anything (`baseline_test_gate`, `_red_gate`, `integration_gate`), so
+        the run says so in build-progress.md instead of a bare PASSED."""
+        from build_pipeline.gates import NO_TEST_COMMAND_WARNING
+
+        config, args = tdd_setup
+        config.test_command = ""
+        config.tdd_enabled = False
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=AgentResult(success=False, error="fail"),
+        ):
+            await run_tdd_engine(config, args)
+        text = config.progress_file_path().read_text()
+        assert "WARNING" in text and NO_TEST_COMMAND_WARNING in text
+        assert "BASELINE\nPASSED" not in text
+
+    @pytest.mark.asyncio
+    async def test_no_test_command_is_refused_with_tdd_enabled(self, tdd_setup):
+        config, args = tdd_setup
+        config.test_command = ""
+        writer = AsyncMock(return_value=AgentResult(success=False, error="fail"))
+        with patch("build_pipeline.tdd_engine.run_test_writer", writer):
+            result = await run_tdd_engine(config, args)
+        assert result == EXIT_BUILD_FAILURE
+        writer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_test_command_gives_no_warning(self, tdd_setup):
+        from build_pipeline.gates import NO_TEST_COMMAND_WARNING
+
+        config, args = tdd_setup
+        with patch(
+            "build_pipeline.tdd_engine.run_test_writer",
+            new_callable=AsyncMock,
+            return_value=AgentResult(success=False, error="fail"),
+        ):
+            await run_tdd_engine(config, args)
+        assert NO_TEST_COMMAND_WARNING not in config.progress_file_path().read_text()
+
+    @pytest.mark.asyncio
     async def test_baseline_gate_failure(self, tdd_setup):
         config, args = tdd_setup
         config.test_command = "false"  # always fails
@@ -4709,25 +4752,6 @@ class TestImplementationNotesLoop:
         progress_text = progress.path.read_text()
         assert "WARNING — SPEC_IMPACT: contradicts" in progress_text
         assert "raises on timeout" in progress_text
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("carry", [False, True])
-    async def test_notes_for_later_blocks_are_asked_for_only_under_the_flag(
-        self, setup, carry
-    ):
-        """`carry_block_notes`: the implementer is asked for notes for later
-        blocks and its section is saved on the block only when the flag is on."""
-        config, state, progress, block = setup
-        config.carry_block_notes = carry
-        report = "NOTES_FOR_LATER_BLOCKS: ids are strings\nSTATUS: DONE\n"
-        tw, impl = self._agents("STATUS: DONE\nTEST_COUNT: 6\n", report)
-
-        with tw, impl as run:
-            assert await run_block_tdd(block, config, state, progress) is True
-
-        assert run.await_args.kwargs["carry_notes"] is carry
-        expected = [("implementer", 0, "ids are strings")] if carry else []
-        assert [(n.role, n.round, n.text) for n in block.handoff_notes] == expected
 
     @pytest.mark.asyncio
     async def test_halt_on_contradiction_stops_the_build_with_a_diagnosis(self, setup):

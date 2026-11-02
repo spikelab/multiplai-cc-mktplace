@@ -1,0 +1,95 @@
+[
+ {
+  "n": 1,
+  "severity": "major",
+  "type": "infeasible",
+  "description": "[component `owner-sections-bookings`, finding 1] The requirement says every inventoried endpoint declares 'the matching class, with exactly the sections whose inventories list it'. It also requires a test that catches any endpoint declaring 'sections different from its inventory entries'. The plan talks of separate Calendario, Prenotazioni, Dashboard, Front office and Immobili classes. The code has one class, OwnerSectionsFromInventory. It takes no sections when an endpoint declares it: on each request it looks up that endpoint's sections in owner_sections_inventory.json. So an endpoint cannot declare a set of sections, and a test cannot find one that differs from the inventory. The only thing that can be checked is whether the class is there or not.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-rules: Checks are endpoint_guard permission classes"
+   },
+   {
+    "file": "backend/DolceEngine/endpoint_guard/permissions.py",
+    "where": "OwnerSectionsFromInventory.has_permission"
+   }
+  ],
+  "suggestion": "Say that every inventoried endpoint carries the inventory-driven section check, and that this check takes its sections from the inventory entry for that endpoint and method. The test should catch an inventoried endpoint without the check, and the check on GET /api/get-billing-profiles/. Drop the wording about sections declared per endpoint."
+ },
+ {
+  "n": 3,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-bookings`, finding 3] The spec requires every endpoint in the five inventories to carry the check. That includes the booking-sheet and shell endpoints: GET /api/trovalecose/ (SearchView), /api/verify-whatsapp-number/ and /api/save-whatsapp-to-customer/ (DolceChannex/views.py), /api/booking/<id>/legal-status/ (DolceWebsite/checkbox_legal.py), /api/cancellaprenodyretta/ and /api/pagaprenodyretta/, the operator-tools endpoints, and the Channex direct-booking, rate-plan and room-type endpoints. It also includes Immobili and Calendario endpoints in DolceFinance, DolcePMS and DolceAlloggiati. The component's code scope covers none of these files and none of these views (in views.py it names only the dashboard functions and ProfiloImmobileSingoloJson). Owner-sections-source says this component applies the check to the search and booking-sheet endpoints, and nothing else covers them. Read with its plan, the spec leaves these endpoints unguarded.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-rules: Booking-sheet endpoints admit any of the six sections"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "Data-bearing shell endpoints are listed under the sections whose data they return"
+   },
+   {
+    "file": "backend/DolceSystem/views.py",
+    "where": "SearchView"
+   },
+   {
+    "file": "backend/DolceChannex/views.py",
+    "where": "verify_whatsapp_number (SCHEDA_PRENOTAZIONE)"
+   }
+  ],
+  "suggestion": "State that the requirement covers every endpoint in the five inventories, wherever it is implemented, and name the search, booking-sheet and shell endpoints explicitly. Alternatively, have the PM narrow the requirement to a named list of endpoints and say who guards the rest."
+ },
+ {
+  "n": 4,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-bookings`, finding 4] The 'Every Calendario/Prenotazioni endpoint is covered' scenarios call each endpoint 'with each HTTP method the endpoint accepts', and the 'as before' requirements cover any request. The inventory lists only the methods the pages call. The existing class refuses an owner on any method the inventory does not list, even an owner who holds the section. No requirement says what an owner who holds the section gets for a method the endpoint accepts but the inventory does not list. A builder would have to guess between 'refused' and 'as before'.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-calendario-guard: Calendario endpoints answer an owner with the section as before"
+   },
+   {
+    "file": "backend/DolceEngine/endpoint_guard/permissions.py",
+    "where": "OwnerSectionsFromInventory.has_permission (endpoint is None branch)"
+   }
+  ],
+  "suggestion": "Say that an owner is refused on any method of an inventoried route that the inventory does not list, whatever their sections, and that 'as before' applies only to the listed methods."
+ },
+ {
+  "n": 5,
+  "severity": "minor",
+  "type": "contradiction",
+  "description": "[component `owner-sections-bookings`, finding 5] Two components claim the same inventory change. This component says it moves GET /api/get-billing-profiles/ from Immobili to the section-independent list. The owner-sections-source spec already requires it to be section-independent, with a scenario that checks this. A dependency's spec is supposed to describe what already holds. In the current inventory, though, the endpoint is still under Immobili and missing from section_independent. So it is unclear which component owns the change, and the dependency's scenario fails until this component lands.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-properties: Immobili endpoints refuse an owner without the Immobili section"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "Section-independent endpoints (Scenario: Billing profiles are section-independent)"
+   }
+  ],
+  "suggestion": "Name one component as the owner of the move. If owner-sections-source owns it, change this requirement to rely on the endpoint being section-independent instead of moving it."
+ },
+ {
+  "n": 6,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-bookings`, finding 6] The scenario 'Owner with only Chat reads their billing profiles' expects the response to contain 'the owner's own billing profiles'. Today get_billing_profiles filters profiles by the calling login (utente), not by the owner account. So an Admin user of an owner account gets no profiles until account-billing moves profiles to the account. Whether 'the owner's own' means the login's profiles or the account's is left open.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-properties: Immobili endpoints refuse an owner without the Immobili section (Scenario: Owner with only Chat reads their billing profiles)"
+   },
+   {
+    "file": "backend/DolceFinance/views/billing_profiles.py",
+    "where": "get_billing_profiles"
+   }
+  ],
+  "suggestion": "Reword the scenario to say the response is unchanged from before this component. Leave which profiles are returned to account-billing."
+ }
+]

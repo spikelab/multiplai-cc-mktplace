@@ -47,7 +47,7 @@ def test_adopt_runs_only_the_check_then_marks_ready(repo, model, capsys):
     before = files(source_dir(repo))
     model["components"] = TWO  # would split, if it were asked
     assert run(repo, "resume", "throttle", "--ticket-ref", "ENG-1") == 0
-    assert model.labels() == ["consistency"]
+    assert model.labels() == ["component_check:throttle", "consistency"]
     assert "SPEC:READY:" in capsys.readouterr().out and is_ready(cdir) == (True, "")
     assert files(cdir) == sorted(before + ["tickets.json"])
     assert not (cdir / "interview.md").exists()
@@ -92,7 +92,10 @@ def test_adopt_blocked_on_findings_stops_with_exit_4(repo, model, capsys):
         recheck("still_present"),
     ]
     assert run(repo, "resume", "throttle", "--ticket-ref", "ENG-1") == 4
-    assert {label.split(":")[0] for label in model.labels()} == {"consistency"}
+    assert {label.split(":")[0] for label in model.labels()} == {
+        "component_check",
+        "consistency",
+    }
     assert f"SPEC:BLOCKED:{cdir}" in capsys.readouterr().out
     assert meta(cdir).get("spec_status") != "ready"
     # Unchanged, again: refused with no call.
@@ -129,7 +132,11 @@ def test_a_hand_written_nested_change_is_adopted(repo, model, capsys):
         write(hand / "components" / cid / "specs.md", specs())
     assert run(repo, "resume", "throttle", "--ticket-ref", "ENG-1") == 0
     cdir = change_dir(repo)
-    assert model.labels() == ["consistency"]
+    assert model.labels() == [
+        "component_check:api",
+        "component_check:ui",
+        "consistency",
+    ]
     assert layout.ready(cdir) == (True, "")
     assert is_ready(cdir / "components" / "ui") == (True, "")
 

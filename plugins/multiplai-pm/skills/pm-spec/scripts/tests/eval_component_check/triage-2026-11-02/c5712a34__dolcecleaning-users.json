@@ -1,0 +1,78 @@
+[
+ {
+  "n": 2,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `dolcecleaning-users`, finding 2] 'Editing a user's details' lists name, surname, email and phone as editable. It never says whether the user's active status stays in the edit form. Today the Utenti edit dialog has an active switch (editUserActive), and the edit endpoint accepts is_active. That switch lets someone deactivate a user with no confirmation, and lets an operator outside the list deactivate the Owner. This goes against the confirmation rule and the restricted 'deactivate Owner' rule in this spec. It also goes against account-user-api, which says status does not change through edit. A builder has to guess whether the switch stays.",
+  "places": [
+   {
+    "file": "components/dolcecleaning-users/specs.md",
+    "where": "dolcecleaning-users-tab: Editing a user's details"
+   },
+   {
+    "file": "components/account-user-api/specs.md",
+    "where": "account-user-edit: Editable personal details"
+   },
+   {
+    "file": "backend/DolceCleaning/views.py",
+    "where": "provider_user_detail_api (PUT accepts is_active)"
+   }
+  ],
+  "suggestion": "Say that the Utenti edit form changes only name, surname, email and phone, and that status changes only through the deactivate, reactivate and deactivate-Owner actions, with their confirmation and operator-list rules."
+ },
+ {
+  "n": 3,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `dolcecleaning-users`, finding 3] This component changes the company endpoints and makes every cleaning company an account. Its 'dolcecleaning-company-account' capability covers creating and renaming a company but not deleting one. account-model says deleting a company deletes every user of its account, and must not be refused because the account has users. Today's delete does neither: it refuses deletion while room types are linked, and users are only unlinked from the company, not deleted. No requirement says what happens to the company's account when the company is deleted, or which component makes deletion remove the users.",
+  "places": [
+   {
+    "file": "components/dolcecleaning-users/specs.md",
+    "where": "dolcecleaning-company-account: A cleaning company is an account even with no users"
+   },
+   {
+    "file": "components/account-model/specs.md",
+    "where": "account-entity: Deleting a cleaning company deletes its users"
+   },
+   {
+    "file": "backend/DolceCleaning/views.py",
+    "where": "cleaning_provider_detail_api (DELETE); backend/DolceSystem/models.py Utente.impresa_pulizie_pms (SET_NULL)"
+   }
+  ],
+  "suggestion": "Add a requirement that deleting a cleaning company in DolceCleaning also deletes its account and every user of that account, as account-model defines. Or say explicitly which component owns that behaviour."
+ },
+ {
+  "n": 4,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `dolcecleaning-users`, finding 4] 'Company name is edited in DolceCleaning' says a rename changes the account name. It does not say what happens when the name is cleared. Today's company edit stores an empty name as no name at all, while every account must have a name. A builder has to guess whether an empty company name is refused.",
+  "places": [
+   {
+    "file": "components/dolcecleaning-users/specs.md",
+    "where": "dolcecleaning-company-account: Company name is edited in DolceCleaning"
+   },
+   {
+    "file": "backend/DolceCleaning/views.py",
+    "where": "cleaning_provider_detail_api (PUT sets nome to None when empty)"
+   }
+  ],
+  "suggestion": "Say that renaming a company to an empty or whitespace-only name is refused and leaves both the company and account names unchanged."
+ },
+ {
+  "n": 5,
+  "severity": "minor",
+  "type": "contradiction",
+  "description": "[component `dolcecleaning-users`, finding 5] 'Deactivation and reactivation from the Utenti tab' says the tab offers deactivation of 'an active user' after a confirmation, which includes the Owner. The account team says the ordinary deactivate action is never offered on the Owner, who can only be deactivated through the restricted 'deactivate Owner' action. The Utenti scenarios seem to follow the account-team rule, but the requirement text reads both ways.",
+  "places": [
+   {
+    "file": "components/dolcecleaning-users/specs.md",
+    "where": "dolcecleaning-users-tab: Deactivation and reactivation from the Utenti tab"
+   },
+   {
+    "file": "components/dolcecleaning-users/specs.md",
+    "where": "account-team-activation: Ordinary deactivation not offered on the Owner"
+   }
+  ],
+  "suggestion": "Say that the Utenti tab offers ordinary deactivation only for active Admins, and that the Owner is deactivated only through the restricted 'deactivate Owner' action, as on the account team."
+ }
+]
