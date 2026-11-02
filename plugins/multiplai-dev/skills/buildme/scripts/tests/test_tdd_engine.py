@@ -1409,6 +1409,148 @@ class TestRunBlockTDD:
         assert result is True
         mock_refactor.assert_called_once()
 
+    # --- An implementer that stops at its turn cap is continued (S2, S3) ---
+
+    @staticmethod
+    def _capped():
+        return AgentResult(
+            success=False,
+            error="failed: Claude Code returned an error result: Reached maximum number of turns",
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_turn_capped_implementer_is_continued_once(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="done", files_changed=["test_x.py"])
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                side_effect=[self._capped(), ok],
+            ) as impl,
+        ):
+            assert await run_block_tdd(block, config, state, progress) is True
+        assert impl.await_count == 2
+        assert impl.await_args_list[0].kwargs["continuation"] is False
+        assert impl.await_args_list[1].kwargs["continuation"] is True
+        assert block.implement_continuations == 1
+
+    @pytest.mark.asyncio
+    async def test_S3_a_continuation_that_hits_the_cap_too_fails_the_block(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="done", files_changed=["test_x.py"])
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                side_effect=[self._capped(), self._capped()],
+            ) as impl,
+        ):
+            assert await run_block_tdd(block, config, state, progress) is False
+        assert impl.await_count == 2
+        assert block.status == BlockStatus.FAILED
+        assert block.implement_continuations == 1
+
+    @pytest.mark.asyncio
+    async def test_S2_a_continuation_counted_before_a_kill_is_not_granted_again(
+        self, setup
+    ):
+        """The count is checkpointed before the continuation call, so the block
+        resumed after a kill during it runs the implementer once, uncontinued."""
+        config, state, progress, block = setup
+        block.implement_continuations = 1
+        ok = AgentResult(success=True, output="done", files_changed=["test_x.py"])
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                side_effect=[self._capped()],
+            ) as impl,
+            patch("build_pipeline.tdd_engine._git_commit_block_phase", return_value=None),
+        ):
+            assert await run_block_tdd(block, config, state, progress) is False
+        assert impl.await_count == 1
+        assert block.implement_continuations == 1
+
+    @pytest.mark.asyncio
+    async def test_the_continuation_count_is_checkpointed_before_the_call(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="done", files_changed=["test_x.py"])
+        saved = []
+
+        async def implementer(**kw):
+            if kw["continuation"]:
+                saved.append(
+                    BuildState.load(config.state_file_path()).tdd.blocks[0].implement_continuations
+                )
+                return ok
+            return self._capped()
+
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch("build_pipeline.tdd_engine.run_implementer", side_effect=implementer),
+        ):
+            assert await run_block_tdd(block, config, state, progress) is True
+        assert saved == [1]
+
+    @pytest.mark.asyncio
+    async def test_no_continuation_when_configured_off(self, setup):
+        config, state, progress, block = setup
+        config.implementer_continuations = 0
+        ok = AgentResult(success=True, output="done", files_changed=["test_x.py"])
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                side_effect=[self._capped()],
+            ) as impl,
+        ):
+            assert await run_block_tdd(block, config, state, progress) is False
+        assert impl.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_another_implementer_error_is_not_continued(self, setup):
+        config, state, progress, block = setup
+        ok = AgentResult(success=True, output="done", files_changed=["test_x.py"])
+        with (
+            patch(
+                "build_pipeline.tdd_engine.run_test_writer",
+                new_callable=AsyncMock,
+                return_value=ok,
+            ),
+            patch(
+                "build_pipeline.tdd_engine.run_implementer",
+                new_callable=AsyncMock,
+                side_effect=[AgentResult(success=False, error="API error 500")],
+            ) as impl,
+        ):
+            assert await run_block_tdd(block, config, state, progress) is False
+        assert impl.await_count == 1
+
 
 def _git_init_project(project_dir: Path) -> str:
     """A project repo with one commit. Returns its SHA."""

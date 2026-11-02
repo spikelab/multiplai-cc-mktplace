@@ -2128,6 +2128,7 @@ async def _write_block_tests(
     test_sha = _git_commit_block_phase(config, "test", block)
     if test_sha:
         block.test_commit = test_sha
+        block.implement_continuations = 0
         state.checkpoint(config.state_file_path())
 
     return True, None if kept else test_result.output
@@ -2299,17 +2300,23 @@ async def run_block_tdd(
         block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None
     )
     progress.log_agent("Implementer", block.name, "STARTED")
-    impl_result = await run_implementer(
-        block_name=block.name,
-        block_description=block.description,
-        failing_tests=failing_tests,
-        context_bundle=impl_context,
-        test_command=_block_agent_test_command(config, block),
-        prompt_style=config.implementer_prompt_style,
-        model=config.model_for("implementer"),
-        effort=config.effort_for("implementer"),
-        cwd=cwd,
-    )
+    continuation = False
+    while True:
+        impl_result = await run_implementer(
+            block_name=block.name,
+            block_description=block.description,
+            failing_tests=failing_tests,
+            context_bundle=impl_context,
+            test_command=_block_agent_test_command(config, block),
+            prompt_style=config.implementer_prompt_style,
+            model=config.model_for("implementer"),
+            effort=config.effort_for("implementer"),
+            cwd=cwd,
+            continuation=continuation,
+        )
+        if not _continue_after_turn_cap(impl_result, block, config, state, progress):
+            break
+        continuation = True
 
     if not impl_result.success:
         block.timed_out = impl_result.timed_out
@@ -2642,6 +2649,34 @@ def _verify_block_refactor(
         "REVERTED — refactor did not verify" if reverted else "REVERT FAILED — see log",
     )
     return False
+
+
+# The words an agent call's error carries when it stopped at its turn cap.
+TURN_CAP_ERROR = "Reached maximum number of turns"
+
+
+def _continue_after_turn_cap(
+    result, block: BlockInfo, config: BuildConfig, state: BuildState, progress
+) -> bool:
+    """True when *result* is an implementer that stopped at its turn cap and
+    *block* still has a continuation left (`config.implementer_continuations`):
+    counts it on the block and checkpoints before the next call, so a resume
+    after a kill grants no extra one."""
+    if result.success or TURN_CAP_ERROR not in (result.error or ""):
+        return False
+    if block.implement_continuations >= config.implementer_continuations:
+        return False
+    block.implement_continuations += 1
+    state.checkpoint(config.state_file_path())
+    log.warning(
+        "CONTINUE block=%d name=%s phase=IMPLEMENT reason=turn_cap continuation=%d/%d",
+        block.number,
+        block.name,
+        block.implement_continuations,
+        config.implementer_continuations,
+    )
+    progress.log_agent("Implementer", block.name, "TURN CAP — CONTINUING")
+    return True
 
 
 def _only_added_lines(config: BuildConfig, block: BlockInfo, path: str) -> bool:
