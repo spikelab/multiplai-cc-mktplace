@@ -799,6 +799,11 @@ class BlockInfo(BaseModel):
     # Test-integrity claims the implementer declared. Passed to the reviewer as
     # unverified assertions, exactly like RED/GREEN evidence.
     test_change_claims: list[str] = Field(default_factory=list)
+    # How many times this block's implementer was run again after stopping at
+    # its turn cap (`config.implementer_continuations`). Kept across a resume,
+    # so resuming a failed block grants no new continuation; reset when the
+    # block's tests are committed afresh.
+    implement_continuations: int = 0
     # Surprises the block's agents reported (SURPRISES:/SPEC_IMPACT: slots).
     # Persisted here so a resumed build keeps the learning it already
     # collected; also appended to implementation-notes.md as they arrive.

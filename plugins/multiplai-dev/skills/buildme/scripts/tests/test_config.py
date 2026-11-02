@@ -2115,3 +2115,31 @@ models:
         assert config.model_specs == {"spec": "claude:opus"}
         assert any("models.agent" in r.getMessage() for r in caplog.records)
         assert any("models.review" in r.getMessage() for r in caplog.records)
+
+
+class TestImplementerContinuations:
+    def test_defaults_to_one(self, tmp_path):
+        assert (
+            _config_from_yaml(
+                tmp_path, "tdd:\n  narrow_tests: true\n"
+            ).implementer_continuations
+            == 1
+        )
+
+    def test_zero_turns_it_off(self, tmp_path):
+        config = _config_from_yaml(tmp_path, "tdd:\n  implementer_continuations: 0\n")
+        assert config.implementer_continuations == 0
+
+    @pytest.mark.parametrize("bad", ["-1", "yes", "two"])
+    def test_an_invalid_value_keeps_one(self, tmp_path, bad):
+        config = _config_from_yaml(
+            tmp_path, f"tdd:\n  implementer_continuations: {bad}\n"
+        )
+        assert config.implementer_continuations == 1
+
+
+def test_a_checkpoint_without_the_continuation_count_loads_as_zero():
+    from build_pipeline.models import BlockInfo
+
+    block = BlockInfo.model_validate({"number": 1, "name": "B", "description": "d"})
+    assert block.implement_continuations == 0

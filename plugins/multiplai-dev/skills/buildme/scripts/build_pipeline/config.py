@@ -985,6 +985,11 @@ class BuildConfig:
     # loop narrows each one in its own directory (`narrow_tests.narrow_parts`).
     # Empty: `test_command` is narrowed as one command.
     narrow_commands: list[NarrowCommand] = field(default_factory=list)
+    # tdd.implementer_continuations: how many times a block's implementer that
+    # stopped at its turn cap is run again, told its edits are in the working
+    # tree, before the block fails (`tdd_engine._implement_with_continuations`).
+    # 0: none.
+    implementer_continuations: int = 1
     # tdd.spec_tests: before each block's test writer, a second test writer
     # gets the block's scenarios marked security or permission and its public
     # interfaces, not the design (`spec_tests.py`). Off: no such step.
@@ -1552,6 +1557,14 @@ class BuildConfig:
             tdd.get("narrow_commands"), self.project_dir
         )
         self.whole_suite = parse_whole_suite(tdd.get("whole_suite", "per_block"))
+        cont = tdd.get("implementer_continuations", 1)
+        if isinstance(cont, bool) or not isinstance(cont, int) or cont < 0:
+            log.warning(
+                "Invalid tdd.implementer_continuations value %r in config.yaml — using 1",
+                cont,
+            )
+            cont = 1
+        self.implementer_continuations = cont
         if self.whole_suite == "end" and not self.narrow_tests:
             log.warning(
                 "tdd.whole_suite is end but tdd.narrow_tests is false — every "

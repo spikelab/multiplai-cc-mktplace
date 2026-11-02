@@ -295,6 +295,21 @@ def select_test_paths(
     return sorted(selected)
 
 
+def _runs_jest(test_command: str) -> bool:
+    """True when *test_command* names jest before any task runner or vitest,
+    so the arguments it is given reach jest itself."""
+    try:
+        tokens = shlex.split(test_command)
+    except ValueError:
+        return False
+    for name in (Path(t).name for t in tokens):
+        if name in _TASK_RUNNERS or name == "vitest":
+            return False
+        if name == "jest":
+            return True
+    return False
+
+
 def _needs_separator(test_command: str) -> bool:
     tokens = shlex.split(test_command)
     return bool(tokens) and tokens[0] == "npm" and "--" not in tokens
@@ -303,12 +318,17 @@ def _needs_separator(test_command: str) -> bool:
 def narrow_command(test_command: str, paths: list[str], runner: str | None) -> str:
     """*test_command* with *paths* appended, or *test_command* unchanged when
     there are no paths, the runner is unknown, or a Node path holds a
-    character jest would read as part of a regular expression."""
+    character jest would read as part of a regular expression. A command that
+    runs jest itself takes such paths after `--runTestsByPath`, which reads
+    them as paths (Next.js routes such as `[id]/` hold brackets)."""
     if not paths or runner not in (PYTEST, NODE):
         return test_command
+    by_path = ""
     if runner == NODE and any(_REGEX_CHARS_RE.search(p) for p in paths):
-        return test_command
-    quoted = " ".join(shlex.quote(p) for p in paths)
+        if not _runs_jest(test_command):
+            return test_command
+        by_path = "--runTestsByPath "
+    quoted = by_path + " ".join(shlex.quote(p) for p in paths)
     if runner == NODE and _needs_separator(test_command):
         command = f"{test_command} -- {quoted}"
     else:

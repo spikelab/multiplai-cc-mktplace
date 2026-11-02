@@ -31,6 +31,14 @@ TEST_WRITER_MAX_TURNS = 30
 TEST_WRITER_TIMEOUT = 20 * 60  # 20 min
 
 IMPLEMENTER_MAX_TURNS = 50
+# Put before the implementer's prompt when an earlier implementer of the same
+# block stopped at IMPLEMENTER_MAX_TURNS.
+CONTINUATION_NOTE = """\
+An earlier implementer ran out of turns on this block. Its edits are in the
+working tree. Run `git status` and `git diff` first, keep what is right, and
+finish the block from there rather than starting over.
+
+"""
 IMPLEMENTER_TIMEOUT = 30 * 60  # 30 min
 
 REFACTORER_MAX_TURNS = 30
@@ -128,10 +136,13 @@ async def run_implementer(
     model: str | None = None,
     effort: str | None = None,
     cwd: str | None = None,
+    continuation: bool = False,
 ) -> AgentResult:
     """Spawn an implementation agent for a block.
 
     Uses CLEAN prompt for advanced tier, MINIMUM for standard tier.
+    ``continuation``: an earlier implementer of this block stopped at its turn
+    cap, and the prompt says its edits are in the working tree.
     """
     template = (
         IMPLEMENTER_PROMPT_CLEAN
@@ -145,7 +156,14 @@ async def run_implementer(
         context_bundle=context_bundle,
         test_command=test_command,
     )
-    log.info("Spawning implementer (%s) for block: %s", prompt_style, block_name)
+    if continuation:
+        prompt = CONTINUATION_NOTE + prompt
+    log.info(
+        "Spawning implementer (%s%s) for block: %s",
+        prompt_style,
+        ", continuation" if continuation else "",
+        block_name,
+    )
     return await agent_call(
         prompt,
         allowed_tools=IMPLEMENTER_TOOLS,

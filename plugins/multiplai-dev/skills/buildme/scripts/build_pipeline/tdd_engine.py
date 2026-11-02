@@ -2128,6 +2128,7 @@ async def _write_block_tests(
     test_sha = _git_commit_block_phase(config, "test", block)
     if test_sha:
         block.test_commit = test_sha
+        block.implement_continuations = 0
         state.checkpoint(config.state_file_path())
 
     return True, None if kept else test_result.output
@@ -2299,17 +2300,23 @@ async def run_block_tdd(
         block, config, "implementer", blocks=state.tdd.blocks if state.tdd else None
     )
     progress.log_agent("Implementer", block.name, "STARTED")
-    impl_result = await run_implementer(
-        block_name=block.name,
-        block_description=block.description,
-        failing_tests=failing_tests,
-        context_bundle=impl_context,
-        test_command=_block_agent_test_command(config, block),
-        prompt_style=config.implementer_prompt_style,
-        model=config.model_for("implementer"),
-        effort=config.effort_for("implementer"),
-        cwd=cwd,
-    )
+    continuation = False
+    while True:
+        impl_result = await run_implementer(
+            block_name=block.name,
+            block_description=block.description,
+            failing_tests=failing_tests,
+            context_bundle=impl_context,
+            test_command=_block_agent_test_command(config, block),
+            prompt_style=config.implementer_prompt_style,
+            model=config.model_for("implementer"),
+            effort=config.effort_for("implementer"),
+            cwd=cwd,
+            continuation=continuation,
+        )
+        if not _continue_after_turn_cap(impl_result, block, config, state, progress):
+            break
+        continuation = True
 
     if not impl_result.success:
         block.timed_out = impl_result.timed_out
@@ -2644,6 +2651,78 @@ def _verify_block_refactor(
     return False
 
 
+# The words an agent call's error carries when it stopped at its turn cap.
+TURN_CAP_ERROR = "Reached maximum number of turns"
+
+
+def _continue_after_turn_cap(
+    result, block: BlockInfo, config: BuildConfig, state: BuildState, progress
+) -> bool:
+    """True when *result* is an implementer that stopped at its turn cap and
+    *block* still has a continuation left (`config.implementer_continuations`):
+    counts it on the block and checkpoints before the next call, so a resume
+    after a kill grants no extra one."""
+    if result.success or TURN_CAP_ERROR not in (result.error or ""):
+        return False
+    if block.implement_continuations >= config.implementer_continuations:
+        return False
+    block.implement_continuations += 1
+    state.checkpoint(config.state_file_path())
+    log.warning(
+        "CONTINUE block=%d name=%s phase=IMPLEMENT reason=turn_cap continuation=%d/%d",
+        block.number,
+        block.name,
+        block.implement_continuations,
+        config.implementer_continuations,
+    )
+    progress.log_agent("Implementer", block.name, "TURN CAP — CONTINUING")
+    return True
+
+
+def _only_added_lines(config: BuildConfig, block: BlockInfo, path: str) -> bool:
+    """True when the test file *path* only gained lines since it gated *block*:
+    its content at `block.test_commit` hashes to the block's snapshot (so the
+    snapshot was not re-baselined since), it is not a `conftest.py` (whose
+    added fixtures can change what every other test sees), and its diff from
+    that commit removes no line. False whenever that cannot be shown."""
+    if not block.test_commit or Path(path).name == "conftest.py":
+        return False
+    shown = subprocess.run(
+        ["git", "show", f"{block.test_commit}:{path}"],
+        cwd=config.project_dir,
+        capture_output=True,
+        timeout=60,
+    )
+    if shown.returncode != 0:
+        return False
+    if hashlib.sha256(shown.stdout).hexdigest() != block.test_file_hashes.get(path):
+        return False
+    diff = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "-U0",
+            block.test_commit,
+            "--",
+            path,
+        ],
+        cwd=config.project_dir,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if diff.returncode != 0:
+        return False
+    removed = [
+        line
+        for line in diff.stdout.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    return not removed
+
+
 def _enforce_test_integrity(
     block: BlockInfo,
     config: BuildConfig,
@@ -2678,7 +2757,12 @@ def _enforce_test_integrity(
         )
         _mark_block(state, block_idx, BlockStatus.FAILED, config)
         return False
-    gate = unchanged_tests_gate(block.test_file_hashes, after, report)
+    gate = unchanged_tests_gate(
+        block.test_file_hashes,
+        after,
+        report,
+        additions_only=lambda path: _only_added_lines(config, block, path),
+    )
     if gate.metadata.get("flagged"):
         for claim in gate.metadata.get("claims", []):
             if claim not in block.test_change_claims:

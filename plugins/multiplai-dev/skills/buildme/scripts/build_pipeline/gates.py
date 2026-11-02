@@ -1771,6 +1771,7 @@ def unchanged_tests_gate(
     before: dict[str, str],
     after: dict[str, str],
     implementer_report: str | Sequence[str] = "",
+    additions_only: Callable[[str], bool] | None = None,
 ) -> GateResult:
     """Fail when the tests that gated this block changed after they gated it.
 
@@ -1792,6 +1793,13 @@ def unchanged_tests_gate(
         implementer_report: checked for the TEST CHANGE REQUIRED escape hatch.
             One report, or a list of the reports of every agent that wrote in
             this window; each is parsed on its own (`parse_test_change_claims`).
+        additions_only: asked, for each changed file when nothing was
+            declared and nothing deleted, whether the file only gained lines
+            since it gated the block. When every one did, the gate passes
+            flagged, with one claim per file for the reviewer: an agent that
+            appended tests (a review-fix covering a finding) did not move the
+            bar the existing tests set, but the reviewer still checks that the
+            new lines change nothing those tests rely on.
 
     Returns a passing gate when nothing was snapshotted (no test command, or a
     checkpoint predating this gate) — an unverifiable gate reports that it did
@@ -1836,6 +1844,31 @@ def unchanged_tests_gate(
                 "checked": True,
                 "changed_files": changed,
                 "claims": claims,
+                "flagged": True,
+            },
+        )
+
+    if (
+        additions_only is not None
+        and mutated
+        and not deleted
+        and all(additions_only(p) for p in mutated)
+    ):
+        added = [
+            f"added tests without a declaration in {p}; no existing line changed"
+            for p in mutated
+        ]
+        return GateResult(
+            passed=True,
+            reason=(
+                f"Test files only gained lines after RED, with no declared reason "
+                f"(unverified claim): {detail}"
+            ),
+            action="flag_test_change_claim",
+            metadata={
+                "checked": True,
+                "changed_files": changed,
+                "claims": added,
                 "flagged": True,
             },
         )

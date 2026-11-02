@@ -94,6 +94,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -220,12 +221,31 @@ def _git(
     return git_ops._run(["git", *args], cwd=repo, timeout=timeout)
 
 
+# Seconds `_gh` waits before running a failed read again.
+GH_WAITS = (2, 5, 10)
+
+
 def _gh(repo: Path, *args: str) -> object | None:
-    """A `gh` read, its JSON output; None when it fails."""
-    proc = git_ops._run_gh(["gh", *args], cwd=repo, timeout=60)
-    if not proc.ok:
-        log.warning("gh %s failed: %s", " ".join(args), proc.stderr.strip()[-400:])
-        return None
+    """A `gh` read, its JSON output; None when it fails, after running it again
+    after each of GH_WAITS. The waits are short because `_gh` runs on the event
+    loop: a stop or a child's exit waits for them."""
+    attempt = 0
+    while True:
+        attempt += 1
+        proc = git_ops._run_gh(["gh", *args], cwd=repo, timeout=60)
+        if proc.ok:
+            break
+        why = proc.stderr.strip()[-400:]
+        log.warning("gh %s failed: %s", " ".join(args), why)
+        if attempt > len(GH_WAITS):
+            return None
+        log.warning(
+            "EPIC retry gh %s attempt=%d reason=%s",
+            args[0] if args else "",
+            attempt,
+            (why.splitlines() or [""])[0],
+        )
+        time.sleep(GH_WAITS[attempt - 1])
     try:
         return json.loads(proc.stdout)
     except ValueError:
@@ -233,20 +253,23 @@ def _gh(repo: Path, *args: str) -> object | None:
 
 
 async def _fetch_origin(repo: Path) -> str | None:
-    """`git fetch origin` (`_fetch_once`), run again when it lost a ref lock to
-    another git, as `feature_branch.fetch` does. None when it worked, else why
-    not."""
-    for attempt in range(1, feature_branch.FETCH_ATTEMPTS + 1):
+    """`git fetch origin` (`_fetch_once`), run again as `feature_branch.fetch`
+    does (`feature_branch.retry_wait`). None when it worked, else why not."""
+    attempt = 0
+    while True:
+        attempt += 1
         why = await _fetch_once(repo)
-        if (
-            why is None
-            or feature_branch.REF_LOCK_LOST not in why
-            or attempt == feature_branch.FETCH_ATTEMPTS
-        ):
+        if why is None:
+            return None
+        wait = feature_branch.retry_wait(why, attempt)
+        if wait is None:
             return why
-        log.warning("git fetch origin lost a ref lock (attempt %d): %s", attempt, why)
-        await asyncio.sleep(0.5 * attempt)
-    return why
+        log.warning(
+            "EPIC retry git fetch origin attempt=%d reason=%s",
+            attempt,
+            why.splitlines()[0],
+        )
+        await asyncio.sleep(wait)
 
 
 async def _fetch_once(repo: Path) -> str | None:

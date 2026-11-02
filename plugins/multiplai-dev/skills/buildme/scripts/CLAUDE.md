@@ -229,6 +229,11 @@ All tests mock LLM calls — no API keys needed. Tests cover:
   a prompt instruction is a hint and `unchanged_tests_gate` is the
   enforcement. It runs at BOTH writable windows (after GREEN, and after every
   review-fix iteration), because the review-fix agent IS the implementer.
+  One undeclared change passes flagged: a test file that only gained lines
+  since `block.test_commit`, when the snapshot is still that commit's content
+  and the file is not a `conftest.py` (`tdd_engine._only_added_lines`). It is
+  handed to the reviewer as a claim, like a declared change; a changed or
+  removed line still fails.
 - **Every review round is kept, and the fix on pass is all-or-nothing.**
   `_run_integration_and_review` writes a round record (`review_rounds`) after
   each adjudication and commits each failing-score fix as it lands, so the

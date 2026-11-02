@@ -90,23 +90,44 @@ def on_origin(repo: Path, branch: str) -> bool:
 # again, at most FETCH_ATTEMPTS times in all.
 REF_LOCK_LOST = "cannot lock ref"
 FETCH_ATTEMPTS = 3
+# Any other failure (a network error, a GitHub 5xx, a credential that is
+# refreshed meanwhile) is run again after each of these waits, in seconds, so a
+# passing fault does not set an epic's child aside for the whole run.
+TRANSIENT_WAITS = (15, 30, 60)
+
+
+def retry_wait(why: str, attempt: int) -> float | None:
+    """Seconds to wait before running a failed `git fetch` again after
+    *attempt* tries, or None to give up: a lost ref lock is run again at once,
+    at most FETCH_ATTEMPTS times; any other failure after each TRANSIENT_WAITS."""
+    if REF_LOCK_LOST in why:
+        return 0.5 * attempt if attempt < FETCH_ATTEMPTS else None
+    if attempt <= len(TRANSIENT_WAITS):
+        return TRANSIENT_WAITS[attempt - 1]
+    return None
 
 
 def fetch(repo: Path) -> str | None:
     """`git fetch origin`; None when it worked, else git's words. Run again
-    when it lost a ref lock to another git (`REF_LOCK_LOST`)."""
-    for attempt in range(1, FETCH_ATTEMPTS + 1):
+    as `retry_wait` says."""
+    attempt = 0
+    while True:
+        attempt += 1
         res = git_ops._run(
             ["git", "fetch", "origin"], cwd=repo, timeout=git_ops._PUSH_TIMEOUT
         )
         if res.ok:
             return None
         why = (res.stderr or res.stdout).strip()[-400:] or f"exit {res.returncode}"
-        if REF_LOCK_LOST not in why or attempt == FETCH_ATTEMPTS:
+        wait = retry_wait(why, attempt)
+        if wait is None:
             return why
-        log.warning("git fetch origin lost a ref lock (attempt %d): %s", attempt, why)
-        time.sleep(0.5 * attempt)
-    return why
+        log.warning(
+            "EPIC retry git fetch origin attempt=%d reason=%s",
+            attempt,
+            why.splitlines()[0],
+        )
+        time.sleep(wait)
 
 
 def recorded(change_dir: Path) -> str:

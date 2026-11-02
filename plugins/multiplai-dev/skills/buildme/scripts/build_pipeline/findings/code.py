@@ -34,7 +34,7 @@ from multiplai_core.untrusted import defang, fence
 from .. import git_ops
 from ..config import BuildConfig
 from ..gates import parse_recurring, parse_searched
-from ..llm_steps.spec_steps import AUDITOR_MAX_TURNS, AUDITOR_TOOLS
+from ..llm_steps.spec_steps import AUDITOR_TOOLS
 from ..models import BlockInfo, BlockStatus
 from ..prompts.findings import SELF_CHECK_PROMPT
 from ..prompts.implementation import REVIEW_FIX_ESCALATION, REVIEW_FIX_LOCATIONS
@@ -450,6 +450,11 @@ def _check_report(text: str) -> str:
 
 # Enough of the round's diff to judge; the agent opens the rest with Read.
 MAX_SELF_CHECK_DIFF_CHARS = 150_000
+# The check reads every fix of the round and the code around each: on
+# DFACCMGMT-1 om-account-identity (2026-11-02) five fixes took it past the
+# spec auditor's 30 turns, with about 80 reads and searches, and the round
+# stopped with nothing pushed.
+SELF_CHECK_MAX_TURNS = 60
 
 
 async def run_self_check(config: BuildConfig, diff: str) -> str:
@@ -468,7 +473,7 @@ async def run_self_check(config: BuildConfig, diff: str) -> str:
         allowed_tools=AUDITOR_TOOLS,
         model=config.model_for("findings_self_check"),
         effort=config.effort_for("findings_self_check"),
-        max_turns=AUDITOR_MAX_TURNS,
+        max_turns=SELF_CHECK_MAX_TURNS,
         cwd=str(config.project_dir),
         budget_label="findings_self_check",
     )
