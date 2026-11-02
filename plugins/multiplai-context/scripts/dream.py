@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2246,12 +2247,18 @@ def _atomic_write(path: Path, content: str) -> None:
     this way; the one file whose loss actually matters did not.
     """
     path = Path(path)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o644
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".tmp-{path.name}-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
+        # mkstemp creates 0600; keep the mode the memory file already had.
+        os.chmod(tmp, mode)
         os.replace(tmp, str(path))
     except BaseException:
         try:

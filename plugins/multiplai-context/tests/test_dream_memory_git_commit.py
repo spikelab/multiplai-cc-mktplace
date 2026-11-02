@@ -255,3 +255,27 @@ class TestDreamAutoWritesAtomically:
         assert (
             "Auto-updated by dream." in (memory_dir / "technical-pref.md").read_text()
         )
+
+
+class TestAtomicWriteKeepsTheFileMode:
+    """``mkstemp`` creates 0600, so a plain temp-file swap turned every memory
+    file dream rewrote from 0644 into 0600. The rewrite keeps the mode the file
+    already had; a new file gets the 0644 ``fsio.atomic_write`` uses."""
+
+    def test_existing_file_keeps_its_mode(self, dream_env):
+        mod = _load_dream_module("dream_mode_existing")
+        target = dream_env["memory_dir"] / "technical-pref.md"
+        target.chmod(0o640)
+
+        mod._atomic_write(target, "rewritten\n")
+
+        assert target.read_text() == "rewritten\n"
+        assert target.stat().st_mode & 0o777 == 0o640
+
+    def test_new_file_gets_0644(self, dream_env):
+        mod = _load_dream_module("dream_mode_new")
+        target = dream_env["memory_dir"] / "brand-new.md"
+
+        mod._atomic_write(target, "fresh\n")
+
+        assert target.stat().st_mode & 0o777 == 0o644
