@@ -41,10 +41,18 @@ from pathlib import Path
 from typing import NamedTuple
 
 from multiplai_core.specs import component_dirs, read_change_meta
+from pydantic import Field
 
 from . import artifacts, layout, sdk
 from . import findings as F
-from .consistency import ConsistencyAnswer, _closure, accepted_section, as_dicts
+from .consistency import (
+    ConsistencyAnswer,
+    ConsistencyFinding,
+    Place,
+    _closure,
+    accepted_section,
+    as_dicts,
+)
 from .prompts import UNTRUSTED_NOTICE
 from .prompts.component_check import COMPONENT_CHECK_PROMPT, PRIOR_SECTION
 from .prompts.consistency import _lines
@@ -73,6 +81,18 @@ class Checked(NamedTuple):
 
     findings: list[dict]
     assessments: list[F.PriorAssessment]
+
+
+class ComponentFinding(ConsistencyFinding):
+    """A component-check finding. Unlike the consistency agent's, one place is
+    enough: a finding may cite only the code it conflicts with, and `tagged`
+    adds the component's own spec as a place when no place cites it."""
+
+    places: list[Place] = Field(min_length=1)
+
+
+class ComponentCheckAnswer(ConsistencyAnswer):
+    findings: list[ComponentFinding] = Field(default_factory=list)
 
 
 def targets(run: Run) -> list[Target]:
@@ -229,7 +249,7 @@ async def _check_one(
         read = digest(run, target)
         answer = await sdk.agent_structured(
             check_prompt(run, target, listed),
-            ConsistencyAnswer,
+            ComponentCheckAnswer,
             config=run.config,
             step=NAME,
             label=f"{NAME}:{target.id}",
