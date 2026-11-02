@@ -1,0 +1,128 @@
+[
+ {
+  "n": 1,
+  "severity": "critical",
+  "type": "contradiction",
+  "description": "[component `owner-sections-bookings`, finding 1] The write requirements for Prenotazioni, Front office and Immobili say any write endpoint in the section's inventory returns HTTP 403 to an owner without that section, with no exception for shared endpoints. In the committed inventory every Prenotazioni and Front office write is shared: POST /api/verify-whatsapp-number/, POST /api/save-whatsapp-to-customer/ and POST /api/channex/direct-booking/create/, which are booking-sheet or shell endpoints listed under six sections. Front office has no write endpoint of its own; the only Prenotazioni-only endpoint is the read GET /api/prenotaziony/. The Immobili writes owners can use, such as POST /api/toggle-task-completed/ (shared with Dashboard) and the booking-sheet writes, are shared too. Under 'An endpoint shared by several sections admits any of them', an owner without Front office but with Calendario must be served by these endpoints. Under the write requirements and their scenarios ('Owner without Front office attempts a write', 'Owner without Prenotazioni tries to edit a booking', 'Owner without Immobili attempts to edit a property'), the same owner must get 403 and nothing may change.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-front-office: Front office endpoints refuse an owner without the Front office section (scenario: Owner without Front office attempts a write)"
+   },
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-prenotazioni-guard: Prenotazioni write endpoints have no effect when refused"
+   },
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-properties: Immobili endpoints refuse an owner without the Immobili section (scenario: Owner without Immobili attempts to edit a property)"
+   },
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-rules: An endpoint shared by several sections admits any of them"
+   },
+   {
+    "file": "backend/DolceSystem/owner_sections_inventory.json",
+    "where": "sections.frontoffice / sections.prenotazioni / sections.immobili endpoints"
+   }
+  ],
+  "suggestion": "Limit the write requirements and scenarios to an owner who holds none of the sections whose inventories list the write endpoint, as the read requirements already do. Where a section has no write endpoint of its own (Front office, Prenotazioni), either say so or remove the scenario."
+ },
+ {
+  "n": 2,
+  "severity": "major",
+  "type": "contradiction",
+  "description": "[component `owner-sections-bookings`, finding 2] 'Server and menu agree' requires each endpoint in the five inventories to answer if and only if the menu shows the owner at least one of its sections. Many inventoried endpoints refuse every owner today, whatever their sections. The inventory marks them operator_only (for example POST /api/channex/calendar/update-availability/, the bulk calendar jobs, PATCH /api/immobile/add-or-update-profile/ and the operator-tools routes). GET /api/booking/<uuid>/legal-status/ is limited to OMs (HasAnyRole(ROLE_MANAGER) in DolceWebsite/checkbox_legal.py get_booking_legal_status). The 'answer as before' requirements keep these refusals for owners who hold the section, so the 'if and only if' cannot hold.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-rules: Sections come from the single owner-section definition (scenario: Server and menu agree)"
+   },
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-calendario-guard: Calendario endpoints answer an owner with the section as before"
+   },
+   {
+    "file": "backend/DolceWebsite/checkbox_legal.py",
+    "where": "get_booking_legal_status"
+   },
+   {
+    "file": "backend/DolceSystem/owner_sections_inventory.json",
+    "where": "entries with operator_only: true"
+   }
+  ],
+  "suggestion": "Reword the scenario so that an owner holding none of the endpoint's sections is always refused, and an owner holding one gets the same answer as before this change, not necessarily a success. Or leave operator-only and owner-excluded endpoints out of the 'answers' half."
+ },
+ {
+  "n": 4,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-bookings`, finding 4] The requirement says every inventoried endpoint shall declare 'the matching class, with exactly the sections whose inventories list it', and that a test fails if the declared sections differ from the inventory. The plan speaks of five separate section classes. The code already has one guard, OwnerSectionsFromInventory (decision D5). It declares no sections: at request time it looks the route up in the inventory and refuses any unlisted route or method. With that guard, 'declares sections different from its inventory' has no meaning, and nothing says whether per-section classes or the single inventory-driven guard is meant. The builder has to guess what the coverage test checks.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-rules: Checks are endpoint_guard permission classes"
+   },
+   {
+    "file": "backend/DolceEngine/endpoint_guard/permissions.py",
+    "where": "OwnerSectionsFromInventory"
+   }
+  ],
+  "suggestion": "Say whether each endpoint carries a guard that takes its sections from the committed inventory, in which case the test only checks that the guard is present, or a guard that names its sections, in which case the test compares them with the inventory. Keep one of the two wordings."
+ },
+ {
+  "n": 5,
+  "severity": "major",
+  "type": "gap",
+  "description": "[component `owner-sections-bookings`, finding 5] The spec requires the guard on every endpoint in the Calendario, Prenotazioni, Dashboard, Front office and Immobili inventories, and the dependency's spec says GET /api/trovalecose/ is guarded by this component. The plan's 'Code this component changes' list leaves out the files that serve many of those endpoints. Missing are: SearchView, in DolceSystem/views.py but not among the listed views; DolceChannex/api_rateplans.py (properties, properties/resolve, rate-plans, room-types); DolceChannex/api_direct_booking.py; DolceChannex/views.py (verify-whatsapp-number, save-whatsapp-to-customer); DolceSystem/endpointz/operator_tools; DolceWebsite/checkbox_legal.py (legal-status); and DolcePMS/views.py together with DolceFinance tourist_tax_settings (Immobili operator-only endpoints). It is unclear whether those endpoints are in scope.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-rules: Checks are endpoint_guard permission classes"
+   },
+   {
+    "file": "components/owner-sections-bookings/plan.md",
+    "where": "Code this component changes"
+   },
+   {
+    "file": "components/owner-sections-source/specs.md",
+    "where": "owner-sections-endpoint-inventory: Data-bearing shell endpoints are listed under the sections whose data they return"
+   }
+  ],
+  "suggestion": "State in the requirement that the shell endpoints (search, Channex property, rate-plan and direct-booking routes) and all booking-sheet endpoints in the inventory are in this component's scope. Align the plan's list of changed code with it."
+ },
+ {
+  "n": 6,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-bookings`, finding 6] The scenario 'Owner without Prenotazioni opens a booking detail' tests a booking detail served by an endpoint listed only in the Prenotazioni inventory. The inventory has no such endpoint: the only Prenotazioni-only endpoint is the list GET /api/prenotaziony/, and every booking-detail endpoint is a shared booking-sheet endpoint. The scenario cannot be exercised.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-prenotazioni-guard: Prenotazioni endpoints refuse an owner without the Prenotazioni section (scenario: Owner without Prenotazioni opens a booking detail)"
+   },
+   {
+    "file": "backend/DolceSystem/owner_sections_inventory.json",
+    "where": "sections.prenotazioni"
+   }
+  ],
+  "suggestion": "Remove the scenario, or reword it to say that booking detail is reached only through the booking-sheet endpoints and is covered by 'Booking-sheet endpoints admit any of the six sections'."
+ },
+ {
+  "n": 7,
+  "severity": "minor",
+  "type": "gap",
+  "description": "[component `owner-sections-bookings`, finding 7] The Immobili and Front office requirements say the refusal is raised 'before any property data is read or written', and Dashboard says 'before any Dashboard data is read'. For shared endpoints the guard admits owners of other sections, and the existing guard itself reads the owner's properties and live links to work out their sections. The wording can be read as 'before the endpoint's own work' or as 'before any database read', which leaves an ambiguity a test could pick up.",
+  "places": [
+   {
+    "file": "components/owner-sections-bookings/specs.md",
+    "where": "owner-section-guard-properties: Immobili endpoints refuse an owner without the Immobili section"
+   },
+   {
+    "file": "backend/DolceSystem/auth_utils.py",
+    "where": "get_owner_sections"
+   }
+  ],
+  "suggestion": "Say that the refusal happens before the endpoint reads or changes the requested property, booking or front-office data, and that its body carries none of that data."
+ }
+]

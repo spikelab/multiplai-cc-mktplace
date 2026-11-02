@@ -1,0 +1,191 @@
+repo: /Users/spike/Documents/knowhere/PROJECTS/DolceBot/Dolcebot
+change: account-management
+branch: DFACCMGMT-1-account-management
+note: Copied on 2026-11-01 from the build worktrees under /Users/spike/Documents/knowhere/.worktrees/;
+  those will be deleted. `commit` is the feature-branch commit the parked build read; `why` says how it
+  was found.
+problems:
+- id: P1
+  component: dolcecleaning-users
+  raised_by: design
+  commit: c5712a34
+  heading: 'Design: specs.md#dolcecleaning-user-endpoint-access: Cleaning-company user management is operator-only'
+  source: buildme-account-management-account-attribution-2/specs/changes/account-management/components/dolcecleaning-users/spec-issues.resolved-9ea0b62ff851.md
+  why: the revise that resolved it is cf11c5a9, whose parent c5712a34 is the 30 Oct handoff
+  text: |
+    # Spec issues: account-management/dolcecleaning-users
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design: specs.md#dolcecleaning-user-endpoint-access: Cleaning-company user management is operator-only
+
+    specs.md#dolcecleaning-user-endpoint-access: Cleaning-company user management is operator-only: Scenario "Anonymous caller" requires HTTP 401, but every DRF view on this branch answers an unauthenticated caller with 419 (`DolceEngine/endpoint_guard/drf.py` maps `NotAuthenticated` to `check_auth`'s 419, which DolceFront's session interceptor needs to redirect to login, and `DolceCleaning/tests/test_drf_pannello_auth.py::test_anonimo_419` asserts it for these exact routes); change the scenario to "refused as unauthenticated (HTTP 419)".
+
+    Raised by buildme's design step.
+- id: P2
+  component: owner-sections-source
+  raised_by: design audit
+  commit: 1c19e875
+  heading: 'Design audit: specs.md#owner-sections-endpoint-inventory: Section-independent endpoints'
+  source: buildme-account-management-account-attribution-2/specs/changes/account-management/components/owner-sections-source/spec-issues.resolved-2f7ddb45d9ee.md
+  why: the feature-branch fix is 8ba18a80 (only endpoints with no client data skip the section checks);
+    1c19e875 is its parent
+  text: |
+    # Spec issues: account-management/owner-sections-source
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design audit: specs.md#owner-sections-endpoint-inventory: Section-independent endpoints
+
+    [major] D4 puts "every endpoint the dashboard shell calls on every page (side nav, search dialog, …)" in `section_independent`. D5 asserts "the shell set's endpoints ⊆ section_independent". The shell's search dialog calls `GET api/trovalecose/` (components/dashboard/layout/search-dialog.tsx:43 → DolceSystem/views.py:398 `SearchView`). That endpoint admits owners (`HasAnyRole(..., ROLE_PROPRIETARIO)`) and returns their bookings, matched on guest name, phone, wa_id and OTA code. The spec's section-independent rule ("No section check SHALL be applied to one") would make booking and guest-contact data permanently exempt from section checks. An owner whose only section is Calendario pulizie, or one of the 11 owners with an empty menu, could keep searching all their bookings after `owner-sections-bookings` ships. This conflicts with the proposal's "the server refuses an owner the data of every page their menu hides" and with "nothing else is reachable". As written, the spec's definition ("called on every page … whatever the user's sections") captures this endpoint.
+
+    Suggested change: Have the requirements' author narrow 'Section-independent endpoints' to endpoints that carry no client data (session, CSRF, login/logout, the allowed-sections/permissions lookups). Data-bearing shell endpoints such as `api/trovalecose/` would then be listed under the sections whose data they return; for search, that is the six booking-sheet sections. Then change D5's shell assertion to accept shell endpoints from `booking_sheet`, and note that the frontend hides search for owners who have none of those sections.
+
+    Raised by buildme's design audit.
+- id: P3
+  component: owner-sections-source
+  raised_by: design audit
+  commit: 2f28c367
+  heading: 'Design audit: specs.md#owner-sections-endpoint-inventory: Booking-sheet endpoints listed under
+    every section that opens the sheet'
+  source: buildme-account-management-account-attribution-2/specs/changes/account-management/components/owner-sections-source/spec-issues.resolved-manual-ae201529.md
+  why: resolved by hand in ae201529 (section-independent endpoints stay outside the section inventory);
+    2f28c367 is its parent
+  text: |
+    # Spec issues: account-management/owner-sections-source
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design audit: specs.md#owner-sections-endpoint-inventory: Booking-sheet endpoints listed under every section that opens the sheet
+
+    [critical] Gating every booking-sheet endpoint would also gate the session check. D3 defines `booking_sheet` as "the reference list of every endpoint the booking sheet calls". Block 7 applies the gate "to every `booking_sheet` route". The booking sheet calls `/api/check-session/` (`frontend/src/components/booking/dettagli-pagamento.tsx:52`, and also `app/booking/[bookingId]/page.tsx`). That same endpoint is called on every page by `context/auth-context.tsx`, `components/session-interceptor/session-interceptor.tsx` and `side-nav.tsx`, including under `/clng`. Following the spec literally, `/api/check-session/` goes under the six sections and never under `calendario_pul` ("Booking-sheet endpoints under all six sections"). The gate would then return 403 on it to an owner whose sections are only `calendario_pul`, or empty. That breaks session handling across the app for those owners, the 11 empty-menu owners included. The Jest coverage scan has the same conflict. It follows imports transitively from each section's `frontend_roots`, so it would require `/api/check-session/` and `/api/allowed-sections/` under `calendario_pul`, which booking-sheet test 3 forbids. Neither the spec nor the design defines section-independent infrastructure endpoints that sit outside the inventory and the gate.
+
+    Suggested change: Get the requirement changed so that the booking-sheet and coverage rules leave out a fixed list of section-independent endpoints: at least `GET /api/check-session/` and `GET /api/allowed-sections/`, plus logout and profile endpoints if the sheet or layout calls them. Then in D3, add a top-level `infrastructure` key to the inventory. The Jest scan accepts these calls without a section, the gate is never applied to them, and a pytest test asserts that none of them appears in `booking_sheet` or `sections`. In Block 7, add a test: an owner with only `calendario_pul` calls `GET /api/check-session/` and gets the same response as before.
+
+    Raised by buildme's design audit.
+- id: P4
+  component: account-attribution
+  raised_by: design
+  commit: 12d3faa9
+  heading: 'Design: specs.md#actor-field-inventory: Every actor field is in the inventory'
+  source: buildme-account-management-account-attribution-3/specs/changes/account-management/components/account-attribution/spec-issues.resolved-19a3173ddb12.md
+  why: raised by the build in buildme-account-management-account-attribution-2, whose HEAD and merge-base
+    with the feature branch are 12d3faa9; revised in cdc8ec05
+  text: |
+    # Spec issues: account-management/account-attribution
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design: specs.md#actor-field-inventory: Every actor field is in the inventory
+
+    specs.md#actor-field-inventory: Every actor field is in the inventory: the automated check over "every model field that references the user model and records who performed an action" also finds the third-party `django.contrib.admin` `LogEntry.user` and django-auditlog `LogEntry.actor` (`auditlog` in INSTALLED_APPS, used by the DolceOps property history). The project cannot add account and snapshot columns to those tables, so the requirement "Each inventoried actor field has an account reference" cannot hold for them. Fix: limit the check to models in the project's own `Dolce*` apps, or name these two fields as explicit exclusions.
+
+    Raised by buildme's design step.
+- id: P5
+  component: account-billing
+  raised_by: design
+  commit: 12d3faa9
+  heading: 'Design: specs.md#account-billing-ownership: Billing profiles belong to the account'
+  source: buildme-account-management-account-billing-3/specs/changes/account-management/components/account-billing/spec-issues.resolved-19a3173ddb12.md
+  why: raised by the build in buildme-account-management-account-billing-2 (HEAD and merge-base 12d3faa9);
+    revised in cdc8ec05
+  text: |
+    # Spec issues: account-management/account-billing
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design: specs.md#account-billing-ownership: Billing profiles belong to the account
+
+    specs.md#account-billing-ownership: Billing profiles belong to the account: "No code path SHALL use them for billing" for the excluded legacy-only profiles conflicts with account-billing-invoicing "Invoices keep their billing profile" and account-billing-migration "Property assignments survive the migration" if any property is assigned one of those profiles. Fix: state that the migration stops and lists the property when an excluded legacy-only profile is assigned to a property, or exempt profiles still assigned to a property from the "not used for billing" rule.
+
+    Raised by buildme's design step.
+- id: P6
+  component: dolceops-account-list
+  raised_by: design
+  commit: 12d3faa9
+  heading: 'Design: specs.md#account-list-api: Operator-only account list endpoint'
+  source: buildme-account-management-dolceops-account-list-3/specs/changes/account-management/components/dolceops-account-list/spec-issues.resolved-19a3173ddb12.md
+  why: raised by the build in buildme-account-management-dolceops-account-list-2 (HEAD and merge-base
+    12d3faa9); revised in cdc8ec05
+  text: |
+    # Spec issues: account-management/dolceops-account-list
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design: specs.md#account-list-api: Operator-only account list endpoint
+
+    specs.md#account-list-api: Operator-only account list endpoint: scenario "Anonymous caller is refused" requires HTTP 401, but the project's DRF exception handler (`DolceEngine/endpoint_guard/drf.py`) answers every unauthenticated DRF call with the 419 body from `check_auth`, and the frontend session interceptor redirects to the login page only on 419. Change the scenario to "the request is refused with HTTP 419 (session expired) and the response contains no account data".
+
+    Raised by buildme's design step.
+- id: P7
+  component: owner-sections-bookings
+  raised_by: plan review
+  commit: 12d3faa9
+  heading: 'Plan review: specs.md#owner-section-guard-properties: Immobili endpoints refuse an owner without
+    the Immobili section'
+  source: buildme-account-management-owner-sections-bookings-3/specs/changes/account-management/components/owner-sections-bookings/spec-issues.resolved-19a3173ddb12.md
+  why: raised by the build in buildme-account-management-owner-sections-bookings-2 (HEAD and merge-base
+    12d3faa9); revised in cdc8ec05
+  text: |
+    # Spec issues: account-management/owner-sections-bookings
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Plan review: specs.md#owner-section-guard-properties: Immobili endpoints refuse an owner without the Immobili section
+
+    [major] The plan says only the property page calls `get_billing_profiles`. The settings page also calls it, and every owner can see that page. Guarding it with Immobili would cut owners without Immobili off from their own billing profiles.
+
+    Suggested change: The inventory and the spec's 'every Immobili endpoint refuses' rule come from upstream, so this needs a requirements decision. One option: `owner-sections-source` moves `GET /api/get-billing-profiles/` out of the Immobili entry. It could become section-independent, or an account-settings endpoint that keeps today's rules. Until that is decided, Block 6 should not add the guard to `get_billing_profiles`. Whatever the decision, add a test that an owner with only Chat still gets their billing profiles from `/api/get-billing-profiles/`.
+
+    Raised by buildme's plan review.
+- id: P8
+  component: account-attribution
+  raised_by: design
+  commit: cdc8ec05
+  heading: 'Design: specs.md#actor-name-display: Rows survive deletion of the user'
+  source: buildme-account-management-account-attribution-3/specs/changes/account-management/components/account-attribution/spec-issues.md
+  why: open on 1 Nov; the build worktree's HEAD and merge-base are cdc8ec05
+  text: |
+    # Spec issues: account-management/account-attribution
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design: specs.md#actor-name-display: Rows survive deletion of the user
+
+    specs.md#actor-name-display: Rows survive deletion of the user: the requirement says the account reference SHALL be kept when a user is deleted, but account-model's "Deleting a cleaning company deletes its users" deletes the users together with the company, and its Account cascades with it (`Account.impresa_pulizie` CASCADE). The reference therefore cannot be kept for those rows unless that deletion is refused, which account-model forbids. The requirement should say the account reference is kept "unless the account itself is deleted, in which case it becomes empty and the actor snapshot is kept".
+
+    Raised by buildme's design step.
+- id: P9
+  component: account-billing
+  raised_by: design
+  commit: cdc8ec05
+  heading: 'Design: specs.md#account-billing-ownership: Billing profiles belong to the account'
+  source: buildme-account-management-account-billing-3/specs/changes/account-management/components/account-billing/spec-issues.md
+  why: open on 1 Nov; the build worktree's HEAD and merge-base are cdc8ec05
+  text: |
+    # Spec issues: account-management/account-billing
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design: specs.md#account-billing-ownership: Billing profiles belong to the account
+
+    specs.md#account-billing-ownership: Billing profiles belong to the account: "No code path SHALL use them for billing" conflicts with account-billing-ownership "Property-to-profile choice is not restricted by the move", which forbids any new restriction on which profile a property may use. After release, an operator can still assign a legacy-flagged profile to a property by id through `add_or_update_profile` or onboarding. Fix: say either that properties SHALL NOT be assigned legacy-only profiles (an explicit, allowed restriction), or that the "no code path" clause holds only at migration time.
+
+    Raised by buildme's design step.
+- id: P10
+  component: owner-sections-bookings
+  raised_by: design
+  commit: cdc8ec05
+  heading: 'Design: specs.md#owner-section-guard-rules: Sections come from the single owner-section definition'
+  source: buildme-account-management-owner-sections-bookings-3/specs/changes/account-management/components/owner-sections-bookings/spec-issues.md
+  why: open on 1 Nov; the build worktree merged cdc8ec05 (merge-base cdc8ec05)
+  text: |
+    # Spec issues: account-management/owner-sections-bookings
+
+    Requirements problems buildme found. Fix them with `/multiplai-pm:pm-spec revise account-management`, then run the build again.
+
+    ## Design: specs.md#owner-section-guard-rules: Sections come from the single owner-section definition
+
+    specs.md#owner-section-guard-rules: Sections come from the single owner-section definition: the scenario "Server and menu agree" requires each endpoint in the five inventories to answer if and only if the menu shows the owner one of its sections, but the inventories list endpoints that refuse every owner whatever their sections. Some are operator-only (`"operator_only": true`, e.g. `POST /api/channex/calendar/update-availability/`, `DELETE /api/cancellaprenodyretta/<str:dolce_id>/`) and one is manager-only (`GET /api/booking/<uuid:booking_id>/legal-status/`, `HasAnyRole(ROLE_MANAGER)`). Fix: restrict the scenario to endpoints that answered owners before this change, or state that the section check admits the request if and only if the menu shows one of the sections.
+
+    Raised by buildme's design step.

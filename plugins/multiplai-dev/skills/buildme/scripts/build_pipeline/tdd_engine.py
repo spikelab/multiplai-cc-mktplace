@@ -32,6 +32,7 @@ from .change_manager import (
 )
 from .config import BuildConfig
 from .gates import (
+    NO_TEST_COMMAND_WARNING,
     TEST_RUNS_DIR,
     RunnerFailed,
     _repo_trusted,
@@ -4012,6 +4013,12 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
         note=f"{total_blocks} block(s)",
     )
 
+    # With no test command every test gate passes without running anything:
+    # say so on every run, not only in the gates' log lines.
+    if not config.test_command:
+        log.warning("%s", NO_TEST_COMMAND_WARNING)
+        progress.log_phase("WARNING", NO_TEST_COMMAND_WARNING)
+
     # The standalone `tdd` command checks what a paid call needs first (item
     # 33); under `build` the orchestrator already did.
     if standalone:
@@ -4045,7 +4052,9 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
             return EXIT_BUILD_FAILURE
         state.tdd.baseline_tests_pass = True
         state.checkpoint(state_path)
-        progress.log_phase("BASELINE", "PASSED")
+        progress.log_phase(
+            "BASELINE", "PASSED" if config.test_command else f"SKIPPED — {gate.reason}"
+        )
 
     # --- Wiring task validation ---
     wiring_gate = wiring_task_gate(config.tasks_path, config.project_dir)

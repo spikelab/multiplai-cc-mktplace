@@ -183,7 +183,7 @@ def test_the_round_cap_stops_checking_until_accept_or_check_again(repo, model, c
     assert "2 rounds" in out and "--accept" in out and "--check-again" in out
     assert "SPEC:BLOCKED:" in out
     assert run(repo, *RESUME, "--check-again") == 0
-    assert len(model.calls) == calls + 1
+    assert len(model.calls) == calls + 2
     cdir = change_dir(repo)
     assert layout.ready(cdir) == (True, "")
 
@@ -197,4 +197,4 @@ def test_past_the_round_cap_accepting_every_open_finding_checks_the_edit(repo, m
     calls = len(model.calls)
     code = run(repo, *RESUME, "--accept", "CC-F1", "--accept-reason", "fine as is")
     assert code == 0
-    assert len(model.calls) == calls + 1
+    assert len(model.calls) == calls + 2

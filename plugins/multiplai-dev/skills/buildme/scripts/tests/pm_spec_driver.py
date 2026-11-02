@@ -70,6 +70,7 @@ ANSWERS = {
     },
     "spec:specs:feat": f"{BEGIN}\n{SPECS}{END}\n",
     "consistency": {"findings": [], "prior_assessments": []},
+    "component_check:feat": {"findings": [], "prior_assessments": []},
 }
 
 

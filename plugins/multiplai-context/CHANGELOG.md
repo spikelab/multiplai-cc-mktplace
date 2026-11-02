@@ -16,6 +16,21 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.61.1] - 2026-11-02
+
+### Fixed
+
+- **`/multiplai-context:dream` now stops if merging its drafts loses an
+  entry.** The check that compares the entry count before and after the merge
+  existed but was never run. Now a merge that drops a learning writes no
+  proposal and keeps the staged drafts, so the next run picks them up again.
+- **`bundle` and `co_retrieve_for` now work on skill catalog entries.** Skill
+  entries are keyed by `name`, which the expansion of picked files did not
+  read, so those two fields had no effect on skills.
+- **Memory files that dream rewrites keep their file mode.** They used to come
+  back as `0600` (owner-only) instead of the `0644` they had before; a new file
+  is now created as `0644`.
+
 ## [0.61.0] - 2026-10-31
 
 ### Removed

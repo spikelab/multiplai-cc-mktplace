@@ -14,7 +14,9 @@ A change dir is `specs/changes/<name>/`. Copies of it can sit in:
   `implementation-plan.md` and `plan-approval.md` as buildme last pushed them.
 
 Worktrees come from `git worktree list` plus every directory directly under
-*worktrees_root* that holds the change.
+*worktrees_root* that holds the change and belongs to the same repository
+(the same `git rev-parse --git-common-dir`); the root is shared by every
+repo's worktrees.
 
 **The write checkout** (B3): the build's worktree when there is one, else
 pm-spec's worktree, else buildme's feature worktree, else the repo when it
@@ -109,9 +111,13 @@ def _checkouts(repo: Path, worktrees_root: Path | None) -> list[gitio.Worktree]:
     if repo not in seen:
         seen[repo] = gitio.Worktree(repo, gitio.current_branch(repo), None)
     if worktrees_root is not None and worktrees_root.is_dir():
+        # The root is shared by every repo's worktrees: keep only this repo's.
+        common = gitio.common_dir(repo)
         for d in sorted(worktrees_root.iterdir()):
             r = d.resolve()
             if r in seen or not (d / ".git").exists() or not (d / CHANGES).is_dir():
+                continue
+            if common is None or gitio.common_dir(r) != common:
                 continue
             seen[r] = gitio.Worktree(r, gitio.current_branch(r), None)
     return list(seen.values())
