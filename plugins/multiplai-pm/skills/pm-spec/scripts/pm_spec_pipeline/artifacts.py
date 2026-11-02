@@ -370,6 +370,33 @@ async def produce(run: Run, key: str, spec_dir: Path | None = None) -> None:
     print(f"PHASE:ARTIFACT:{key}", flush=True)
 
 
+def unchanged_since_recorded(run: Run, key: str) -> bool:
+    """The file *key* is on disk with the text its record holds: nobody has
+    edited it since it was written or first kept."""
+    path = artifact_path(run, key)
+    record = run.state.artifacts.get(key)
+    return (
+        record is not None
+        and record.output is not None
+        and path.is_file()
+        and sha(path.read_text()) == record.output
+    )
+
+
+def discard_if_inputs_changed(run: Run, key: str) -> bool:
+    """Delete the file *key*, and its record, when nobody has edited it since
+    it was recorded and its inputs changed since; True when it was deleted. A
+    file someone edited is kept."""
+    if not unchanged_since_recorded(run, key):
+        return False
+    if run.state.artifacts[key].inputs == _inputs(run, key):
+        return False
+    artifact_path(run, key).unlink()
+    del run.state.artifacts[key]
+    run.save()
+    return True
+
+
 async def generate_proposal(run: Run) -> None:
     await produce(run, "proposal")
     if errors := proposal_errors(run, proposal_text(run)):

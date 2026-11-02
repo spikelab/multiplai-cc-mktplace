@@ -13,6 +13,10 @@ What each field is for, by the plan's stop-and-resume rows:
 - `interview_waiting` / `interview_done`: the ticket interview's wait.
 - `split`: the components answer (row S5), saved before any of its files is
   written; `single` is one component, kept in the change dir.
+  `proposal_inputs` is `epic.proposal_hash` when it was saved: a resume
+  before stage 3 that finds the proposal, the ticket or the interview changed
+  since asks for the components again (`epic.reopen_if_proposal_changed`).
+  A state saved before 0.15.2 has `""`.
 - `artifacts`: per file written (the proposal, the use cases, each
   `specs.md`), the hash of its inputs and of the text it wrote. Informational:
   a file on disk is kept whatever its record says (rows S9, S11).
@@ -130,6 +134,7 @@ class EpicChild(BaseModel):
 class SplitRecord(BaseModel):
     inputs: str
     single: bool
+    proposal_inputs: str = ""
     reason: str = ""
     children: list[EpicChild] = Field(default_factory=list)
 
