@@ -87,7 +87,8 @@
             "patch_file": "tests/e2e/conftest.py",
             "patch_line": 7
           }
-        ]
+        ],
+        "direct_calls": []
       }
     },
     {
@@ -146,7 +147,8 @@
             "invocation_line": 10
           }
         ],
-        "mocks_hop_2": []
+        "mocks_hop_2": [],
+        "direct_calls": []
       }
     },
     {
@@ -198,6 +200,15 @@
             "patch_file": "tests/e2e/test_refund.py",
             "patch_line": 9
           }
+        ],
+        "direct_calls": [
+          {
+            "node_id": "tests/unit/test_refund.py::test_refund_handler",
+            "file": "tests/unit/test_refund.py",
+            "line": 5,
+            "match": "direct_call",
+            "invocation_line": 8
+          }
         ]
       }
     },
@@ -240,7 +251,8 @@
       ],
       "tests": {
         "e2e": [],
-        "mocks_hop_2": []
+        "mocks_hop_2": [],
+        "direct_calls": []
       }
     },
     {
@@ -295,7 +307,8 @@
             "invocation_line": 6
           }
         ],
-        "mocks_hop_2": []
+        "mocks_hop_2": [],
+        "direct_calls": []
       }
     },
     {
@@ -345,7 +358,8 @@
             "invocation_line": 52
           }
         ],
-        "mocks_hop_2": []
+        "mocks_hop_2": [],
+        "direct_calls": []
       }
     }
   ],

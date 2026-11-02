@@ -16,14 +16,16 @@ key (what it reaches) and its literal argv. An entry, and each of its
 the argv must hold, in order:
 
 - `direct_call`: a callee that resolves, through the test's imports, to the
-  entry's handler `def`.
+  entry's handler `def`. It runs the handler without the program, so such a
+  test is listed in `direct_calls`, never in `e2e`.
 - `cli_argv`: for an argparse subcommand, a callee that resolves to a function
   of the parser's module whose body calls `.parse_args(` or
-  `.parse_known_args(`, or `<f>().parse_args(argv)` with `f` a function of that
-  module whose result is handed to a handler (an argument of a call to a
-  function of the snapshot, directly or through the name it is assigned to, or
-  `<name>.func(...)`): a bare parse runs no handler. Argv must hold the
-  subcommand words.
+  `.parse_known_args(` and whose parse result reaches a handler (a
+  `<name>.func(...)` or `<DICT>[...](...)` dispatch call, as entry discovery
+  finds them, or an argument of a call to a function of the snapshot, directly
+  or through the name it is assigned to), or `<f>().parse_args(argv)` with `f`
+  a function of that module whose result is handed to a handler in the same
+  way: a bare parse runs no handler. Argv must hold the subcommand words.
 - `cli_runner`: `<runner>.invoke(<app>, <args>)`, `app` resolving to a click
   group or command, or a typer app, of the command's module; args must hold the
   command words `app` does not supply itself. A typer app reaches the commands
@@ -58,10 +60,12 @@ handler never runs. A listed test moves from `e2e` to `mocks_hop_2` when it
 patches the symbol at hop 2 of the retained hops, at its defining module or
 under a name hop 1's lines look up; a path with one retained hop has no hop 2.
 
-Records. One per test per path: its earliest invocation line, ties broken in
-the order `direct_call`, `cli_argv`, `cli_runner`, `subprocess`, `runpy`;
-sorted by `(file, line, node_id)`. A mocked record adds the earliest hop-2
-patch, which may be in a fixture or `conftest.py`.
+Records. One per test per path: its earliest invocation that runs the program,
+else its earliest direct call; ties on a line broken in the order
+`cli_argv`, `cli_runner`, `subprocess`, `runpy`; sorted by
+`(file, line, node_id)`. A mocked record adds the earliest hop-2 patch, which
+may be in a fixture or `conftest.py`. A test whose only match is a direct call
+is listed in `direct_calls`, whether or not it patches hop 2.
 """
 
 from __future__ import annotations
@@ -98,11 +102,14 @@ from .e2e_patches import (
 from .entries import (
     ConsoleScript,
     Entry,
+    _dispatch_facts,
+    _parsed_names,
     cli_routes,
     console_scripts,
     main_module_handler,
 )
 from .paths import (
+    DirectCallTest,
     E2EListing,
     E2ETest,
     Handler,
@@ -251,7 +258,8 @@ def match_invocations(
     e2e_index: E2EIndex, entry: Entry, *, root: Path
 ) -> list[E2ETest]:
     """The tests that invoke `entry` or one of its invokers and leave its handler in place, one record each,
-    sorted by (file, line, node_id).
+    sorted by (file, line, node_id). A test that runs the program is recorded by that invocation; one that only
+    calls the handler directly gets a `direct_call` record.
     """
     index = e2e_index.index
     targets = _Targets(Path(root), index, e2e_index.scripts).of(entry)
@@ -261,6 +269,7 @@ def match_invocations(
         if any(symbol.patched_by(index, test.patches) for symbol in bypassed):
             continue
         hits = [i for i in test.invocations if any(t.reached_by(i) for t in targets)]
+        hits = [i for i in hits if i.match != "direct_call"] or hits
         if hits:
             first = min(hits, key=lambda i: (i.line, MATCH_ORDER.index(i.match)))
             records.append(
@@ -307,12 +316,18 @@ def _unreadable_reason(full: Path) -> SkipReason:
 def _split_on_hop_2(
     e2e_index: E2EIndex, records: Sequence[E2ETest], hops: Sequence[PathHop]
 ) -> E2EListing:
-    """The records, those of tests that patch the symbol at hop 2 moved to `mocks_hop_2`."""
+    """The records, direct calls moved to `direct_calls` and those of tests that patch the symbol at hop 2 to
+    `mocks_hop_2`.
+    """
     index = e2e_index.index
     hop_2 = _hop_2_symbol(index, hops)
     e2e: list[E2ETest] = []
     mocked: list[MockedE2ETest] = []
+    direct: list[DirectCallTest] = []
     for record in records:
+        if record.match == "direct_call":
+            direct.append(DirectCallTest(**record.model_dump()))
+            continue
         patch = (
             None
             if hop_2 is None
@@ -326,7 +341,7 @@ def _split_on_hop_2(
                     **record.model_dump(), patch_file=patch.file, patch_line=patch.line
                 )
             )
-    return E2EListing(e2e=e2e, mocks_hop_2=mocked)
+    return E2EListing(e2e=e2e, mocks_hop_2=mocked, direct_calls=direct)
 
 
 def _hop_2_symbol(index: PyIndex, hops: Sequence[PathHop]) -> Symbol | None:
@@ -595,6 +610,7 @@ class _Functions:
     def __init__(self, index: PyIndex):
         self._index = index
         self._defs: dict[tuple[str, int], FunctionNode | None] = {}
+        self._runs: dict[tuple[str, int], bool] = {}
 
     def of(self, handler: Handler) -> FunctionNode | None:
         """The `def` of the handler, matched by line and name; None when it is not a function."""
@@ -620,15 +636,45 @@ class _Functions:
         positional = func.args.posonlyargs + func.args.args if func is not None else []
         return positional[0].arg if positional else None
 
-    def parses_args(self, handler: Handler) -> bool:
-        """Whether the function's body calls `.parse_args(` or `.parse_known_args(`."""
-        func = self.of(handler)
-        return func is not None and any(
-            isinstance(n, ast.Call)
+    def runs_program(self, handler: Handler) -> bool:
+        """Whether the function's body calls `.parse_args(` or `.parse_known_args(` and the result reaches a
+        handler: a `<name>.func(...)` or `<DICT>[...](...)` dispatch call, as entry discovery finds them, or an
+        argument of a call to a function of the snapshot, directly or through the name it is assigned to.
+        """
+        key = (handler.path, handler.line)
+        if key not in self._runs:
+            func = self.of(handler)
+            self._runs[key] = func is not None and self._dispatches(func, handler.path)
+        return self._runs[key]
+
+    def _dispatches(self, func: FunctionNode, path: str) -> bool:
+        nodes = list(body_nodes(func))
+        parses = [
+            n
+            for n in nodes
+            if isinstance(n, ast.Call)
             and isinstance(n.func, ast.Attribute)
             and n.func.attr in _PARSE_METHODS
-            for n in ast.walk(func)
-        )
+        ]
+        if not parses:
+            return False
+        facts = _dispatch_facts(ast.Module(body=func.body, type_ignores=[]))
+        if facts.func_call is not None or facts.dict_calls:
+            return True
+        parsed = {name for node in nodes for name in _parsed_names(node)}
+        for call in (n for n in nodes if isinstance(n, ast.Call)):
+            reference = dotted_reference(call.func)
+            if (
+                reference is None
+                or self._index.resolve_name(path, call.lineno, reference) is None
+            ):
+                continue
+            for argument in [*call.args, *(k.value for k in call.keywords)]:
+                if any(argument is p for p in parses) or (
+                    isinstance(argument, ast.Name) and argument.id in parsed
+                ):
+                    return True
+        return False
 
 
 # What a literal argv of one match form reaches.
@@ -783,7 +829,7 @@ class _TestScan:
         result is `handed_on` to a handler: a bare parse runs none.
         """
         line = call.lineno
-        if handler is not None and self._functions.parses_args(handler):
+        if handler is not None and self._functions.runs_program(handler):
             yield (
                 "cli_argv",
                 call_argument(call, 0, self._functions.first_parameter(handler)),

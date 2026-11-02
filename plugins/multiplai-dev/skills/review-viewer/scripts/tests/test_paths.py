@@ -400,7 +400,7 @@ def test_the_paths_fixture_is_valid_paths_v1_and_matches_the_findings_fixture():
         and p2.break_reason is not None
         and len(p2.tests.e2e) == 1
     )
-    assert not p3.tests.e2e and p3.tests.mocks_hop_2
+    assert not p3.tests.e2e and p3.tests.mocks_hop_2 and p3.tests.direct_calls
     assert not p4.tests.e2e and not p4.tests.mocks_hop_2
     assert p5.entry.handler is None and len(p5.tests.e2e) == 1
     assert len(p6.tests.e2e) == 1
@@ -467,6 +467,7 @@ def _is_list(annotation) -> bool:
         "paths[].tests.e2e[].file",
         "paths[].tests.e2e[].line",
         "paths[].tests.mocks_hop_2[].node_id",
+        "paths[].tests.direct_calls[].node_id",
         "test_listing_skips",
     ],
 )

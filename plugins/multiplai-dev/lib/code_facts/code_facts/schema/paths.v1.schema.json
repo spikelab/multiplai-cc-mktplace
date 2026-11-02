@@ -2,9 +2,48 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "paths.v1.schema.json",
   "$defs": {
+    "DirectCallTest": {
+      "additionalProperties": false,
+      "description": "A test that calls the path's handler itself, without running the program: listed, never counted as e2e.",
+      "properties": {
+        "node_id": {
+          "title": "Node Id",
+          "type": "string"
+        },
+        "file": {
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\]+$",
+          "title": "File",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "match": {
+          "const": "direct_call",
+          "title": "Match",
+          "type": "string"
+        },
+        "invocation_line": {
+          "minimum": 1,
+          "title": "Invocation Line",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "node_id",
+        "file",
+        "line",
+        "match",
+        "invocation_line"
+      ],
+      "title": "DirectCallTest",
+      "type": "object"
+    },
     "E2EListing": {
       "additionalProperties": false,
-      "description": "Tests of a path, sorted by (file, line, node_id). A test is in at most one list.",
+      "description": "Tests of a path, sorted by (file, line, node_id). A test is in at most one list. `direct_calls` was added\nto paths.v1 later, so the schema does not require it.",
       "properties": {
         "e2e": {
           "items": {
@@ -18,6 +57,13 @@
             "$ref": "#/$defs/MockedE2ETest"
           },
           "title": "Mocks Hop 2",
+          "type": "array"
+        },
+        "direct_calls": {
+          "items": {
+            "$ref": "#/$defs/DirectCallTest"
+          },
+          "title": "Direct Calls",
           "type": "array"
         }
       },
@@ -765,7 +811,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise.",
+  "description": "The paths.v1 document. `scoped` is true exactly when changed lines were given; `cap` is null otherwise.\nAdditive changes keep the version: a field added later is not required, so older documents still validate.",
   "oneOf": [
     {
       "additionalProperties": false,

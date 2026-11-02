@@ -157,7 +157,7 @@ def _cut_path(n: int, reason: str, kind: str) -> dict:
         "stops_at": kept,
         "break_reason": reason,
         "changed_lines_covered": [_loc(path, 1)],
-        "tests": {"e2e": [], "mocks_hop_2": []},
+        "tests": {"e2e": [], "mocks_hop_2": [], "direct_calls": []},
     }
 
 
@@ -280,6 +280,15 @@ def _full_paths_doc() -> dict:
                     "patch_line": 19,
                 },
             ],
+            "direct_calls": [
+                {
+                    "node_id": "tests/test_unit.py::test_k",
+                    "file": "tests/test_unit.py",
+                    "line": 5,
+                    "match": "direct_call",
+                    "invocation_line": 7,
+                },
+            ],
         },
     }
     p2 = {
@@ -289,7 +298,7 @@ def _full_paths_doc() -> dict:
         "stops_at": None,
         "break_reason": None,
         "changed_lines_covered": [],
-        "tests": {"e2e": [], "mocks_hop_2": []},
+        "tests": {"e2e": [], "mocks_hop_2": [], "direct_calls": []},
     }
     # p1 is cut by `text_mismatch`; one more cut path per remaining cut reason, from every other entry kind.
     cuts = [

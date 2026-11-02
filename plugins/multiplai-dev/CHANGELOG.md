@@ -15,6 +15,21 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.154.2] - 2026-11-02
+
+### Fixed
+
+- **code_facts** (codebase-walkthrough, review-viewer): a test that calls a
+  subcommand's handler function directly is no longer counted as an
+  end-to-end test of that path, since it does not run the program. It is
+  listed in the path's new `tests.direct_calls` instead. A test that parses
+  argv counts only when the parse result reaches a handler, now also through
+  a `<DICT>[...](...)` dispatch call. `paths.v1` keeps its version, and
+  `direct_calls` is optional.
+- **review-viewer**: the path card lists those direct-call tests as not
+  counted, and a `paths.json` written before `direct_calls` existed lists
+  none.
+
 ## [0.154.1] - 2026-11-02
 
 ### Fixed

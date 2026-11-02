@@ -514,9 +514,9 @@
       <p><b>trace broken after …</b>: the review could follow the calls only this far; the card lists the
         hops it reached and says why it stopped.</p>
       <p><b>E2E tests</b>: the end-to-end tests that run the entry point. A test marked <b>not counted</b>
-        mocks the second hop, so it does not run the real path. <b>no e2e test</b> means no test counts,
-        also when mocked ones exist. When some test files could not be read, a note under the summary says
-        the test results may be incomplete.</p>
+        mocks the second hop, so it does not run the real path, or calls the handler directly, so it does
+        not run the program. <b>no e2e test</b> means no test counts, also when such tests exist. When some
+        test files could not be read, a note under the summary says the test results may be incomplete.</p>
     </section>
 
     <section id="help-full-walkthrough" class="help-sec" tabindex="-1" aria-labelledby="help-h-full-walkthrough">

@@ -1451,7 +1451,7 @@ test("a broken trace says after which hop it stopped and why, and keeps the hops
   assert.equal(L.breakReasonText("some_new_code"), "some_new_code");
 });
 
-test("e2e tests: counted ones, mocked ones not counted, and \"no e2e test\" when none counts", () => {
+test("e2e tests: counted ones, mocked ones and direct calls not counted, and \"no e2e test\" when none counts", () => {
   const lines = (id) => L.pathTestLines(L.pathCardModel(pathById(id), new Map()).tests);
   assert.deepEqual(lines("p1"), [
     { kind: "counted", text: "✓ tests/e2e/test_run.py::test_run_cli (cli_argv)" },
@@ -1461,10 +1461,15 @@ test("e2e tests: counted ones, mocked ones not counted, and \"no e2e test\" when
   assert.equal(p3.tests.noE2e, true);
   assert.deepEqual(lines("p3"), [
     { kind: "none", text: "no e2e test" },
-    { kind: "mocked", text: "○ tests/e2e/test_refund.py::test_refund_mocked — not counted (patched at tests/e2e/test_refund.py:9)" }]);
+    { kind: "mocked", text: "○ tests/e2e/test_refund.py::test_refund_mocked — not counted (patched at tests/e2e/test_refund.py:9)" },
+    { kind: "direct", text: "○ tests/unit/test_refund.py::test_refund_handler — not counted (calls the handler directly)" }]);
   const p4 = L.pathCardModel(pathById("p4"), new Map());
   assert.equal(p4.tests.noE2e, true);
-  assert.deepEqual([p4.tests.counted, p4.tests.mocked], [[], []]);
+  assert.deepEqual([p4.tests.counted, p4.tests.mocked, p4.tests.direct], [[], [], []]);
+  // A paths.json written before direct_calls existed has no such key: the card lists none.
+  const older = structuredClone(pathById("p3"));
+  delete older.tests.direct_calls;
+  assert.deepEqual(L.pathCardModel(older, new Map()).tests.direct, []);
   assert.deepEqual(lines("p4"), [{ kind: "none", text: "no e2e test" }]);
   for (const id of ["p1", "p2", "p5", "p6"]) assert.equal(L.hasCountedE2e(pathById(id)), true, id);
   for (const id of ["p3", "p4"]) assert.equal(L.hasCountedE2e(pathById(id)), false, id);
