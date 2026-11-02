@@ -140,7 +140,10 @@ must agree:
    `main`. Never move an existing tag.
 
 Steps 1 and 2 are enforced: the **`changelog-gate`** CI job fails a pull
-request that changes a plugin without both. Step 3 is by hand at release time.
+request that changes a plugin without both. Step 3 is the merger's job: after
+merging a PR that bumps a plugin version, whoever merged it (human or agent)
+tags `<plugin>@<version>` on the merge commit and pushes the tag in the same
+session.
 
 The root [`CHANGELOG.md`](CHANGELOG.md) is an **index only** — eight
 independent release lines interleaved in one file would say less than eight
