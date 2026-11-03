@@ -117,7 +117,10 @@ never removed. A PR whose branch lives in a fork is refused.
 4. **Code.** Each `code_fix` is one block in `findings-r<N>-tasks.md`, run
    through buildme's TDD engine: `test(block-<k>)` then `impl(block-<k>)`
    commits, with the RED gate, test hashing, refactor discard and per-block
-   review. Each block also asks the fixer to search the same function, its
+   review. The engine skips its baseline run (`BASELINE SKIPPED`) when a
+   passed whole run is recorded at exactly the PR's head with the same test
+   command, and only the round's own record files were committed since.
+   Each block also asks the fixer to search the same function, its
    other branches, its callers and the rest of the PR's diff for the same
    mistake, fix each one, and end its report with a `SEARCHED:` section; the
    reply quotes it. When the review listed other places with the same defect
@@ -144,7 +147,10 @@ never removed. A PR whose branch lives in a fork is refused.
    `findings-r<N>-self-check.md`, committed with the tasks file, and fixed as
    one more block through the same engine. That block skips the whole-change
    refactor and mutation testing, which already ran for the round.
-5. **Publish.** Push, then the PR description's "Review rounds" section
+5. **Publish.** The final verification reuses the pass of the round's
+   end-of-build run (`tdd.whole_suite: end`, `VERIFY REUSED`) when nothing
+   changed after it, and runs the whole test command otherwise. Push, then
+   the PR description's "Review rounds" section
    through `/multiplai-dev:pr edit` (it also quotes a problem the check of
    the round's fixes found, and whether that block fixed it), then one reply per acted-on thread (the
    fixing commit, or why nothing changed; for a requirements change, the

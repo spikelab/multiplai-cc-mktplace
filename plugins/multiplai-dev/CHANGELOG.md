@@ -15,6 +15,63 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.155.0] - 2026-11-03
+
+### Added
+
+- **buildme**: `tdd.setup_command` in `specs/config.yaml` runs a command of
+  yours once per buildme process (a build, a resume, a fixer round), before
+  its first test run. For example, `tdd: {setup_command: "./scripts/reset-test-db.sh"}`
+  recreates the worktree's test database on every launch. A failure stops
+  the build (`STOP phase=SETUP`) or parks the fixer with `tdd.setup_command
+  failed: <reason>`. Unset, nothing new runs.
+
+### Changed
+
+- **buildme-findings** and **buildme epics**: a fixer round no longer runs
+  the whole test suite as its baseline when a passed whole run is already
+  recorded at the PR's head, with the same test command and `tdd.parallel`,
+  and only the round's own record files committed since. It logs
+  `BASELINE SKIPPED — the whole test command passed at <sha8> (<file>)`. That
+  saves one whole run per round. A build's own baseline still runs.
+- **buildme-findings**: a fixer round that parks on a red baseline now says
+  why in its reason (the baseline gate's first line), so the epic summary
+  shows it.
+- **buildme epics**: a fixer that parked for an environment reason is run
+  again by the next epic run, at the same PR head. The reasons are a failed
+  `tdd.setup_command`, and network or git/gh transport failures such as
+  `Could not resolve host`, `HTTP 502` or an expired token (`Bad
+  credentials`). It runs again at most once per run and `epic.env_relaunches`
+  times in all (default `2`; `0` turns it off). Every other park is a
+  decision and stays parked, as before: a red baseline, a test command that
+  timed out, a turn cap, spec issues, ingestion errors. `runs/<NN>/summary.json`
+  gives each parked child's `park_kind` (`environment` or `decision`).
+- **buildme** with `tdd.whole_suite: end`: when only the docs step's files
+  and the change's spec dir changed after the end-of-build run passed, the
+  build publishes without a second whole run. It logs `VERIFY REUSED — the
+  whole test command passed at <sha8> (end of build); since then only <n>
+  docs/spec files changed`. A fixer round does the same when nothing changed
+  after its end-of-build run. Any other changed file, `specs/config.yaml`
+  included, runs the final verification as before.
+- **buildme** with `tdd.whole_suite: end`: when the end-of-build run is red
+  with the whole-change refactor at HEAD, buildme now runs only the failed
+  tests without the refactor. If one still fails, the refactor did not cause
+  it: buildme puts it back, logs `REFACTOR_ALL KEPT — the same tests fail
+  without it`, and sends the first run's failures to the fixers, saving a
+  whole run. If they pass, or cannot run on their own, the refactor is
+  discarded as before.
+
+### Known limits
+
+- A skipped baseline moves a failure caused outside the code (a stale test
+  database, a time-of-day test) to the end-of-build run, where up to three
+  fixers try to fix it in code before the round parks. A
+  `tdd.setup_command` that resets the test database removes the database case.
+- The reused end-of-build pass does not re-check a test that reads the docs
+  or spec files changed after it.
+- A test command timeout is a decision, so the epic does not run that fixer
+  again. Why one 1800 s timeout ran for about 7.5 hours is not yet known.
+
 ## [0.154.2] - 2026-11-02
 
 ### Fixed

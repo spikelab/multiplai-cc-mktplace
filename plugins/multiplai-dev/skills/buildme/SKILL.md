@@ -42,6 +42,9 @@ consumes the revision that passed final checks.
   content writer. The checkpoint records the command, parallel-test setting,
   planning revision, Git HEAD, index and content fingerprint. Missing commands,
   unavailable evidence, timeouts, or tests that change tracked inputs fail the build.
+  With `tdd.whole_suite: end`, a pass of the end-of-build run counts when only
+  the docs step's files and the change's spec dir changed after it
+  (`VERIFY REUSED`, in [The refactor phase](#the-refactor-phase)).
 - `RESULT:SUCCESS:spec-only` means planning completed; it says nothing about code
   verification. `VERIFICATION:passed` and `PUBLICATION:published|skipped|failed`
   distinguish verified code from push/PR delivery. A publication failure keeps a
@@ -130,6 +133,7 @@ buildme ignores them.
 | `planning.analysis` | `full` / `component` | `full` | the design prompt: `full` inlines the whole `codebase-analysis.md`. `component` inlines only the facts about the files the component's `plan.md` and specs name, every convention, and no "Not analysed" list. A component whose plan and specs name no file gets only the conventions. Changing it does not regenerate a design already written |
 | `tdd.narrow_commands` | list of `dir`, `command`, optional `runner` (`pytest` / `jest`) | none | the TDD loop, for a repo whose tests sit in several directories with different runners: each entry is narrowed to the block's own tests in its own directory (`cd backend && pytest -q tests/test_x.py`); a directory with no changed file is left out, and when every one is, the whole `tdd.test_command` runs. Example and rules: [Repos with tests in several directories](scripts/README.md#repos-with-tests-in-several-directories) |
 | `tdd.db_check` | a command | none | the check before the first paid call: run from the project (only with `--trust-repo`); a non-zero exit stops the build with `PREFLIGHT:FAILED:test-db:<reason>` before any model call (see [The check before the first paid call](#the-check-before-the-first-paid-call)) |
+| `tdd.setup_command` | a command | none | every buildme process (a build, a resume, a fixer round): run from the project once per process, before its first test run (the TDD engine's baseline, or a final verification that runs), with the trust guard and `tdd.test_timeout` of `tdd.test_command`, e.g. a script that recreates the worktree's test database. It runs even when a fixer round skips its baseline. A non-zero exit stops the build with `STOP phase=SETUP`, and a fixer round with `tdd.setup_command failed: <reason>`. buildme runs only the command you set; unset, nothing runs |
 | `tdd.whole_suite` | `per_block` / `end` | `per_block` | the TDD loop: `per_block` runs the whole `tdd.test_command` in every block's gates. `end` runs only each block's own tests there, and the whole command once after the last block (see [The refactor phase](#the-refactor-phase)) |
 | `tdd.context` | `full` / `sliced` | `full` | the TDD loop: what each block's test writer, implementer and refactorer get. `full` gives the whole design, every requirement, the rubric and the `memory_files` (core, stack, additional). `sliced` gives the design sections whose heading, or a heading inside them, the block's name or tasks name (the whole design when they name none), the requirements of the capabilities and requirements its `Satisfies:` line names (all of them when it names none), the rubric only to a reviewer role, and only the memory files in `memory_files.tdd`. Changing it between a stop and a resume changes no plan revision; the resumed block uses the new value |
 | `memory_files.tdd` | list of memory file names | `[]` | the TDD loop, with `tdd.context: sliced` only: the memory files its agents get. It sits under `memory_files`, so editing it after planning stops a build in TDD with `Planning inputs changed after implementation` |
@@ -137,6 +141,7 @@ buildme ignores them.
 | `findings.authors` | `collaborators` or a list of GitHub logins | `collaborators` | `/multiplai-dev:buildme-findings`: whose PR comments are acted on. `collaborators` means anyone whose `role_name` on the repo is `admin`, `maintain` or `write` |
 | `findings.max_rounds` | int | `3` | `/multiplai-dev:buildme-findings`: fix-and-re-review rounds before it stops (`findings --max-rounds` overrides it) |
 | `findings.allow_bots` | list of bot logins | `[]` | `/multiplai-dev:buildme-findings`: bots whose comments are acted on; any other bot's are listed and skipped |
+| `epic.env_relaunches` | int | `2` | an epic: how many times, in all, later runs run again a child's fixer that parked for an environment reason (see "Fixing the children's PRs" in [Epic builds](#epic-builds-a-parent-and-its-children)); `0` never |
 | `mutation.enabled` / `mutation.min_score` | bool / float | `true` / `0.8` | the mutation-testing step; `timeout` and `max_mutants` too (see [Mutation testing](#mutation-testing)) |
 | `models.<key>` | a step, a stage (`spec`, `agent`, `review`) or `default`, set to a model spec | `{}` | every model call; see [Tuning model and effort](#tuning-model-and-effort-multiplaiconf) |
 | `tier` | `advanced` \| `standard` | unset | the tier, only when `models.default` is not a Claude model |
@@ -217,6 +222,16 @@ gates skipped. Every TDD run writes a `WARNING` saying so to
 `build-progress.md`, the baseline is logged `SKIPPED`, not `PASSED`, and the
 PR body gets a "Warning: no tests ran" section. `tdd.enabled: false` never
 turns the gates off when there is a test command.
+
+**A fixer round's baseline.** A `findings` round (`/multiplai-dev:buildme-findings`,
+or an epic's fixer) skips its baseline run when a passed whole run is already
+recorded at the PR's head. The record comes from `.findings-state.json`,
+`.build-state.complete.json` or `.build-state.json` in the change dir. It must
+have been made at exactly HEAD, with the same `tdd.test_command` and
+`tdd.parallel`, on a clean tree whose content still matches. Since then only
+the round's own record files may have been committed. The round then logs
+`BASELINE SKIPPED — the whole test command passed at <sha8> (<file>)`. In
+every other case the baseline runs. A build's own baseline always runs.
 
 A brand-new project has no tests yet. When bootstrap writes the starter
 `specs/config.yaml` and finds no test command, it writes
@@ -494,7 +509,14 @@ the whole-change refactor's checks run only the tests of what the block (or
 the change) touched. The whole `tdd.test_command` runs once after the
 whole-change refactor, before mutation testing. When that run is red it first
 throws away the `refactor: simplify across blocks` commit if HEAD is that
-commit, then makes up to three fix attempts (the last one escalated), each
+commit. When the failed tests can be run on their own (`tdd.narrow_commands`,
+or a pytest or node `tdd.test_command`), it runs only those tests without the
+refactor, once per end run. If one of them still fails, the refactor did not
+cause it: buildme puts the refactor back, logs `REFACTOR_ALL KEPT — the same
+tests fail without it (<k> of <n>); fixing them with the refactor in place`,
+and hands the first run's failures to the fixers. If they pass, or the check
+cannot run, the refactor stays discarded and the whole command runs again, as
+before. Then it makes up to three fix attempts (the last one escalated), each
 followed by a whole run. A green fix lands as `fix: end-of-build test suite`.
 If it is still red, the tree goes back to where the run started and the build
 fails, naming two files in `build-progress.md`: the last run's output and the
@@ -505,6 +527,16 @@ setting, every failed whole run writes its command, exit code, failing test
 ids and last 400 lines of output to
 `<change dir>/.buildme-test-runs/<UTC stamp>-<label>.log`, and the log line
 names that file. buildme never commits or cleans that folder.
+
+When that end run passes on a clean tree, buildme records its head. The
+final verification after the docs step then runs no test when every file
+changed since that head is a doc the docs step wrote or a file under the
+change's spec dir (before or after it is archived; `specs/config.yaml` does
+not count), with the same command and `tdd.parallel`. It logs `VERIFY REUSED —
+the whole test command passed at <sha8> (end of build); since then only <n>
+docs/spec files changed`. Any other changed file runs the final verification
+as before. A fixer round reuses its own end run only when nothing changed
+after it. Under `per_block` the final verification always runs.
 
 Every run of the test command runs in a process group of its own, with its
 output streamed to a file in that folder (`<stamp>-<label>-run<k>.out`). The
@@ -881,7 +913,8 @@ next build would fail the same way. Before a child is parked or failed, the run 
 open PR from the child's branch into the feature branch that a build outside
 the epic opened (`gh pr list --head <branch> --base <feature branch>`): with
 one, the child is built with that PR, and its records are left as they are; a
-review's or fixer's park stays. When that lookup fails, the child is
+review's park stays, and so does a fixer's, except one parked for an
+environment reason ("Fixing the children's PRs" below). When that lookup fails, the child is
 `unknown` and is not launched until a lookup answers. A component built by
 hand, `build --change <epic>/<id>`, builds as the epic's child
 (`--epic-child --branch <feature branch>`, the branch the epic's
@@ -916,7 +949,8 @@ a version, CHANGELOG or lockfile conflict there costs one agent call, with
 Read, Edit and Bash in the child's worktree, counted against `epic.max_usd`) and
 `epic.max_usd` (one ceiling for the whole epic, default none; each child keeps
 its own `budget.max_usd` too), `epic.accept_size` (default `false`) and
-`epic.max_child_attempts` (default `2`), both above. `epic.review_dimensions`
+`epic.max_child_attempts` (default `2`), both above, and `epic.env_relaunches`
+(default `2`, below). `epic.review_dimensions`
 (a list, for example `[diff-bugs, callers]`) and `epic.review_finder_model` (a
 model name) choose the dimension finders and their model for each review of a
 child's PR, passed as the review's `--dimensions` and `--finder-model`; unset,
@@ -1162,7 +1196,28 @@ child parks with the blockers, and each later run parks it again until a new
 commit is pushed. `FINDINGS:FAILED:<step>:<reason>` (also
 when found in the log of a fixer whose end was not recorded), any
 other failing exit of the fixer, a failed post, or a review folder with no
-`findings.json` parks the child with the reason, and it stays parked. On a
+`findings.json` parks the child with the reason, and it stays parked, unless
+the fixer parked for an environment reason. Each fix result saves its park's
+`park_kind` (`environment` or `decision`) and `park_cause`, and a parked
+child's entry in `runs/<NN>/summary.json` names the `park_kind`. Two classes
+of reason count as environment, matched without case: `setup-command`
+(`tdd.setup_command failed`) and `network` (`EAI_AGAIN`, `Could not resolve
+host`, `Temporary failure in name resolution`, `Connection reset by peer`,
+`Connection timed out`, `Failed to connect to`, `TLS handshake timeout`,
+`HTTP 502`, `HTTP 503`, `HTTP 504`, `remote: Internal Server Error`, and the
+expired token's `Invalid username or token` and `Bad credentials`). The next
+run, not the same one, runs that fixer again as it was launched, when the
+PR's head is still the one it parked at and the epic is under budget. It
+logs `EPIC child <id>: its fixer parked for an environment reason (<cause>);
+running it again (<n> of <N>)`. That happens at most once per run and
+`epic.env_relaunches` times in all (default `2`; `0` never). At the cap the
+child parks with `<reason> (environment: <cause>; relaunched <N> times,
+epic.env_relaunches)`. When the head moved, the new head is reviewed instead.
+Every other reason is a decision and stays parked: a red baseline, a test
+command that timed out (`Test command failed to run: timed out after`), a red
+final verification, a turn cap, `untrusted`, the budget, spec issues and
+ingestion errors. A record written before 0.155.0 is classified from its
+`parked` reason. On a
 re-run, a head whose post succeeded runs the fixer, not a second post or a
 review; a post or fixer an earlier run left running is waited for (never two
 at once), then a post runs again, and a fixer runs again with the `--max-rounds` it
