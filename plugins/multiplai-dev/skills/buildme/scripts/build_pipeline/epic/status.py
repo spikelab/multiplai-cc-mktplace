@@ -4,7 +4,8 @@ from disk (plan-factory-merged-2026-10-29.md, item 69).
 It prints one JSON object per child, one per line: `state`, `head`,
 `target`, `pr`, `blocker`, `next`, `spend` (`known_usd`, and `unknown`: the
 parts of its spend no record holds), the board moves not sent yet
-(`board_unsent`), the live process if any, and `epic_running`. It launches
+(`board_unsent`), the live process if any, and `epic_running`; a parked
+child whose last fix parked also gets that park's `park_kind`. It launches
 nothing and writes nothing. It never takes the epic lock: it reads the
 holder `lock.hold` wrote into `.lock` and asks `ps` whether that pid is a
 live `build_pipeline` on this host, so a running epic, or one starting while
@@ -35,7 +36,7 @@ from pathlib import Path
 from multiplai_core.paths import get_paths
 
 from .. import git_ops
-from . import coordinator, outbox, records, spend, store
+from . import coordinator, fix, outbox, records, spend, store
 
 # What the next epic run, or a person, does for a child in each state.
 _NEXT = {
@@ -265,7 +266,10 @@ def child_status(
     named = [f"{d} ({statuses.get(d, '?')})" for d in waits_on]
     blocker = reason or (f"depends on {', '.join(named)}" if named else "")
     change = _change(tries, epic.name, cid)
+    fixes = [a for a in tries if a.kind == "fix"]
+    park = fix.park_of(fixes[-1].result) if fixes and state == "parked" else None
     return {
+        **({"park_kind": park[0]} if park else {}),
         "child": cid,
         "state": state,
         "head": _head(tries),

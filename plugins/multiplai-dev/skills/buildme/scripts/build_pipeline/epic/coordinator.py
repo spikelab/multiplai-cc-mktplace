@@ -488,6 +488,7 @@ class Child:
     merge_stop: stop_record.StepStop | None = None  # PR E, item 39
     merge_park: str = ""  # why the merge step parked it; kept until <W> is clean
     head: str | None = None  # its PR's head at the last read in this run
+    env_relaunched: bool = False  # its environment-parked fixer ran again in this run
 
 
 @dataclass
@@ -885,9 +886,8 @@ class Coordinator:
                         c.reason,
                     )
                     c.status, c.reason = "pending", ""
-        for a in records.attempts(
-            self.epic_dir
-        ):  # a review's or fix's park stays (C.S6, C.S12, D2.S6)
+        every = records.attempts(self.epic_dir)
+        for a in every:  # a review's or fix's park stays (C.S6, C.S12, D2.S6)
             c = self.children.get(a.child)
             if (
                 c is not None
@@ -899,7 +899,24 @@ class Coordinator:
                 # unchanged one parks again unless every id was accepted.
                 and not a.result.get("open_ids")
             ):
-                c.status, c.reason = "parked", a.result["parked"]
+                why = a.result["parked"]
+                kind, cause = fix.park_of(a.result)
+                if a.kind == "fix" and kind == "environment":
+                    # Item 4 of plan-buildme-epic-speedups-2026-11-03.md: an
+                    # environment park is left to `_fix_pending` while the
+                    # child's relaunches are under `epic.env_relaunches`
+                    # (S9, S13), and once a later relaunch ran it again.
+                    times = self._env_relaunches(c.id, every)
+                    if times < self.settings.env_relaunches or any(
+                        b.child == a.child
+                        and b.kind == "fix"
+                        and b.n > a.n
+                        and b.started.get("env_relaunch")
+                        for b in every
+                    ):
+                        continue
+                    why = fix.env_cap_reason(why, cause, times)
+                c.status, c.reason = "parked", why
         for c in self.children.values():  # S9: its fixer was launched again once
             fixes = [
                 a
@@ -1679,6 +1696,17 @@ class Coordinator:
         first, and stops at the count."""
         return fix.rounds_started(project, self.change(c.id)) + 1
 
+    def _env_relaunches(
+        self, cid: str, every: list[records.Attempt] | None = None
+    ) -> int:
+        """How many of *cid*'s fixers were environment relaunches: `fix`
+        records whose started record holds `env_relaunch`."""
+        return sum(
+            1
+            for a in (records.attempts(self.epic_dir) if every is None else every)
+            if a.child == cid and a.kind == "fix" and a.started.get("env_relaunch")
+        )
+
     async def _run_fix(
         self,
         c: Child,
@@ -1688,6 +1716,7 @@ class Coordinator:
         *,
         final: bool = False,
         from_review: str | None = None,
+        env_relaunch: int | None = None,
     ) -> bool:
         """32.2: run `findings` on *c*'s PR. True when it exited 0, so the review
         step reads the PR again; else the child is parked (`FINDINGS:FAILED`, or
@@ -1705,7 +1734,8 @@ class Coordinator:
         whose result keeps `final_head`, the HEAD it left in `<P>`.
         *from_review*: the review folder whose blockers it acts on; a fixer
         that ends `FINDINGS:INGESTION_ERROR` leaves the child `failed` with
-        the ids (S9), not launched again in this run."""
+        the ids (S9), not launched again in this run. *env_relaunch*: the
+        number of this environment relaunch, saved in its started record."""
         project = self._child_project(c)
         change = self.change(c.id)
         if not await self._fixer_gone(c, number):
@@ -1731,7 +1761,13 @@ class Coordinator:
             from_review=from_review,
         )
         attempt = records.start(
-            self.epic_dir, "fix", c.id, argv, head_sha=head, pr_round=c.pr_round
+            self.epic_dir,
+            "fix",
+            c.id,
+            argv,
+            head_sha=head,
+            pr_round=c.pr_round,
+            extra={"env_relaunch": env_relaunch} if env_relaunch else None,
         )
         if left is not None:
             self.shares[c.id] = Share(max(left, 0.0), self._pr_reviews(c))
@@ -1804,7 +1840,7 @@ class Coordinator:
             log.warning("EPIC child %s: %s", c.id, why)
             return False
         why = fix.failed_reason(out) or f"the fixer exited {code}: {review.tail(out)}"
-        records.finish(attempt, code, interrupted=False, extra={"parked": why})
+        records.finish(attempt, code, interrupted=False, extra=fix.park_fields(why))
         self._park(c, why)
         return False
 
@@ -1959,6 +1995,9 @@ class Coordinator:
                 final=fix.is_final(argv),
                 from_review=fix.saved_from_review(argv),
             )
+        park = fix.park_of(fixes[-1].result) if fixes else None
+        if park is not None and park[0] == "environment":
+            return await self._env_relaunch(c, fixes[-1], park[1], number, head)
         if not fixes or (
             fixes[-1].result is not None and not fixes[-1].result.get("interrupted")
         ):
@@ -1969,7 +2008,7 @@ class Coordinator:
         why = fix.failed_reason(review.log_text(last.log))
         if why:  # it ended refusing or failing: running it again repeats that step
             code = (last.result or {}).get("exit_code")
-            records.finish(last, code, interrupted=False, extra={"parked": why})
+            records.finish(last, code, interrupted=False, extra=fix.park_fields(why))
             self._park(c, why)
             return False
         if last.result is None:
@@ -1993,6 +2032,47 @@ class Coordinator:
             fix.saved_rounds(argv),
             final=final,
             from_review=fix.saved_from_review(argv),
+        )
+
+    async def _env_relaunch(
+        self, c: Child, last: records.Attempt, cause: str, number: int, head: str
+    ) -> bool | None:
+        """Item 4 of plan-buildme-epic-speedups-2026-11-03.md: *last*, a fixer
+        parked for an environment reason (*cause*), runs again as it was
+        launched, its started record holding `env_relaunch: <n>`, once per run
+        (S12) and `epic.env_relaunches` times in all (S11, S13). None when the
+        PR head moved since it parked, so the new head is reviewed (S14)."""
+        if last.started.get("head_sha") != head:
+            return None
+        why = last.result["parked"]
+        if c.env_relaunched:  # the next run runs it again, not this one
+            self._park(c, why)
+            return False
+        times, cap = self._env_relaunches(c.id), self.settings.env_relaunches
+        if times >= cap:
+            self._park(c, fix.env_cap_reason(why, cause, times))
+            return False
+        if self._over_budget():
+            c.status = "built"
+            return False
+        log.info(
+            "EPIC child %s: its fixer parked for an environment reason (%s); "
+            "running it again (%d of %d)",
+            c.id,
+            cause,
+            times + 1,
+            cap,
+        )
+        c.env_relaunched = True
+        argv = last.started.get("argv") or []
+        return await self._run_fix(
+            c,
+            head,
+            number,
+            fix.saved_rounds(argv),
+            final=fix.is_final(argv),
+            from_review=fix.saved_from_review(argv),
+            env_relaunch=times + 1,
         )
 
     # -- merging a reviewed PR (PR E) ---------------------------------------------
@@ -3178,6 +3258,18 @@ class Coordinator:
             self.tickets[cid] = ticket
         return self.tickets[cid]
 
+    def _park_kind(self, c: Child) -> dict:
+        """A parked child's `park_kind`, when its last fix's result is a park."""
+        if c.status != "parked":
+            return {}
+        fixes = [
+            a
+            for a in records.attempts(self.epic_dir)
+            if a.child == c.id and a.kind == "fix"
+        ]
+        park = fix.park_of(fixes[-1].result) if fixes else None
+        return {"park_kind": park[0]} if park else {}
+
     def _summary(self, run_dir: Path) -> Path:
         children = [
             {
@@ -3186,6 +3278,7 @@ class Coordinator:
                 "pr": c.pr,
                 "rounds": c.pr_round or 0,
                 "reason": c.reason,
+                **self._park_kind(c),
             }
             for cid, c in self.children.items()
         ]

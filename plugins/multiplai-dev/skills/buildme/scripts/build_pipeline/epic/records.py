@@ -113,8 +113,10 @@ def start(
     *,
     head_sha: str | None = None,
     pr_round: int | None = None,
+    extra: dict | None = None,
 ) -> Attempt:
-    """Write the started record (and an empty log) for the next free number."""
+    """Write the started record (and an empty log) for the next free number,
+    plus *extra* (a relaunched fixer's `env_relaunch`)."""
     root = Path(epic_dir) / AGENTS_DIR
     root.mkdir(parents=True, exist_ok=True)
     n = max((a.n for a in attempts(epic_dir)), default=0) + 1
@@ -125,6 +127,7 @@ def start(
         "argv": list(argv),
         "pr_round": pr_round,
         "head_sha": head_sha,
+        **(extra or {}),
         "at": _now(),
     }
     base.with_name(base.name + ".log").touch()

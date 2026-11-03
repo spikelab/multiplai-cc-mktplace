@@ -582,6 +582,8 @@ class EpicSettings:
     `accept_size`: every child launch adds `--accept-size`, and a child
     parked on `SPLIT:REQUIRED` is launched again. `max_child_attempts`:
     launches of a failed child in one run.
+    `env_relaunches`: how many times, in all, later runs run again a fixer
+    that parked for an environment reason (`epic.fix.park_kind`); 0 never.
     `review_dimensions` and `review_finder_model`: the dimension finders and
     their model for each review of a child's PR, passed as the review's
     `--dimensions` and `--finder-model` (`epic.review.review_argv`); None
@@ -600,6 +602,7 @@ class EpicSettings:
     round_worth: Literal["breaks", "any"] = "breaks"
     accept_size: bool = False
     max_child_attempts: int = 2
+    env_relaunches: int = 2
     accepted_findings: dict[str, dict[str, str]] = field(default_factory=dict)
     review_dimensions: list[str] | None = None
     review_finder_model: str | None = None
@@ -809,6 +812,19 @@ def discover_test_command(project_dir: Path | str) -> tuple[str, str] | None:
     return None
 
 
+def parse_setup_command(value: object) -> str:
+    """`tdd.setup_command` from config.yaml, stripped; unset or not a
+    string is "" (nothing runs)."""
+    if isinstance(value, str):
+        return value.strip()
+    if value is not None:
+        log.warning(
+            "tdd.setup_command in config.yaml is not a command (%r) — ignoring it",
+            value,
+        )
+    return ""
+
+
 def parse_test_timeout(value: object) -> int:
     """`tdd.test_timeout` from config.yaml as whole seconds above 0; unset is
     `gates.DEFAULT_TEST_TIMEOUT`, and anything else warns and is that too."""
@@ -1007,6 +1023,10 @@ class BuildConfig:
     # call (`preflight.py`); exit 0 means the test database answers. Empty:
     # not checked.
     db_check: str = ""
+    # tdd.setup_command: a command run from the project once per buildme
+    # process, before its first test run (`gates.run_setup_once`), e.g. to
+    # recreate the worktree's test database. Empty: nothing runs.
+    setup_command: str = ""
     # tdd.test_writer_max_turns / tdd.mutation_test_writer_max_turns: the turn
     # cap of the block test writer and of the mutation round's test writer.
     test_writer_max_turns: int = 30
@@ -1591,6 +1611,7 @@ class BuildConfig:
                 "tdd.db_check in config.yaml is not a command (%r) — ignoring it",
                 db_check,
             )
+        self.setup_command = parse_setup_command(tdd.get("setup_command"))
         for key in ("test_writer_max_turns", "mutation_test_writer_max_turns"):
             if key in tdd:
                 setattr(self, key, _cfg_int(tdd[key], f"tdd.{key}", getattr(self, key)))
@@ -1997,6 +2018,11 @@ class BuildConfig:
             max_child_attempts=_cfg_int(
                 epic_cfg.get("max_child_attempts", 2), "epic.max_child_attempts", 2
             ),
+            # 0 turns relaunching off, which `_cfg_int` (positive ints) refuses.
+            env_relaunches=0
+            if epic_cfg.get("env_relaunches") == 0
+            and not isinstance(epic_cfg.get("env_relaunches"), bool)
+            else _cfg_int(epic_cfg.get("env_relaunches", 2), "epic.env_relaunches", 2),
             accepted_findings=_accepted_findings(epic_cfg.get("accepted_findings")),
             review_dimensions=_cfg_names(
                 epic_cfg.get("review_dimensions"), "epic.review_dimensions"
@@ -2038,6 +2064,7 @@ class BuildConfig:
                 tdd = data["tdd"]
         if tdd.get("test_command"):
             self.test_command = tdd["test_command"]
+        self.setup_command = parse_setup_command(tdd.get("setup_command"))
         self.tdd_enabled = parse_tdd_enabled(tdd.get("enabled", True))
         self._discover_test_command()
 
