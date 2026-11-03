@@ -1080,6 +1080,8 @@ def failed_tests_command(config, ids: list[str]) -> str | None:
         for i, chosen_ids in sorted(chosen.items()):
             entry = entries[i]
             runner = _entry_runner(entry, project_dir)
+            if _names_tests(entry.command, runner, project_dir / entry.dir):
+                return None
             command = narrow_command(entry.command, chosen_ids, runner)
             if command == entry.command:
                 return None
@@ -1087,7 +1089,16 @@ def failed_tests_command(config, ids: list[str]) -> str | None:
         joined = _join(parts)
         return joined if len(parts) == 1 else f"sh -c {shlex.quote(joined)}"
     runner = runner_of(config.test_command or "", project_dir)
-    if runner is None:
+    if runner is None or _names_tests(config.test_command, runner, project_dir):
         return None
     command = narrow_command(config.test_command, ids, runner)
     return None if command == config.test_command else command
+
+
+def _names_tests(command: str, runner: str | None, cwd: Path) -> bool:
+    """True when appending ids to *command* would not narrow it: a node
+    command that already filters its tests, or a pytest command whose
+    collection `_pytest_collects` cannot tell (it names paths, for one)."""
+    if runner == NODE:
+        return _node_names_tests(command, cwd)
+    return _pytest_collects(command, cwd) is None

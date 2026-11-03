@@ -4760,13 +4760,28 @@ def _end_suite_gate(
         )
         state.verification = gate.model_dump()
         return gate
-    return integration_gate(
+    before = _files_now(config)
+    gate = integration_gate(
         config.test_command,
         config.project_dir,
         parallel=config.parallel_tests,
         timeout=config.test_timeout,
         failure_log=failure_log,
     )
+    # `_end_suite_pass` records a pass only for files the run left as it
+    # found them.
+    gate.metadata["files_unchanged"] = before is not None and before == _files_now(
+        config
+    )
+    return gate
+
+
+def _files_now(config: BuildConfig) -> str | None:
+    try:
+        return files_digest(config.test_command, config.project_dir)
+    except (OSError, RuntimeError, ValueError) as e:
+        log.warning("Could not read the files the end-of-build run tests: %s", e)
+        return None
 
 
 def _write_fix_attempts_diff(config: BuildConfig, checkpoint: str) -> str | None:
@@ -5082,15 +5097,11 @@ async def _run_end_suite(
             )
         fixed = True
 
-    try:
-        passed_files = (
-            None
-            if standalone
-            else files_digest(config.test_command, config.project_dir)
-        )
-    except (OSError, RuntimeError, ValueError) as e:
-        log.warning("Could not read the files the end-of-build run tested: %s", e)
-        passed_files = None
+    passed_files = (
+        _files_now(config)
+        if not standalone and gate.metadata.get("files_unchanged")
+        else None
+    )
     if fixed:
         after = _snapshot_all_test_files(config, state)
         if es.test_file_hashes is None or after is None:

@@ -352,6 +352,27 @@ class TestRecording:
         }
 
     @pytest.mark.asyncio
+    async def test_a_run_that_changes_the_files_it_tests_records_nothing(
+        self, end_ready
+    ):
+        """The passing run rewrites a tracked file as it ends; the fix commit
+        then takes that change in, so no run tested what is committed."""
+        p = end_ready()
+        real = tdd_engine.integration_gate
+        runs = []
+
+        def gate(*args, **kwargs):
+            result = real(*args, **kwargs)
+            runs.append(result.passed)
+            if result.passed:
+                (p.dir / "status.txt").write_text("green\nrewritten by the run\n")
+            return result
+
+        result, _ = await _end(p, integration_gate={"side_effect": gate})
+        assert result is True and runs[-1] is True
+        assert _saved_tdd(p).end_suite_pass is None
+
+    @pytest.mark.asyncio
     async def test_a_pass_with_no_fix_records_the_current_head(self, end_ready):
         p = end_ready(red=False)
         head = _git(p.dir, "rev-parse", "HEAD")
@@ -708,6 +729,23 @@ class TestOrchestrator:
         `_reused_end_suite` directly.)"""
         build.save()
         _commit(build.dir, {rel: "x: 1\n"}, "outside")
+        current = gates.verification_inputs(
+            build.config.test_command, build.dir, parallel=build.config.parallel_tests
+        )
+        change = build.config.change_dir
+        assert (
+            orchestrator._reused_end_suite(
+                build.config, build.state, [change, change], current
+            )
+            is None
+        )
+
+    def test_a_source_file_the_docs_step_reported_is_not_allowed(self, build):
+        """The docs agent can write any file: a reported path counts only
+        when it is a document."""
+        build.save()
+        build.state.docs_impact = ["app.py"]
+        _commit(build.dir, {"app.py": "x = 2\n"}, "docs step edited code")
         current = gates.verification_inputs(
             build.config.test_command, build.dir, parallel=build.config.parallel_tests
         )

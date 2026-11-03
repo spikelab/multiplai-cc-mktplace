@@ -680,7 +680,8 @@ def run_setup_once(
     """Run `tdd.setup_command` from *project_dir* the first time this process
     asks for it (per resolved *project_dir*), through `run_test_suite`, so it
     gets the same trust guard and `tdd.test_timeout`. Empty passes at once.
-    A failure is `SETUP_FAILED: <reason>`, its output written
+    A command that leaves a clean tree dirty fails. A failure is
+    `SETUP_FAILED: <reason>`, its output written
     with `failure_log_path(change_dir, "setup")`; a failed command runs again
     the next time it is asked for. buildme saves nothing for it: a new
     process runs it again (row S16)."""
@@ -689,13 +690,19 @@ def run_setup_once(
     key = str(Path(project_dir).resolve())
     if key in _SETUP_DONE:
         return GateResult(passed=True, reason="tdd.setup_command already ran")
+    from . import git_ops
+
     log_path = failure_log_path(change_dir, "setup") if change_dir else None
+    clean = git_ops.tree_is_clean(project_dir)
     try:
         exit_code, output = run_test_suite(
             setup_command, Path(project_dir), timeout, log_path
         )
     except RunnerFailed as error:
         exit_code, output = None, str(error)
+    if exit_code == 0 and clean and not git_ops.tree_is_clean(project_dir):
+        # The tests would pass on files the push never sends.
+        exit_code, output = None, "it left uncommitted changes in the project"
     if exit_code == 0:
         _SETUP_DONE.add(key)
         return GateResult(passed=True, reason="tdd.setup_command ran")

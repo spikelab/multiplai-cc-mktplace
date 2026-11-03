@@ -22,7 +22,8 @@ time, not derived from a tag.
 - **buildme**: `tdd.setup_command` in `specs/config.yaml` runs a command of
   yours once per buildme process (a build, a resume, a fixer round), before
   its first test run. For example, `tdd: {setup_command: "./scripts/reset-test-db.sh"}`
-  recreates the worktree's test database on every launch. A failure stops
+  recreates the worktree's test database on every launch. A failure, or a
+  command that leaves uncommitted changes in a clean project, stops
   the build (`STOP phase=SETUP`) or parks the fixer with `tdd.setup_command
   failed: <reason>`. Unset, nothing new runs.
 

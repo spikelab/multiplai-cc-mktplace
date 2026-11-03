@@ -191,6 +191,22 @@ class TestRunSetupOnce:
         assert result.metadata["output_file"] == str(logs[0])
         assert "db is gone" in logs[0].read_text()
 
+    def test_a_command_that_leaves_the_tree_dirty_fails(self, tmp_path, trust_repo):
+        """The tests would pass on files the push never sends."""
+        run = lambda *a: subprocess.run(
+            a, cwd=tmp_path, check=True, capture_output=True
+        )
+        run("git", "init", "-q")
+        (tmp_path / "uv.lock").write_text("old\n")
+        run("git", "add", "-A")
+        run("git", "-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "init")
+        result = run_setup_once("sh -c 'echo new > uv.lock'", tmp_path)
+        assert not result.passed
+        assert result.reason == (
+            f"{SETUP_FAILED}: it left uncommitted changes in the project"
+        )
+        assert gates._SETUP_DONE == set()
+
     def test_a_command_that_cannot_run_names_the_runner_reason(
         self, tmp_path, trust_repo
     ):

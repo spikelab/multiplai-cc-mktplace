@@ -2790,6 +2790,9 @@ def _refuse_published_rerun(
     return 3
 
 
+DOC_SUFFIXES = (".md", ".markdown", ".rst", ".adoc")
+
+
 def _reused_end_suite(
     config: BuildConfig,
     state: BuildState,
@@ -2816,8 +2819,12 @@ def _reused_end_suite(
     changed: list[str] = []
 
     def allowed(name: str) -> bool:
+        # The docs agent can write any file, so a reported path counts only
+        # when it is a document.
         changed.append(name)
-        return name in docs or any(Path(name).is_relative_to(r) for r in roots)
+        if name in docs and Path(name).suffix.lower() in DOC_SUFFIXES:
+            return True
+        return any(Path(name).is_relative_to(r) for r in roots)
 
     head = reusable_end_suite_pass(
         record, config.project_dir, config.test_command, config.parallel_tests, allowed

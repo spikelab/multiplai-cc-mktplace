@@ -130,6 +130,12 @@ class TestWithoutNarrowCommands:
         )
         assert failed_tests_command(config, [BACKEND_ID]) is None
 
+    def test_a_command_that_names_paths_gives_none(self, tmp_path):
+        """Appending ids to `pytest tests/` would still run every test."""
+        (tmp_path / "tests").mkdir()
+        config = self._config(tmp_path, "uv run pytest tests/ -q")
+        assert failed_tests_command(config, ["tests/test_a.py::test_one"]) is None
+
     def test_a_pytest_command_gets_the_ids_appended(self, tmp_path):
         config = self._config(tmp_path, "uv run pytest -q")
         assert failed_tests_command(config, ["tests/test_a.py::test_one"]) == (
