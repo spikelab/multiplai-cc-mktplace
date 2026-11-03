@@ -599,6 +599,23 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
     n = rnd.number
 
     async def do_triage() -> None:
+        # Before the round writes its first record (`findings-r<N>.md`, here):
+        # the records are not bookkeeping, so afterwards the tree is never
+        # clean and no recorded pass matches.
+        if (
+            rnd.baseline_reuse is None
+            and rnd.engine_state_path is None
+            and not rnd.triaged
+        ):
+            found = code.recorded_pass(run.change_dir, run.project_dir, run.config)
+            if found:
+                rnd.baseline_reuse = {
+                    "head": found[0],
+                    "source": found[1],
+                    "command": run.config.test_command,
+                    "parallel": run.config.parallel_tests,
+                }
+                save()
         # Rebuilt from the saved rounds and the review files on every run, so
         # a resumed triage gives each comment the same earlier rows.
         earlier = history.earlier_rows(
@@ -692,22 +709,6 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
 
     async def do_code() -> None:
         records = publish.records_of(rnd)
-        # Before the round writes its records: they are not bookkeeping, so
-        # afterwards the tree is never clean and no recorded pass matches.
-        if (
-            rnd.baseline_reuse is None
-            and rnd.engine_state_path is None
-            and code.code_fixes(records)
-        ):
-            found = code.recorded_pass(run.change_dir, run.project_dir, run.config)
-            if found:
-                rnd.baseline_reuse = {
-                    "head": found[0],
-                    "source": found[1],
-                    "command": run.config.test_command,
-                    "parallel": run.config.parallel_tests,
-                }
-                save()
         findings_file = _write_findings_file(run, fs, rnd)
         paths = [findings_file]
         report_path = code.write_self_check(run.change_dir, n, rnd.self_check)

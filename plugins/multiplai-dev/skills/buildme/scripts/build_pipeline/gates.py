@@ -2197,12 +2197,14 @@ def _checkout_input(path: Path, name: str, index_entry: str) -> str:
 
 def files_digest(test_command: str, project_dir: Path) -> str:
     """A sha256 of the content of the files `verification_inputs` reads,
-    without the git index (which changes on every commit). Raises as
-    `verification_inputs` does."""
+    without the git index (which changes on every commit). A deleted path is
+    left out: the index still lists it before its deletion is committed and
+    not after. Raises as `verification_inputs` does."""
     import hashlib
     import json
 
     files = verification_inputs(test_command, project_dir, include_files=True)["files"]
+    files = {name: value for name, value in files.items() if value != "deleted"}
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
