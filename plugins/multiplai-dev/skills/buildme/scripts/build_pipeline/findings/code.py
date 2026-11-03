@@ -47,6 +47,90 @@ log = logging.getLogger(__name__)
 Engine = Callable[..., Awaitable[int]]
 
 
+# The state files a passing whole-suite run is recorded in, read in this
+# order: a findings round's publish step (`loop.STATE_FILE`), a finished
+# build (`state.completed_state_path`), a build still in progress.
+RECORDED_PASS_FILES = (
+    ".findings-state.json",
+    ".build-state.complete.json",
+    ".build-state.json",
+)
+
+
+def recorded_pass(
+    change_dir: Path, project_dir: Path, config: BuildConfig
+) -> tuple[str, str] | None:
+    """`(H, file name)` when one of `RECORDED_PASS_FILES` in *change_dir*
+    holds a passed `verification` recorded at the current HEAD H, with
+    *config*'s test command and `parallel`, and the tree is clean and its
+    content hash is still the recorded one. `plan_revision` is not compared:
+    it is no test input. None otherwise, and on any read error, so the
+    baseline runs."""
+    import json
+
+    from ..gates import verification_inputs
+
+    try:
+        head = git_ops.rev_parse_head(project_dir)
+        if not head:
+            return None
+        for name in RECORDED_PASS_FILES:
+            path = Path(change_dir) / name
+            if not path.exists():
+                continue
+            record = json.loads(path.read_text(encoding="utf-8")).get("verification")
+            if not isinstance(record, dict) or record.get("passed") is not True:
+                continue
+            inputs = (record.get("metadata") or {}).get("inputs") or {}
+            if (
+                inputs.get("head") != head
+                or inputs.get("command") != config.test_command
+                or inputs.get("parallel") != config.parallel_tests
+            ):
+                continue
+            if not git_ops.tree_is_clean(project_dir):
+                return None
+            now = verification_inputs(
+                config.test_command, project_dir, parallel=config.parallel_tests
+            )
+            if now["content"] == inputs.get("content"):
+                return head, name
+    except (OSError, ValueError, RuntimeError, AttributeError) as error:
+        log.warning("Could not read a recorded test pass: %s", error)
+    return None
+
+
+def baseline_reuse_for(
+    project_dir: Path, saved: dict | None, round_paths: list[Path], config: BuildConfig
+) -> tuple[str, str, str] | None:
+    """`(HEAD, H, source)` for the engine when *saved* (`FindingsRound.
+    baseline_reuse`) is set, every path changed between its head H and HEAD
+    is one of *round_paths* (the files the round's records commit was handed),
+    the tree is clean, and *config*'s test command and `parallel` are still
+    the saved ones. None otherwise, so the baseline runs."""
+    if not saved:
+        return None
+    if (
+        saved.get("command") != config.test_command
+        or saved.get("parallel") != config.parallel_tests
+    ):
+        return None
+    head = git_ops.rev_parse_head(project_dir)
+    if not head or not git_ops.tree_is_clean(project_dir):
+        return None
+    diff = git_ops._run(
+        ["git", "diff", "--name-only", "-z", saved["head"], "HEAD"], cwd=project_dir
+    )
+    top = git_ops._run(["git", "rev-parse", "--show-toplevel"], cwd=project_dir)
+    if not (diff.ok and top.ok):
+        return None
+    root = Path(top.stdout.strip()).resolve()
+    own = {Path(p).resolve() for p in round_paths}
+    if all(root / name in own for name in diff.stdout.split("\0") if name):
+        return head, saved["head"], saved["source"]
+    return None
+
+
 def tasks_file_name(round_n: int) -> str:
     return f"findings-r{round_n}-tasks.md"
 
@@ -365,11 +449,13 @@ async def run_code_step(
     blocks: dict[int, str] | None = None,
     engine: Engine | None = None,
     escalated: bool = False,
+    baseline_reuse: tuple[str, str, str] | None = None,
 ) -> CodeResult:
     """Run the round's code-fix blocks through `run_tdd_engine` (standalone=False,
     so the round's checkpoint is kept for a resume and the fixing commits are
     read back from it). The tasks file must already exist; *blocks* is what
-    `write_tasks` returned for it. With no code fix, nothing runs."""
+    `write_tasks` returned for it. With no code fix, nothing runs.
+    *baseline_reuse* goes to the engine as is (`run_tdd_engine`)."""
     if blocks is None:
         _, blocks = render_tasks(round_n, records)
     if not blocks:
@@ -384,7 +470,8 @@ async def run_code_step(
         rc.tasks_path,
         rc.state_file_path(),
     )
-    code = await engine(rc, SimpleNamespace(block=None), standalone=False)
+    extra = {"baseline_reuse": baseline_reuse} if baseline_reuse else {}
+    code = await engine(rc, SimpleNamespace(block=None), standalone=False, **extra)
     fixes = fixes_from_state(rc.state_file_path(), blocks)
     log.info("DONE findings_code round=%d exit=%d fixed=%d", round_n, code, len(fixes))
     return CodeResult(exit_code=code, blocks=blocks, fixes=fixes)
@@ -581,6 +668,49 @@ def baseline_red(state_path: Path) -> bool:
         return False
     tdd = BuildState.load(state_path).tdd
     return bool(tdd) and not tdd.baseline_tests_pass
+
+
+def baseline_failure(state_path: Path) -> str:
+    """Why the engine's baseline gate or `tdd.setup_command` failed, as the
+    engine saved it (`TDDState.baseline_failure`); "" when it saved none."""
+    if not state_path.exists():
+        return ""
+    tdd = BuildState.load(state_path).tdd
+    return tdd.baseline_failure if tdd else ""
+
+
+def reused_end_suite(engine_state: Path | None, project_dir: Path, config: BuildConfig):
+    """A passed final-verification `GateResult` reusing the round's
+    end-of-build pass (`TDDState.end_suite_pass` in *engine_state*) when
+    nothing changed since it; None when the run must happen (no checkpoint,
+    no pass, or any changed path, such as a self-check block's commit)."""
+    from ..gates import reusable_end_suite_pass, verification_inputs
+    from ..models import GateResult
+
+    if engine_state is None or not engine_state.exists():
+        return None
+    tdd = BuildState.load(engine_state).tdd
+    record = tdd.end_suite_pass if tdd else None
+    head = reusable_end_suite_pass(
+        record,
+        project_dir,
+        config.test_command,
+        config.parallel_tests,
+        lambda _name: False,
+    )
+    if head is None:
+        return None
+    try:
+        current = verification_inputs(
+            config.test_command, project_dir, parallel=config.parallel_tests
+        )
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return GateResult(
+        passed=True,
+        reason=f"reused the end-of-build run at {head[:8]}: nothing changed since",
+        metadata={"inputs": current, "reused_from": head},
+    )
 
 
 def commit_round_files(

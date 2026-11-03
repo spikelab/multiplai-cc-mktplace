@@ -687,6 +687,12 @@ class EndSuiteState(BaseModel):
     fix_reports: list[str] = Field(default_factory=list)
     # The last failed run's output file when the attempts ran out.
     failure_file: str | None = None
+    # The check after a red run with the whole-change refactor at HEAD:
+    # {"refactor": R, "parent": P, "ids": the failed test ids, "red_log": the
+    # red run's output file, "verdict": "" | "refactor" | "not-refactor"}.
+    # A saved verdict means the check never runs again in this end run.
+    # None until then, and in older checkpoints.
+    refactor_check: dict | None = None
 
 
 class ComponentReviewState(BaseModel):

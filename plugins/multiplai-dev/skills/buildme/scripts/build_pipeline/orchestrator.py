@@ -27,7 +27,7 @@ from . import board, git_ops, readiness, review_rounds, walkthroughs
 from . import budget as budget_mod
 from .change_manager import PLAN_FILE, ChangeManager, plan_path, registry_names
 from .config import BuildConfig
-from .models import BoardColumn, BuildPhase
+from .models import BoardColumn, BuildPhase, GateResult
 from .progress import ProgressWriter
 from .readiness import SpecIssuesFound
 from .state import BuildState, SpecGenState, completed_state_path
@@ -564,13 +564,19 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
             print(f"PHASE:ARCHIVE:PENDING:{config.change_name}", flush=True)
             publish_docs_dir = config.change_dir
 
+        spec_dirs = [config.change_dir, publish_docs_dir]
         config.change_dir = publish_docs_dir
         from .spec_generator import assert_plan_current
 
         assert_plan_current(config, state, archived=config.auto)
 
         # All content-writing preparation precedes the shared final gate.
-        from .gates import failure_log_path, final_verification, verification_inputs
+        from .gates import (
+            failure_log_path,
+            final_verification,
+            run_setup_once,
+            verification_inputs,
+        )
 
         revision = state.spec_gen.revision if state.spec_gen else ""
         try:
@@ -599,14 +605,33 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
                 raise RuntimeError(
                     "Uncommitted build inputs remain; commit only the intended changes before final verification"
                 )
-            gate = final_verification(
-                config.test_command,
-                config.project_dir,
-                parallel=config.parallel_tests,
-                timeout=config.test_timeout,
-                plan_revision=revision,
-                failure_log=failure_log_path(config.change_dir, "final-verification"),
-            )
+            reused = _reused_end_suite(config, state, spec_dirs, current)
+            if reused is not None:
+                gate, changed = reused
+                progress.log_phase(
+                    "VERIFY",
+                    f"VERIFY REUSED — the whole test command passed at "
+                    f"{gate.metadata['reused_from'][:8]} (end of build); since "
+                    f"then only {changed} docs/spec files changed",
+                )
+            else:
+                gate = run_setup_once(
+                    config.setup_command,
+                    config.project_dir,
+                    timeout=config.test_timeout,
+                    change_dir=config.change_dir,
+                )
+                if gate.passed:
+                    gate = final_verification(
+                        config.test_command,
+                        config.project_dir,
+                        parallel=config.parallel_tests,
+                        timeout=config.test_timeout,
+                        plan_revision=revision,
+                        failure_log=failure_log_path(
+                            config.change_dir, "final-verification"
+                        ),
+                    )
             state.verification = gate.model_dump()
             state.checkpoint(state_path)
             if not gate.passed:
@@ -2763,6 +2788,49 @@ def _refuse_published_rerun(
         flush=True,
     )
     return 3
+
+
+def _reused_end_suite(
+    config: BuildConfig,
+    state: BuildState,
+    spec_dirs: list[Path],
+    current: dict | None,
+) -> tuple[GateResult, int] | None:
+    """A passed final-verification result that reuses the end-of-build run
+    (`TDDState.end_suite_pass`), with the number of files changed since it,
+    when every changed path is a document the docs step wrote
+    (`state.docs_impact`) or under one of *spec_dirs* (the change dir before
+    and after the archive move). None when the run must happen."""
+    from .gates import reusable_end_suite_pass
+
+    record = state.tdd.end_suite_pass if state.tdd else None
+    if current is None or not record:
+        return None
+    roots = []
+    for d in spec_dirs:
+        try:
+            roots.append(Path(d).resolve().relative_to(config.project_dir.resolve()))
+        except ValueError:
+            continue
+    docs = set(state.docs_impact)
+    changed: list[str] = []
+
+    def allowed(name: str) -> bool:
+        changed.append(name)
+        return name in docs or any(Path(name).is_relative_to(r) for r in roots)
+
+    head = reusable_end_suite_pass(
+        record, config.project_dir, config.test_command, config.parallel_tests, allowed
+    )
+    if head is None:
+        return None
+    gate = GateResult(
+        passed=True,
+        reason=f"reused the end-of-build run at {head[:8]}: only docs and spec "
+        "files changed since",
+        metadata={"inputs": current, "reused_from": head},
+    )
+    return gate, len(changed)
 
 
 def _spec_paths(config: BuildConfig) -> list[str]:

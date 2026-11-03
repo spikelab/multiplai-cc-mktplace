@@ -1047,3 +1047,47 @@ def agent_test_command_multi(
         "paths runs its directory's whole suite and stays as it is:"
         f"\n{per_dir}\nbuildme runs the whole suite itself after you finish."
     )
+
+
+def _entry_runner(entry: NarrowCommand, project_dir: Path) -> str | None:
+    named = NARROW_RUNNERS.get(entry.runner or "")
+    return named or runner_of(entry.command, project_dir / entry.dir)
+
+
+def failed_tests_command(config, ids: list[str]) -> str | None:
+    """One command that runs only the failing test *ids* (`gates.failing_tests`:
+    pytest node ids, jest `FAIL` paths). With `tdd.narrow_commands`, each id
+    goes to the entry whose directory holds its file, appended to that
+    entry's command, and the parts are joined as `narrow_test_command_multi`
+    joins them; otherwise, when `tdd.test_command` is a narrowable pytest or
+    jest/vitest command, the ids are appended to it. None when *ids* is
+    empty, an id belongs to no entry, or neither rule applies."""
+    if not ids:
+        return None
+    project_dir = Path(config.project_dir)
+    entries = list(config.narrow_commands or [])
+    if entries:
+        chosen: dict[int, list[str]] = {}
+        for test_id in ids:
+            path = test_id.split("::", 1)[0]
+            for i, entry in enumerate(entries):
+                if (project_dir / entry.dir / path).exists():
+                    chosen.setdefault(i, []).append(test_id)
+                    break
+            else:
+                return None
+        parts = []
+        for i, chosen_ids in sorted(chosen.items()):
+            entry = entries[i]
+            runner = _entry_runner(entry, project_dir)
+            command = narrow_command(entry.command, chosen_ids, runner)
+            if command == entry.command:
+                return None
+            parts.append(NarrowPart(entry.dir, command, runner, SELECTED))
+        joined = _join(parts)
+        return joined if len(parts) == 1 else f"sh -c {shlex.quote(joined)}"
+    runner = runner_of(config.test_command or "", project_dir)
+    if runner is None:
+        return None
+    command = narrow_command(config.test_command, ids, runner)
+    return None if command == config.test_command else command

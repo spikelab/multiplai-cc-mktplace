@@ -1380,6 +1380,22 @@ def dirty_files(
     return out
 
 
+def fast_forward_to(repo: Path | str, sha: str) -> bool:
+    """Move HEAD forward to *sha* with `git merge --ff-only`: the undo of a
+    `discard_to` of the single commit *sha*. Refuses (False) unless the tree
+    is clean and HEAD is *sha*'s parent, so it never moves past anything
+    else or over uncommitted work."""
+    if not sha or not tree_is_clean(repo):
+        return False
+    parent = _run(["git", "rev-parse", "--verify", f"{sha}^"], cwd=repo)
+    if not parent.ok or parent.stdout.strip() != rev_parse_head(repo):
+        return False
+    res = _run(["git", "merge", "--ff-only", sha], cwd=repo)
+    if not res.ok:
+        log.warning("git merge --ff-only %s failed: %s", sha[:8], res.stderr.strip())
+    return res.ok
+
+
 def discard_to(repo: Path | str, sha: str, label: str = "") -> bool:
     """Throw away every change made under *repo* since *sha*, keeping
     buildme's bookkeeping and everything outside *repo*.

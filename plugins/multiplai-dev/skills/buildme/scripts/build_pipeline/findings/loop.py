@@ -63,6 +63,7 @@ from build_pipeline.budget import BudgetExceededError
 from .. import budget, git_ops, readiness, review_rounds, stop_record
 from ..change_manager import normalize_change_name
 from ..config import BuildConfig
+from ..gates import SETUP_FAILED
 from ..models import BlockStatus, BuildPhase
 from ..progress import ProgressWriter
 from ..state import BuildState, FindingsRound, FindingsState
@@ -691,6 +692,22 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
 
     async def do_code() -> None:
         records = publish.records_of(rnd)
+        # Before the round writes its records: they are not bookkeeping, so
+        # afterwards the tree is never clean and no recorded pass matches.
+        if (
+            rnd.baseline_reuse is None
+            and rnd.engine_state_path is None
+            and code.code_fixes(records)
+        ):
+            found = code.recorded_pass(run.change_dir, run.project_dir, run.config)
+            if found:
+                rnd.baseline_reuse = {
+                    "head": found[0],
+                    "source": found[1],
+                    "command": run.config.test_command,
+                    "parallel": run.config.parallel_tests,
+                }
+                save()
         findings_file = _write_findings_file(run, fs, rnd)
         paths = [findings_file]
         report_path = code.write_self_check(run.change_dir, n, rnd.self_check)
@@ -707,6 +724,9 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             save()
             paths.append(tasks)
         code.commit_round_files(run.project_dir, n, paths)
+        reuse = code.baseline_reuse_for(
+            run.project_dir, rnd.baseline_reuse, paths, run.config
+        )
         if rnd.code_base is None:
             rnd.code_base = git_ops.rev_parse_head(run.project_dir)
             save()
@@ -730,6 +750,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                 blocks=rnd.blocks,
                 engine=seams.engine,
                 escalated=rnd.escalated,
+                baseline_reuse=reuse,
             )
             failed = {k: v for k, v in rnd.fixes.items() if v.get("failed")}
             rnd.fixes = {**failed, **result.fixes}
@@ -756,11 +777,14 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                     f"Required post-build check failed: {after}",
                     exit_code=result.exit_code,
                 )
+            why = code.baseline_failure(engine_state)
+            if why.startswith(SETUP_FAILED):
+                raise StepFailed("code", why, exit_code=result.exit_code)
             if code.baseline_red(engine_state):
                 raise StepFailed(
                     "code",
                     "the PR's test suite fails before any fix (the TDD "
-                    "engine's baseline gate), so no fix can be tested; "
+                    f"engine's baseline gate: {why}), so no fix can be tested; "
                     "make the suite pass, then re-run",
                     exit_code=result.exit_code,
                 )
@@ -787,14 +811,33 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
         )
 
     async def do_publish() -> None:
-        from ..gates import final_verification
+        from ..gates import final_verification, run_setup_once
 
-        gate = final_verification(
-            run.config.test_command,
+        gate = code.reused_end_suite(
+            Path(rnd.engine_state_path) if rnd.engine_state_path else None,
             run.project_dir,
-            parallel=run.config.parallel_tests,
-            timeout=run.config.test_timeout,
+            run.config,
         )
+        if gate is None:
+            gate = run_setup_once(
+                run.config.setup_command,
+                run.project_dir,
+                timeout=run.config.test_timeout,
+                change_dir=run.change_dir,
+            )
+            if gate.passed:
+                gate = final_verification(
+                    run.config.test_command,
+                    run.project_dir,
+                    parallel=run.config.parallel_tests,
+                    timeout=run.config.test_timeout,
+                )
+        else:
+            log.info(
+                "VERIFY REUSED — the whole test command passed at %s (end of "
+                "build); nothing changed since",
+                gate.metadata["reused_from"][:8],
+            )
         st.verification = gate.model_dump()
         save()
         if not gate.passed:
