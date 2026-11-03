@@ -1381,18 +1381,19 @@ def dirty_files(
 
 
 def fast_forward_to(repo: Path | str, sha: str) -> bool:
-    """Move HEAD forward to *sha* with `git merge --ff-only`: the undo of a
+    """Move HEAD forward to *sha* with `git reset --keep`: the undo of a
     `discard_to` of the single commit *sha*. Refuses (False) unless the tree
     is clean and HEAD is *sha*'s parent, so it never moves past anything
-    else or over uncommitted work."""
+    else or over uncommitted work; `--keep` itself refuses to overwrite a
+    changed file."""
     if not sha or not tree_is_clean(repo):
         return False
     parent = _run(["git", "rev-parse", "--verify", f"{sha}^"], cwd=repo)
     if not parent.ok or parent.stdout.strip() != rev_parse_head(repo):
         return False
-    res = _run(["git", "merge", "--ff-only", sha], cwd=repo)
+    res = _run(["git", "reset", "--keep", sha], cwd=repo)
     if not res.ok:
-        log.warning("git merge --ff-only %s failed: %s", sha[:8], res.stderr.strip())
+        log.warning("git reset --keep %s failed: %s", sha[:8], res.stderr.strip())
     return res.ok
 
 
