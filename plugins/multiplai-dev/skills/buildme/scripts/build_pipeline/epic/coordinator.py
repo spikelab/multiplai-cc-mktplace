@@ -887,6 +887,12 @@ class Coordinator:
                     )
                     c.status, c.reason = "pending", ""
         every = records.attempts(self.epic_dir)
+        latest_park = {
+            a.child: a
+            for a in every
+            if a.kind in (*REVIEW_KINDS, *FIX_KINDS) and (a.result or {}).get("parked")
+        }
+        before = {c.id: (c.status, c.reason) for c in self.children.values()}
         for a in every:  # a review's or fix's park stays (C.S6, C.S12, D2.S6)
             c = self.children.get(a.child)
             if (
@@ -916,6 +922,17 @@ class Coordinator:
                     ):
                         continue
                     why = fix.env_cap_reason(why, cause, times)
+                if a.kind == "fix" and latest_park.get(a.child) is a:
+                    # A fixer's park is decided again by the review step once
+                    # the PR head moved since that fixer was launched (M1).
+                    try:
+                        moved = self._fix_head_moved(c, a)
+                    except ReadFailed as e:  # M4
+                        c.status, c.reason = "unknown", str(e)
+                        continue
+                    if moved:
+                        c.status, c.reason = before[c.id]
+                        continue
                 c.status, c.reason = "parked", why
         for c in self.children.values():  # S9: its fixer was launched again once
             fixes = [
@@ -961,6 +978,29 @@ class Coordinator:
             )
 
         return [c for c in self.children.values() if waits(c)]
+
+    def _fix_head_moved(self, c: Child, a: records.Attempt) -> bool:
+        """True when `c`'s PR head is no longer the head its fixer `a` was
+        launched on; the child is then left for the review step. Raises
+        ReadFailed when the PR cannot be read."""
+        was = a.started.get("head_sha")
+        if not was or not c.pr:
+            return False
+        got = _gh(self.repo, "pr", "view", c.pr, "--json", "state,headRefOid")
+        state = got.get("state") if isinstance(got, dict) else None
+        if state is None:
+            raise ReadFailed(PR_UNREAD)
+        now = got.get("headRefOid") or ""
+        if not now or now == was:
+            return False
+        log.info(
+            "EPIC child %s: fix park at %s left for review: PR head is now %s",
+            c.id,
+            was[:12],
+            now[:12],
+        )
+        c.head = now
+        return True
 
     def _read_prs(self, which: list[Child]) -> None:
         """`gh pr view` each PR. A failed read is not "still open": the child is

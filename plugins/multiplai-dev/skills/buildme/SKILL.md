@@ -1217,7 +1217,11 @@ Every other reason is a decision and stays parked: a red baseline, a test
 command that timed out (`Test command failed to run: timed out after`), a red
 final verification, a turn cap, `untrusted`, the budget, spec issues and
 ingestion errors. A record written before 0.155.0 is classified from its
-`parked` reason. On a
+`parked` reason. Any fixer's park, a decision or an environment park at the
+cap, stays parked only while the PR's head is the one that fixer was launched
+on: once someone pushes to the PR, the next run leaves the child for the
+review step, which reviews the new head (since 0.155.1). When `gh pr view`
+cannot read the head, the child is `unknown` and the run exits 1. On a
 re-run, a head whose post succeeded runs the fixer, not a second post or a
 review; a post or fixer an earlier run left running is waited for (never two
 at once), then a post runs again, and a fixer runs again with the `--max-rounds` it
