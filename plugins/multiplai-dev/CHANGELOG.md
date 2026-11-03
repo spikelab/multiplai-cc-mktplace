@@ -15,6 +15,16 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.155.1] - 2026-11-03
+
+### Fixed
+
+- **buildme**: in an epic, a child PR parked by its fixer (a red baseline, the
+  self-check's turn cap, a timeout, or an environment park after its
+  relaunches) is reviewed again once someone pushes to the PR. Before, it
+  stayed parked on every later run whatever was pushed. At an unchanged head
+  it still stays parked.
+
 ## [0.155.0] - 2026-11-03
 
 ### Added
