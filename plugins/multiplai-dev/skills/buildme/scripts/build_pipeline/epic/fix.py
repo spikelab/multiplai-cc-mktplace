@@ -277,3 +277,68 @@ def failed_reason(text: str) -> str | None:
         return None
     step, reason = hits[-1]
     return f"the fixer failed at {step}: {reason.strip()}"
+
+
+# A fixer park the environment caused, not the code or a decision, by class
+# (plan-buildme-epic-speedups-2026-11-03.md, item 4): the next epic run runs
+# that fixer again, up to `epic.env_relaunches` times. Each pattern is matched
+# case-insensitively against the park reason.
+# The project's `tdd.setup_command` failed (`gates.run_setup_once`).
+SETUP_COMMAND = ("tdd.setup_command failed",)
+# DNS, TCP, TLS and gateway failures of git, gh or the model API.
+# `Invalid username or token` and `Bad credentials` are an expired
+# installation token (run 14 of DFACCMGMT-1); the epic wrapper refreshes it
+# before a later run.
+NETWORK = (
+    "EAI_AGAIN",
+    "Could not resolve host",
+    "Temporary failure in name resolution",
+    "Connection reset by peer",
+    "Connection timed out",
+    "Failed to connect to",
+    "TLS handshake timeout",
+    "HTTP 502",
+    "HTTP 503",
+    "HTTP 504",
+    "remote: Internal Server Error",
+    "Invalid username or token",
+    "Bad credentials",
+)
+# Everything else is a decision: a red baseline, a test command that timed out
+# (`Test command failed to run: timed out after`), red final verification, a
+# turn cap, `untrusted`, the budget, spec issues and ingestion errors.
+ENVIRONMENT_CLASSES = (("setup-command", SETUP_COMMAND), ("network", NETWORK))
+
+
+def park_kind(reason: str) -> tuple[str, str]:
+    """`("environment", <class>)` when a fixer's park *reason* matches a
+    pattern of ENVIRONMENT_CLASSES; else `("decision", "")`."""
+    text = (reason or "").lower()
+    for cause, patterns in ENVIRONMENT_CLASSES:
+        if any(p.lower() in text for p in patterns):
+            return "environment", cause
+    return "decision", ""
+
+
+def park_fields(why: str) -> dict:
+    """A fix result's park: `parked`, with its `park_kind` and `park_cause`."""
+    kind, cause = park_kind(why)
+    return {"parked": why, "park_kind": kind, "park_cause": cause}
+
+
+def park_of(result: dict | None) -> tuple[str, str] | None:
+    """A fix result's `(park_kind, park_cause)`; a record written before
+    `park_kind` existed is classified from its `parked` reason. None when
+    it is not a park."""
+    if not (result or {}).get("parked"):
+        return None
+    if result.get("park_kind"):
+        return result["park_kind"], result.get("park_cause") or ""
+    return park_kind(result["parked"])
+
+
+def env_cap_reason(why: str, cause: str, times: int) -> str:
+    """The park of an environment park relaunched as often as `epic.env_relaunches` allows."""
+    return (
+        f"{why} (environment: {cause}; relaunched {times} times, epic.env_relaunches)"
+    )

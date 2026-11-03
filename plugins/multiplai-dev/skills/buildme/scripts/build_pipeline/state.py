@@ -257,6 +257,9 @@ class TDDState(BaseModel):
     blocks: list[BlockInfo] = Field(default_factory=list)
     current_block: int = 0
     baseline_tests_pass: bool = False
+    # Why the baseline gate failed (its reason's first line, at most 300
+    # characters), for the findings round's park reason. "" otherwise.
+    baseline_failure: str = ""
     # The whole-change refactor pass runs after the block loop and commits its
     # own result, so nothing on disk records that it happened — a resume would
     # otherwise re-run it (and pay for it) every time. Old checkpoints default
@@ -278,6 +281,12 @@ class TDDState(BaseModel):
     end_suite_done: bool = False
     # The end-of-build whole run in flight; None when none is.
     end_suite: EndSuiteState | None = None
+    # The end-of-build run's pass, saved with `end_suite_done` when it ran
+    # inside a build or round (not standalone) and the tree after its commit
+    # holds the files it tested: {"head", "command", "parallel"}. The final
+    # verification reuses it (`gates.reusable_end_suite_pass`). None in
+    # older checkpoints.
+    end_suite_pass: dict | None = None
     # The whole-change refactor's commit, so the end run can throw it away
     # when the suite is red right after it.
     refactor_all_commit: str | None = None
@@ -340,6 +349,12 @@ class FindingsRound(BaseModel):
     # "block": the block number the report became (None for none)}. A saved
     # check never runs again. None until then, and in older checkpoints.
     self_check: dict | None = None
+    # A passing whole-suite run recorded at the PR head, found before the
+    # round wrote anything: {"head": the head it was recorded at, "source":
+    # the state file it was read from}. The engine skips its baseline when
+    # only the round's own record files changed since. None otherwise, and
+    # in older checkpoints.
+    baseline_reuse: dict | None = None
     pushed_head: str | None = None
     body_updated: bool = False
     replies_sent: list[str] = Field(default_factory=list)  # reply keys, in order sent

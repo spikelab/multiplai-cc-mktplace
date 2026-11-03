@@ -1752,7 +1752,7 @@ class TestRoundBudget:
 
         at_entry: list[float] = []
 
-        async def engine(rc, args, standalone):
+        async def engine(rc, args, standalone, **_):
             at_entry.append(budget.get_budget().cost_usd)
             return await run_tdd_engine(rc, args, standalone=standalone)
 
@@ -1827,7 +1827,7 @@ class TestRoundBudget:
             )
             return AgentResult(success=True, output="done")
 
-        async def engine(rc, args, standalone):
+        async def engine(rc, args, standalone, **_):
             return await run_tdd_engine(rc, args, standalone=standalone)
 
         replaced = {"run_test_writer", "run_implementer", "run_test_suite"}

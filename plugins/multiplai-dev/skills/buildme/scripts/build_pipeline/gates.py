@@ -664,6 +664,57 @@ def _baseline_verdict(exit_code: int | None, output: str) -> GateResult:
     )
 
 
+_SETUP_DONE: set[str] = set()
+# How a failed `tdd.setup_command` reason starts; the epic's `park_kind`
+# matches it.
+SETUP_FAILED = "tdd.setup_command failed"
+
+
+def run_setup_once(
+    setup_command: str,
+    project_dir: Path,
+    *,
+    timeout: int = DEFAULT_TEST_TIMEOUT,
+    change_dir: Path | None = None,
+) -> GateResult:
+    """Run `tdd.setup_command` from *project_dir* the first time this process
+    asks for it (per resolved *project_dir*), through `run_test_suite`, so it
+    gets the same trust guard and `tdd.test_timeout`. Empty passes at once.
+    A command that leaves a clean tree dirty fails. A failure is
+    `SETUP_FAILED: <reason>`, its output written
+    with `failure_log_path(change_dir, "setup")`; a failed command runs again
+    the next time it is asked for. buildme saves nothing for it: a new
+    process runs it again (row S16)."""
+    if not setup_command.strip():
+        return GateResult(passed=True, reason="No tdd.setup_command")
+    key = str(Path(project_dir).resolve())
+    if key in _SETUP_DONE:
+        return GateResult(passed=True, reason="tdd.setup_command already ran")
+    from . import git_ops
+
+    log_path = failure_log_path(change_dir, "setup") if change_dir else None
+    clean = git_ops.tree_is_clean(project_dir)
+    try:
+        exit_code, output = run_test_suite(
+            setup_command, Path(project_dir), timeout, log_path
+        )
+    except RunnerFailed as error:
+        exit_code, output = None, str(error)
+    if exit_code == 0 and clean and not git_ops.tree_is_clean(project_dir):
+        # The tests would pass on files the push never sends.
+        exit_code, output = None, "it left uncommitted changes in the project"
+    if exit_code == 0:
+        _SETUP_DONE.add(key)
+        return GateResult(passed=True, reason="tdd.setup_command ran")
+    why = (
+        output.strip().splitlines()[0]
+        if exit_code is None and output.strip()
+        else f"exit {exit_code}"
+    )
+    gate = GateResult(passed=False, reason=f"{SETUP_FAILED}: {why}")
+    return _attach_failure_log(gate, log_path, setup_command, exit_code, output)
+
+
 def integration_gate(
     test_command: str,
     project_dir: Path,
@@ -2149,6 +2200,64 @@ def _checkout_input(path: Path, name: str, index_entry: str) -> str:
     files = _path_inputs(path, listed.split("\0"), index)
     content = json.dumps({"files": files, "index": index}, sort_keys=True).encode()
     return f"checkout:{head}:" + hashlib.sha256(content).hexdigest()
+
+
+def files_digest(test_command: str, project_dir: Path) -> str:
+    """A sha256 of the content of the files `verification_inputs` reads,
+    without the git index (which changes on every commit). A deleted path is
+    left out: the index still lists it before its deletion is committed and
+    not after. Raises as `verification_inputs` does."""
+    import hashlib
+    import json
+
+    files = verification_inputs(test_command, project_dir, include_files=True)["files"]
+    files = {name: value for name, value in files.items() if value != "deleted"}
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
+def reusable_end_suite_pass(
+    record: dict | None,
+    project_dir: Path,
+    test_command: str,
+    parallel: str,
+    allowed: Callable[[str], bool],
+) -> str | None:
+    """The head of the end-of-build pass *record* (`TDDState.end_suite_pass`)
+    when the final verification may reuse it, else None: the same test
+    command and `parallel`, its head an ancestor of HEAD, a clean tree, and
+    every project-relative path changed since its head (bookkeeping left
+    out) one *allowed* accepts. Any git error is None."""
+    from . import git_ops
+
+    if not record:
+        return None
+    head = record.get("head") or ""
+    if record.get("command") != test_command or record.get("parallel") != parallel:
+        return None
+    if not git_ops.is_ancestor_of_head(project_dir, head):
+        return None
+    if not git_ops.tree_is_clean(project_dir):
+        return None
+    diff = git_ops._run(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--relative",
+            "-z",
+            head,
+            "HEAD",
+            "--",
+            ".",
+            *git_ops.BOOKKEEPING_EXCLUDES,
+        ],
+        cwd=project_dir,
+    )
+    if not diff.ok:
+        return None
+    if all(allowed(name) for name in diff.stdout.split("\0") if name):
+        return head
+    return None
 
 
 def final_verification(

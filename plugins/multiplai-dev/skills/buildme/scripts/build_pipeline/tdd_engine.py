@@ -33,6 +33,7 @@ from .change_manager import (
 from .config import BuildConfig
 from .gates import (
     NO_TEST_COMMAND_WARNING,
+    SETUP_FAILED,
     TEST_RUNS_DIR,
     RunnerFailed,
     _repo_trusted,
@@ -41,6 +42,7 @@ from .gates import (
     block_severity_gate,
     failing_tests,
     failure_log_path,
+    files_digest,
     final_verification,
     integration_gate,
     parse_diff_paths,
@@ -51,6 +53,7 @@ from .gates import (
     red_gate,
     review_iteration_gate,
     review_score_gate,
+    run_setup_once,
     run_test_suite,
     unchanged_tests_gate,
     verification_inputs,
@@ -90,6 +93,7 @@ from .mutation import (
 from .narrow_tests import (
     agent_test_command,
     agent_test_command_multi,
+    failed_tests_command,
     narrow_parts,
     narrow_test_command,
     narrow_test_command_multi,
@@ -3995,10 +3999,26 @@ def _stop_on_runner_failure(
     _mark_block(state, idx, BlockStatus.FAILED, config)
 
 
-async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
+def _first_line(text: str) -> str:
+    """*text*'s first non-blank line, at most 300 characters."""
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()[:300]
+    return ""
+
+
+async def run_tdd_engine(
+    config: BuildConfig,
+    args,
+    *,
+    standalone: bool = True,
+    baseline_reuse: tuple[str, str, str] | None = None,
+) -> int:
     """Run TDD and retain current spend if a provider or process interrupts it."""
     try:
-        return await _run_tdd_engine(config, args, standalone=standalone)
+        return await _run_tdd_engine(
+            config, args, standalone=standalone, baseline_reuse=baseline_reuse
+        )
     except BaseException:
         path = config.state_file_path()
         if path.exists():
@@ -4009,7 +4029,13 @@ async def run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) 
         raise
 
 
-async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True) -> int:
+async def _run_tdd_engine(
+    config: BuildConfig,
+    args,
+    *,
+    standalone: bool = True,
+    baseline_reuse: tuple[str, str, str] | None = None,
+) -> int:
     """Main entry point for the TDD engine.
 
     Orchestrates: parse blocks → baseline gate → per-block TDD → whole-change
@@ -4028,6 +4054,12 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
     through to a stale in-memory copy with `tdd is None`, so a crash in
     DOCS_UPDATE/RESPEC/PUBLISH resumed at TDD_BUILD with no block state and
     re-ran the whole build.
+
+    *baseline_reuse* (a findings round only) is `(checked_head, H, source)`:
+    a passing whole-suite run is recorded at H in *source*, and the caller
+    checked that HEAD *checked_head* differs from H only by the round's own
+    record files. With HEAD still *checked_head* and a clean tree, the
+    baseline gate is skipped.
     """
     state_path = config.state_file_path()
     progress = ProgressWriter(config.progress_file_path())
@@ -4113,7 +4145,42 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
             preflight.report(failed)
             return EXIT_BUILD_FAILURE
 
+    # --- tdd.setup_command, once per process, before the first test run ---
+    setup = run_setup_once(
+        config.setup_command,
+        config.project_dir,
+        timeout=config.test_timeout,
+        change_dir=config.change_dir,
+    )
+    if not setup.passed:
+        log.error("STOP phase=SETUP reason=%s%s", setup.reason, _output_note(setup))
+        progress.log_phase("SETUP", f"FAILED: {setup.reason}{_output_note(setup)}")
+        if state.tdd:
+            state.tdd.baseline_failure = setup.reason[:300]
+            state.checkpoint(state_path)
+        return EXIT_BUILD_FAILURE
+    if state.tdd and state.tdd.baseline_failure.startswith(SETUP_FAILED):
+        state.tdd.baseline_failure = ""
+        state.checkpoint(state_path)
+
     # --- Baseline test gate ---
+    if (
+        state.tdd
+        and not state.tdd.baseline_tests_pass
+        and baseline_reuse is not None
+        and git_ops.rev_parse_head(config.project_dir) == baseline_reuse[0]
+        and git_ops.tree_is_clean(config.project_dir)
+    ):
+        _, recorded_head, source = baseline_reuse
+        state.tdd.baseline_tests_pass = True
+        state.tdd.baseline_failure = ""
+        state.checkpoint(state_path)
+        line = (
+            f"BASELINE SKIPPED — the whole test command passed at "
+            f"{recorded_head[:8]} ({source})"
+        )
+        log.info("%s", line)
+        progress.log_phase("BASELINE", line)
     if state.tdd and not state.tdd.baseline_tests_pass:
         progress.log_phase("BASELINE", "Running existing test suite")
         try:
@@ -4127,14 +4194,19 @@ async def _run_tdd_engine(config: BuildConfig, args, *, standalone: bool = True)
         except RunnerFailed as failed:
             log.error("STOP phase=BASELINE reason=test-runner-failed: %s", failed)
             progress.log_phase("BASELINE", f"STOPPED: {failed}")
+            state.tdd.baseline_failure = _first_line(str(failed))
+            state.checkpoint(state_path)
             return EXIT_BUILD_FAILURE
         if not gate.passed:
             log.error(
                 "Baseline test gate failed: %s%s", gate.reason, _output_note(gate)
             )
             progress.log_phase("BASELINE", f"FAILED: {gate.reason}{_output_note(gate)}")
+            state.tdd.baseline_failure = _first_line(gate.reason)
+            state.checkpoint(state_path)
             return EXIT_BUILD_FAILURE
         state.tdd.baseline_tests_pass = True
+        state.tdd.baseline_failure = ""
         state.checkpoint(state_path)
         progress.log_phase(
             "BASELINE", "PASSED" if config.test_command else f"SKIPPED — {gate.reason}"
@@ -4655,7 +4727,8 @@ def _refuse_end_suite(
 
 def _start_end_suite(config: BuildConfig, state: BuildState) -> EndSuiteState:
     """Save a fresh checkpoint for the end run at HEAD, keeping *attempts*
-    from the run in flight (if any), and checkpoint the state."""
+    and *refactor_check* from the run in flight (if any), and checkpoint the
+    state."""
     tdd = state.tdd
     previous = tdd.end_suite
     snapshot = _snapshot_all_test_files(config, state)
@@ -4663,6 +4736,7 @@ def _start_end_suite(config: BuildConfig, state: BuildState) -> EndSuiteState:
         checkpoint=git_ops.rev_parse_head(config.project_dir) or "",
         attempts=previous.attempts if previous else 0,
         test_file_hashes=snapshot,
+        refactor_check=previous.refactor_check if previous else None,
     )
     state.checkpoint(config.state_file_path())
     return tdd.end_suite
@@ -4686,13 +4760,28 @@ def _end_suite_gate(
         )
         state.verification = gate.model_dump()
         return gate
-    return integration_gate(
+    before = _files_now(config)
+    gate = integration_gate(
         config.test_command,
         config.project_dir,
         parallel=config.parallel_tests,
         timeout=config.test_timeout,
         failure_log=failure_log,
     )
+    # `_end_suite_pass` records a pass only for files the run left as it
+    # found them.
+    gate.metadata["files_unchanged"] = before is not None and before == _files_now(
+        config
+    )
+    return gate
+
+
+def _files_now(config: BuildConfig) -> str | None:
+    try:
+        return files_digest(config.test_command, config.project_dir)
+    except (OSError, RuntimeError, ValueError) as e:
+        log.warning("Could not read the files the end-of-build run tests: %s", e)
+        return None
 
 
 def _write_fix_attempts_diff(config: BuildConfig, checkpoint: str) -> str | None:
@@ -4764,6 +4853,97 @@ def _end_suite_exhausted(
     return False
 
 
+def _end_suite_pass(config: BuildConfig, passed_files: str | None) -> dict | None:
+    """`TDDState.end_suite_pass` for a pass whose files digest was
+    *passed_files*: HEAD, the command and `parallel`, when the tree is clean
+    and still holds those files; None otherwise (the final run happens)."""
+    if passed_files is None or not git_ops.tree_is_clean(config.project_dir):
+        return None
+    try:
+        now = files_digest(config.test_command, config.project_dir)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    head = git_ops.rev_parse_head(config.project_dir)
+    if now != passed_files or not head:
+        return None
+    return {
+        "head": head,
+        "command": config.test_command,
+        "parallel": config.parallel_tests,
+    }
+
+
+def _refactor_reverted(state: BuildState, progress: ProgressWriter) -> None:
+    log.warning("Whole-change refactor discarded: the whole suite is red after it")
+    progress.log_phase(
+        "REFACTOR_ALL", "REVERTED — whole suite red after it (end of build)"
+    )
+    state.tdd.refactor_all_commit = None
+
+
+def _keep_refactor(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter, check: dict
+) -> bool:
+    """Put the discarded whole-change refactor back (HEAD at its parent,
+    fast-forward to it) and restart the end run's checkpoint there. False,
+    with the refactor left discarded, when git refuses."""
+    if not git_ops.fast_forward_to(config.project_dir, check["refactor"]):
+        log.warning(
+            "Could not put the whole-change refactor %s back; leaving it discarded",
+            check["refactor"][:8],
+        )
+        check["verdict"] = "refactor"
+        _refactor_reverted(state, progress)
+        state.checkpoint(config.state_file_path())
+        return False
+    state.tdd.refactor_all_commit = check["refactor"]
+    _start_end_suite(config, state)
+    return True
+
+
+def _run_refactor_check(
+    config: BuildConfig, state: BuildState, progress: ProgressWriter
+) -> bool:
+    """With the whole-change refactor discarded (HEAD at its parent), run
+    only the tests that failed with it (`EndSuiteState.refactor_check`).
+    Still red on one of them: the refactor did not cause it, so it is put
+    back (`_keep_refactor`) and this returns True. Green, or not run: the
+    refactor is left discarded, as before the check, and this returns False.
+    The verdict is saved before anything moves."""
+    tdd = state.tdd
+    check = tdd.end_suite.refactor_check
+    ids = check["ids"]
+    command = failed_tests_command(config, ids)
+    exit_code, output = None, ""
+    if command is not None:
+        try:
+            exit_code, output = run_test_suite(
+                command,
+                config.project_dir,
+                config.test_timeout,
+                failure_log_path(config.change_dir, "refactor-check"),
+            )
+        except RunnerFailed as failed:
+            exit_code, output = None, str(failed)
+    still = [t for t in failing_tests(output) if t in ids] if exit_code else []
+    if exit_code is not None and exit_code != 0 and still:
+        check["verdict"] = "not-refactor"
+        state.checkpoint(config.state_file_path())
+        if _keep_refactor(config, state, progress, check):
+            line = (
+                f"REFACTOR_ALL KEPT — the same tests fail without it "
+                f"({len(still)} of {len(ids)}); fixing them with the refactor in place"
+            )
+            log.warning("%s", line)
+            progress.log_phase("REFACTOR_ALL", line)
+            return True
+        return False
+    check["verdict"] = "refactor"
+    _refactor_reverted(state, progress)
+    state.checkpoint(config.state_file_path())
+    return False
+
+
 async def _run_end_suite(
     config: BuildConfig,
     state: BuildState,
@@ -4797,6 +4977,15 @@ async def _run_end_suite(
         and es.after_fix_content is not None
         and _content_now(config) == es.after_fix_content
     )
+    check = es.refactor_check if es is not None else None
+    if not fixed and clean and check and head == check["parent"]:
+        # Rows S23/S24 of plan-buildme-epic-speedups-2026-11-03.md: stopped
+        # with the refactor discarded and the check undecided or kept.
+        if not check["verdict"]:
+            _run_refactor_check(config, state, progress)
+        elif check["verdict"] == "not-refactor":
+            _keep_refactor(config, state, progress, check)
+        head = git_ops.rev_parse_head(config.project_dir)
     if fixed:
         pass  # S8/S9: the stopped fixer's tree; test it, as the loop would.
     elif not clean:
@@ -4823,24 +5012,35 @@ async def _run_end_suite(
         and not fixed
         and tdd.refactor_all_commit
         and head == tdd.refactor_all_commit
+        and not (es.refactor_check or {}).get("verdict")
     ):
+        refactor = tdd.refactor_all_commit
         parent = git_ops._run(
-            ["git", "rev-parse", f"{tdd.refactor_all_commit}^"], cwd=config.project_dir
+            ["git", "rev-parse", f"{refactor}^"], cwd=config.project_dir
         )
+        ids = failing_tests(gate.metadata.get("output", ""))
+        command = failed_tests_command(config, ids)
+        if parent.ok and command is not None:
+            es.refactor_check = {
+                "refactor": refactor,
+                "parent": parent.stdout.strip(),
+                "ids": ids,
+                "red_log": gate.metadata.get("output_file"),
+                "verdict": "",
+            }
+            state.checkpoint(state_path)
         if parent.ok and git_ops.discard_to(
             config.project_dir, parent.stdout.strip(), "whole-change refactor"
         ):
-            log.warning(
-                "Whole-change refactor discarded: the whole suite is red after it"
-            )
-            progress.log_phase(
-                "REFACTOR_ALL", "REVERTED — whole suite red after it (end of build)"
-            )
-            tdd.refactor_all_commit = None
-            es = _start_end_suite(config, state)
-            gate = _end_suite_gate(
-                config, state, f"end-suite-{es.attempts}", standalone
-            )
+            if command is not None and _run_refactor_check(config, state, progress):
+                es = tdd.end_suite
+            else:
+                if command is None:
+                    _refactor_reverted(state, progress)
+                es = _start_end_suite(config, state)
+                gate = _end_suite_gate(
+                    config, state, f"end-suite-{es.attempts}", standalone
+                )
 
     while not gate.passed:
         log.warning(
@@ -4897,6 +5097,11 @@ async def _run_end_suite(
             )
         fixed = True
 
+    passed_files = (
+        _files_now(config)
+        if not standalone and gate.metadata.get("files_unchanged")
+        else None
+    )
     if fixed:
         after = _snapshot_all_test_files(config, state)
         if es.test_file_hashes is None or after is None:
@@ -4921,6 +5126,7 @@ async def _run_end_suite(
             state.verification = None
     tdd.end_suite_done = True
     tdd.end_suite = None
+    tdd.end_suite_pass = _end_suite_pass(config, passed_files)
     state.checkpoint(state_path)
     progress.log_phase("END_SUITE", "PASSED")
     _end_event(config, progress, "DONE")
