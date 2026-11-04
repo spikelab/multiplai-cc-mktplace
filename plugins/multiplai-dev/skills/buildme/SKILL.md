@@ -1221,7 +1221,14 @@ ingestion errors. A record written before 0.155.0 is classified from its
 cap, stays parked only while the PR's head is the one that fixer was launched
 on: once someone pushes to the PR, the next run leaves the child for the
 review step, which reviews the new head (since 0.155.1). When `gh pr view`
-cannot read the head, the child is `unknown` and the run exits 1. On a
+cannot read the head, the child is `unknown` and the run exits 1. A park
+holds only while it is the child's last review, post or fix: a later one
+decides instead, so a review of the new head that parks at the round cap
+parks on its open findings, which `epic.accepted_findings` can accept, not on
+the earlier fixer's reason (since 0.155.3). A parked, failed or `unknown`
+child whose PR a person merged on GitHub is `merged` on the next run, and its
+dependants launch; each such PR is read once per run, and an open or closed
+one leaves the child as it was (since 0.155.3). On a
 re-run, a head whose post succeeded runs the fixer, not a second post or a
 review; a post or fixer an earlier run left running is waited for (never two
 at once), then a post runs again, and a fixer runs again with the `--max-rounds` it
