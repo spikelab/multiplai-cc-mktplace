@@ -957,11 +957,13 @@ _REQUIREMENT_RE = re.compile(
 )
 
 
-def _sliced_requirements(block: BlockInfo, sources: dict[str, str]) -> dict[str, str]:
+def _sliced_requirements(
+    block: BlockInfo, sources: dict[str, str], all_when_unnamed: bool = True
+) -> dict[str, str]:
     """With `tdd.context: sliced`: the capabilities the block's `Satisfies:`
     line names, by capability or by requirement. Within one, only the named
     requirements when it names any, else all of them. Every source when the
-    line names nothing."""
+    line names nothing, or none with *all_when_unnamed* False."""
     satisfies = "\n".join(block.satisfies)
     kept: dict[str, str] = {}
     for label, text in sources.items():
@@ -974,7 +976,7 @@ def _sliced_requirements(block: BlockInfo, sources: dict[str, str]) -> dict[str,
             )
         elif _names_in(cap, satisfies):
             kept[label] = text
-    return kept or sources
+    return kept or (sources if all_when_unnamed else {})
 
 
 def assemble_context(
@@ -1776,15 +1778,75 @@ async def _enforce_red_gate(
                 block.test_commit = sha
                 state.checkpoint(config.state_file_path())
 
+    reason = gate.reason
+    if gate.action == "rewrite_tests":
+        built = _built_by_earlier_blocks(config, state, block)
+        if built:
+            reason += f" — {built}"
     log.error(
         "FAIL block=%d name=%s phase=RED_GATE reason=%s",
         block.number,
         block.name,
-        gate.reason,
+        reason,
     )
-    progress.log_agent("RedGate", block.name, f"FAILED after retry: {gate.reason}")
+    progress.log_agent("RedGate", block.name, f"FAILED after retry: {reason}")
     _mark_block(state, block_idx, BlockStatus.FAILED, config)
     return False
+
+
+def _built_by_earlier_blocks(
+    config: BuildConfig, state: BuildState, block: BlockInfo
+) -> str:
+    """When the commits of the blocks before *block* changed source files its
+    task names: a sentence naming those files and commits, else "".
+
+    A block's new tests that pass before it is implemented most often mean an
+    earlier block's review fix already built it; the RED gate cannot tell, and
+    retrying the test writer cannot change it. Never raises."""
+    earlier = [
+        b
+        for b in (state.tdd.blocks if state.tdd else [])
+        if b.number < block.number and b.baseline_commit
+    ]
+    if not earlier or not block.baseline_commit:
+        return ""
+    start = min(earlier, key=lambda b: b.number).baseline_commit
+    end = block.baseline_commit
+    try:
+        changed = subprocess.run(
+            ["git", "diff", "--relative", "--name-only", start, end],
+            cwd=str(config.project_dir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if changed.returncode:
+            return ""
+        named = [
+            p
+            for p in changed.stdout.splitlines()
+            if p and not _TEST_PATH_RE.search(p) and p in block.description
+        ]
+        if not named:
+            return ""
+        commits = subprocess.run(
+            ["git", "log", "--format=%h %s", f"{start}..{end}", "--", *named],
+            cwd=str(config.project_dir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception as e:
+        log.warning("Could not read earlier blocks' commits: %s", e)
+        return ""
+    lines = commits.stdout.splitlines() if not commits.returncode else []
+    return (
+        f"earlier blocks already changed {', '.join(named)}, which this block's "
+        "task names"
+        + (f" ({'; '.join(lines)})" if lines else "")
+        + ": an earlier block may have built this one. Compare those commits "
+        "with this block's task before running it again"
+    )
 
 
 def _record_implementation_note(
@@ -3916,18 +3978,34 @@ async def _run_quality_review(
     spec_context = f"Block {block.number}: {block.name}\n{block.description}"
     if block.satisfies:
         spec_context += f"\nSatisfies: {', '.join(block.satisfies)}"
-        # The satisfied capabilities' spec scenarios, verbatim — the reviewer
+        # The satisfied requirements' spec scenarios, verbatim — the reviewer
         # judges Missing/Extra/Misunderstood against these, not a paraphrase.
-        texts = requirement_texts(config.change_dir)
-        for cap in block.satisfies:
-            if cap in texts:
-                spec_context += f"\n\n### Requirement: {cap}\n{texts[cap]}"
+        # Only the requirements the Satisfies line names: a capability several
+        # blocks share also holds the scenarios a later block builds.
+        sliced = _sliced_requirements(
+            block, requirement_texts(config.change_dir), all_when_unnamed=False
+        )
+        for cap, text in sliced.items():
+            spec_context += f"\n\n### Requirement: {cap}\n{text}"
 
     # Global constraints are review criteria too — a block that violates one
     # is non-compliant even when its local behavior is correct.
     constraints = _global_constraints_text(config)
     if constraints:
         spec_context += f"\n\n### Global Constraints (project-wide)\n{constraints}"
+
+    # The constraints describe the whole component, so they also describe what
+    # the blocks after this one build. Without their list the reviewer cannot
+    # tell that work from a gap, reports it as Missing, and the fixer builds it
+    # here; the later block's tests then pass before it starts.
+    later = [b for b in parse_blocks(config.tasks_path) if b.number > block.number]
+    if later:
+        spec_context += (
+            "\n\n### Later blocks (built after this one, not in this diff)\n"
+            + "\n".join(
+                f"\n#### Block {b.number}: {b.name}\n{b.description}" for b in later
+            )
+        )
 
     # RED/GREEN evidence reaches the reviewer as claims to verify, not truth.
     report_parts = []
