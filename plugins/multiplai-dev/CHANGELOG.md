@@ -15,6 +15,21 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.155.2] - 2026-11-04
+
+### Fixed
+
+- **buildme**: a block's code review no longer reports a later block's work as
+  missing. The reviewer now sees the blocks still to come, and the requirements
+  its own `Satisfies:` line names, even when that line lists requirements and
+  scenarios in parentheses. Before, it saw no requirements for such a line. It
+  then read the plan's Global Constraints as this block's job, and the fixer
+  built the later block early. The later block's new tests then passed before
+  any implementation, and its RED gate failed on every run.
+- **buildme**: when a block's new tests pass before it is implemented, the RED
+  gate's failure now names the earlier blocks' commits that changed the files
+  the block's task names.
+
 ## [0.155.1] - 2026-11-03
 
 ### Fixed

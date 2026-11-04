@@ -96,7 +96,9 @@ score of 85 is `0.85`.
    Behavior section below.
 4. Judge spec compliance scenario by scenario — Missing / Extra /
    Misunderstood — sorting each deviation into exactly one:
-   - **Missing** (`missing`) — spec behavior with no implementation in the diff
+   - **Missing** (`missing`) — spec behavior this block delivers with no
+     implementation in the diff (a block listed under Later blocks delivers
+     its own behavior)
    - **Extra** (`extra`) — implementation beyond what the spec asks for
    - **Misunderstood** (`misunderstood`) — implementation that addresses a
      scenario but gets its meaning wrong
@@ -329,14 +331,23 @@ ADJUDICATION_SCOPE_FIELD = """
 # The component review (`code_review.component_review`): the same reviewer
 # and the same instructions, reading every block's change at once from the
 # component's base, after the last block and the whole-suite run.
-COMPONENT_REVIEW_PROMPT = CODE_REVIEW_PROMPT.replace(
-    """You are reviewing a block implementation against its spec and a quality
+COMPONENT_REVIEW_PROMPT = (
+    CODE_REVIEW_PROMPT.replace(
+        """You are reviewing a block implementation against its spec and a quality
 rubric.""",
-    """You are reviewing a whole component (every block of it, diffed from the
+        """You are reviewing a whole component (every block of it, diffed from the
 component's base) against its specs, its design and a quality rubric.""",
-).replace(
-    "## Spec Context — the scenarios this block must satisfy",
-    "## Spec Context — the component's specs and design",
+    )
+    .replace(
+        "## Spec Context — the scenarios this block must satisfy",
+        "## Spec Context — the component's specs and design",
+    )
+    .replace(
+        """spec behavior this block delivers with no
+     implementation in the diff (a block listed under Later blocks delivers
+     its own behavior)""",
+        "spec behavior with no implementation in the diff",
+    )
 )
 
 # Added to the component review's spec context when the component touches
