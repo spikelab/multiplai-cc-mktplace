@@ -92,14 +92,14 @@ def _out(args: list[str], cwd: Path) -> str | None:
     return res.stdout.strip() if res.returncode == 0 else None
 
 
-def _refuse(message: str) -> None:
+def _refuse(message: str, cause: str) -> None:
     print(f"ERROR: {message}", flush=True)
-    raise Stop(EXIT_REFUSED, message)
+    raise Stop(EXIT_REFUSED, message, cause)
 
 
-def _fail(message: str) -> None:
+def _fail(message: str, cause: str) -> None:
     print(f"ERROR: {message}", flush=True)
-    raise Stop(EXIT_FAILED, message)
+    raise Stop(EXIT_FAILED, message, cause)
 
 
 def worktrees_root(repo: Path) -> Path:
@@ -273,7 +273,7 @@ def place(
     change = normalize_change_name(change)
     repo_text = _out(["rev-parse", "--show-toplevel"], project_dir)
     if not repo_text:
-        _refuse(f"{project_dir} is not in a git work tree")
+        _refuse(f"{project_dir} is not in a git work tree", "not-a-repo")
     repo = Path(repo_text).resolve()
     offset = project_dir.relative_to(repo)
     copy, recorded = _copy(
@@ -285,24 +285,27 @@ def place(
     if not known and copy is None and command != "new":
         _refuse(
             f"there is no change {change} to {command}: start it with "
-            f"`new {change} --ticket-ref <ticket id>`"
+            f"`new {change} --ticket-ref <ticket id>`",
+            "no-change",
         )
     if not known:
         _refuse(
             f"{change} has no ticket ref, and pm-spec puts a change's specs on a branch named "
-            f"after its ticket (<TICKET>-{change}); pass --ticket-ref <ticket id>, then run again"
+            f"after its ticket (<TICKET>-{change}); pass --ticket-ref <ticket id>, then run again",
+            "no-ticket",
         )
     why = _ticket_refusal(known[0], change, repo)
     if why:
-        _refuse(f"{why}; pass another --ticket-ref, then run again")
+        _refuse(f"{why}; pass another --ticket-ref, then run again", "bad-ticket")
     branch = flag or recorded or name(known[0], change)
     if flag and not any(flag.startswith(f"{t}-") for t in known):
         _refuse(
             f"--branch {flag!r} does not start with the ticket id ({known[0]}-): a change's "
-            f"branch is <TICKET>-<name>, for example {name(known[0], change)}"
+            f"branch is <TICKET>-<name>, for example {name(known[0], change)}",
+            "bad-branch",
         )
     if _out(["check-ref-format", "--branch", branch], repo) is None:
-        _refuse(f"{branch!r} is not a valid branch name")
+        _refuse(f"{branch!r} is not a valid branch name", "bad-branch")
     current = _out(["symbolic-ref", "--quiet", "--short", "HEAD"], project_dir) or ""
     if command != "new" and recorded == branch and _in_build_worktree(repo):
         log.info(
@@ -337,14 +340,16 @@ def prepare(where: Place) -> None:
     if _out(["remote", "get-url", "origin"], repo) is None:
         _refuse(
             f"pm-spec pushes the change's branch to origin, and {repo} has no origin remote; "
-            "add one (`git remote add origin <url>`), then run again"
+            "add one (`git remote add origin <url>`), then run again",
+            "no-origin",
         )
     if not where.push:
         return
     fetched = git_ops._git(["fetch", "origin"], repo, timeout=NETWORK_TIMEOUT_S)
     if fetched.returncode:
         _fail(
-            f"git fetch origin failed: {(fetched.stderr or fetched.stdout).strip()[-400:]}"
+            f"git fetch origin failed: {(fetched.stderr or fetched.stdout).strip()[-400:]}",
+            "fetch-failed",
         )
     branch, checkout = where.branch, where.checkout
     if where.own_worktree and not checkout.exists():
@@ -356,21 +361,24 @@ def prepare(where: Place) -> None:
             if default is None:
                 _refuse(
                     f"origin has neither {branch} nor a default branch to start it from; "
-                    "push a first commit to origin, then run again"
+                    "push a first commit to origin, then run again",
+                    "no-default-branch",
                 )
             start = f"origin/{default}"
         argv = ["worktree", "add", "--detach", str(checkout), start]
         added = git_ops._git(argv, repo)
         if added.returncode:
             _fail(
-                f"git {' '.join(argv)} failed: {(added.stderr or added.stdout).strip()}"
+                f"git {' '.join(argv)} failed: {(added.stderr or added.stdout).strip()}",
+                "worktree-failed",
             )
         log.info("WORKTREE %s at %s, for %s", checkout, start, branch)
     elif where.own_worktree and checkout.resolve() not in {
         path.resolve() for path, _ in _worktrees(repo)
     }:
         _refuse(
-            f"{checkout} exists but is not a worktree of {repo}; move it aside, then run again"
+            f"{checkout} exists but is not a worktree of {repo}; move it aside, then run again",
+            "not-a-worktree",
         )
     remote = _remote(checkout, branch)
     head = _out(["rev-parse", "HEAD"], checkout)
@@ -386,7 +394,8 @@ def prepare(where: Place) -> None:
             f"{checkout} has diverged from origin/{branch}: its HEAD {head} and origin/{branch} "
             f"{remote} each hold commits the other lacks. Nothing was changed. Rebase the "
             f"checkout's commits onto the branch, then run again:\n"
-            f"  git -C {checkout} pull --rebase origin {branch}"
+            f"  git -C {checkout} pull --rebase origin {branch}",
+            "diverged",
         )
     merged = git_ops._git(
         ["merge", "--ff-only", "-q", f"refs/remotes/origin/{branch}"], checkout
@@ -394,7 +403,8 @@ def prepare(where: Place) -> None:
     if merged.returncode:
         _fail(
             f"cannot fast-forward {checkout} to origin/{branch}: "
-            f"{(merged.stderr or merged.stdout).strip()[-400:]}"
+            f"{(merged.stderr or merged.stdout).strip()[-400:]}",
+            "fast-forward-failed",
         )
     log.info("FAST-FORWARD %s %s..%s", checkout, head[:8], remote[:8])
 
@@ -480,7 +490,8 @@ def adopt(where: Place, source: Path, change: str, ticket: str = "") -> bool:
             )
         except git_ops.GitError as e:
             _fail(
-                f"the specs of {name} are copied into {target / name}, but the commit failed: {e}"
+                f"the specs of {name} are copied into {target / name}, but the commit failed: {e}",
+                "adopt-commit-failed",
             )
     print(
         f"Copied {', '.join(moved)} from {origin} into {target} on {where.branch}; "

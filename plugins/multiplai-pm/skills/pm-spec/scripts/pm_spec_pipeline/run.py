@@ -31,10 +31,12 @@ MARKER_INTERVIEW_WAITING = "INTERVIEW:WAITING"
 
 
 class Stop(Exception):
-    """End the command with *code*; the message is already printed."""
+    """End the command with *code*; the message is already printed. *cause*
+    is the run row's code for why it ended (`runrow.CAUSES`)."""
 
-    def __init__(self, code: int, message: str = ""):
+    def __init__(self, code: int, message: str = "", cause: str = ""):
         self.code = code
+        self.cause = cause
         super().__init__(message)
 
 

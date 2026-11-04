@@ -169,7 +169,7 @@ async def run_prototype(run: Run) -> Gate:
 def _fail(run: Run, reason: str) -> None:
     F.record_error(run, NAME, reason)
     print(f"ERROR: prototype: {reason}", flush=True)
-    raise Stop(EXIT_FAILED, reason)
+    raise Stop(EXIT_FAILED, reason, "prototype-failed")
 
 
 async def run_prototype_stage(run: Run) -> None:
