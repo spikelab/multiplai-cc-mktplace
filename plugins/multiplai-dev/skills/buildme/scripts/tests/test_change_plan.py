@@ -10,6 +10,8 @@ import subprocess
 import pytest
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import lock as epic_lock
+from build_pipeline.epic import records, store
+from multiplai_core import runs
 
 from .epic_row_helpers import (
     CHANGE_PLAN,
@@ -197,6 +199,22 @@ def test_a_change_planned_per_component_keeps_its_plans(tmp_path, monkeypatch):
         origin, "ls-tree", "--name-only", "ENG-40-e:specs/changes/e"
     )
     assert _launches(fakes.root) == ["e/a"]
+
+
+def test_the_plans_model_call_counts_in_the_epics_spend(change, monkeypatch):
+    config, fakes, origin = change
+    from build_pipeline import budget
+    from build_pipeline.llm_steps import spec_steps
+
+    async def paid(change_dir, config, **_):
+        budget.add_process_spend(2.5, 100)
+        return CHANGE_PLAN
+
+    monkeypatch.setattr(spec_steps, "generate_change_plan", paid)
+    assert run_coordinator(config, auto=False) == 3
+    epic_dir = store.epic_dir_for(config.project_dir, "e", "ENG-40-e")
+    assert [a.kind for a in records.attempts(epic_dir)][-1] == "plan"
+    assert runs.read_rows()[0][-1]["spend_usd"] == 2.5
 
 
 def test_a_spec_issue_in_the_plan_goes_back_to_pm_spec(change, monkeypatch, capsys):

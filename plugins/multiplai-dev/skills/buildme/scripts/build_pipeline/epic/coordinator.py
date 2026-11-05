@@ -95,7 +95,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1339,6 +1339,26 @@ class Coordinator:
         log.info("EPIC shared analysis: written to %s at %s", directory, sha[:12])
         self.shared = directory
         return directory
+
+    async def _recorded_plan(self, call: Awaitable[str]) -> str:
+        """Await the shared plan's model call, as a `plan` record holding what
+        it spent; the plan's spend reaches no child's checkpoint."""
+        attempt = records.start(self.epic_dir, "plan", "shared", ["change-plan"])
+        before = budget.process_spend().cost_usd
+
+        def spent() -> dict:
+            return {"spend": round(budget.process_spend().cost_usd - before, 6)}
+
+        try:
+            text = await call
+        except Exception:
+            records.finish(attempt, 1, interrupted=False, extra=spent())
+            raise
+        except BaseException:  # a cancelled call records no usage: its spend is unknown
+            records.finish(attempt, None, interrupted=True)
+            raise
+        records.finish(attempt, 0, interrupted=False, extra=spent())
+        return text
 
     def _done(self, c: Child, exit_code: int | None, *, interrupted: bool) -> None:
         records.finish(c.attempt, exit_code, interrupted=interrupted)
@@ -3076,6 +3096,7 @@ class Coordinator:
                 self.branch,
                 approve=bool(getattr(self.args, "approve_plan", False)),
                 analysis=self._shared_analysis,
+                recorded=self._recorded_plan,
             )
             if planned.exit is not None:
                 self._summary(run_dir)
@@ -3146,7 +3167,18 @@ class Coordinator:
             if (c.status == "merged" or waits) and self._final_fix(c) is not None:
                 self._left_issue(c)
         await self._board_end()
-        self._summary(run_dir)
+        archived = None  # before the summary, whose row says how the run ended
+        if (
+            self.conflict is None
+            and self.plan_waiting is None
+            and self.nested
+            and all(c.status == "merged" for c in self.children.values())
+        ):
+            archived = self._archive()
+        if archived:
+            self._summary(run_dir, outcome="failed", cause="archive-failed")
+        else:
+            self._summary(run_dir)
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:  # beside EPIC:MERGE_WAITING too, not only in the summary
             print(
@@ -3166,8 +3198,8 @@ class Coordinator:
             return feature_branch.conflict_exit(self.branch, self.conflict)
         if self.plan_waiting is not None and not bad:  # PLAN:WAITING was printed
             return 3
-        if self.nested and all(c.status == "merged" for c in self.children.values()):
-            return self._archive()
+        if archived is not None:
+            return archived
         if (
             self.budget_stop is not None
         ):  # the spend at exit, the running children's included
