@@ -188,6 +188,7 @@ def cmd_serve(args) -> int:
         session_id=args.session_id,
         epic_dir_for=buildme.epic_dir_for,
         scorecard_sources=buildme.scorecard_sources,
+        cause_of=buildme.cause_of,
     )
     host = netinfo.bind_host()
     if server.bind(viewer, host, args.port, PORT_SPAN) is None:

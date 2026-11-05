@@ -51,8 +51,11 @@ from .models import (
     EpicAgent,
     EpicChildRow,
     EpicStatus,
+    NeedsYou,
+    NeedsYouRow,
     PmSpecStatus,
     Record,
+    Reviewer,
     RunRef,
     Scorecard,
     ScorecardChild,
@@ -403,31 +406,41 @@ def build_status(place: Place) -> BuildStatus | None:
     )
 
 
-def epic_status(
+def _epic_root(
     place: Place, epic_dir_for: Callable[[Path, str], Path] | None
-) -> EpicStatus | None:
+) -> Path | None:
     if epic_dir_for is None:
         return None
     try:
-        root = Path(epic_dir_for(place.repo, place.name))
+        return Path(epic_dir_for(place.repo, place.name))
     except Exception:  # noqa: BLE001 - no data dir means no epic records to show
         return None
-    runs = root / "runs"
+
+
+def latest_summary(root: Path) -> tuple[str, dict, Path] | None:
+    """(run, summary, its path) of the epic's latest readable `runs/NN/summary.json`."""
     try:
         nums = sorted(
-            (p for p in runs.iterdir() if p.name.isdigit()), key=lambda p: int(p.name)
+            (p for p in (root / "runs").iterdir() if p.name.isdigit()),
+            key=lambda p: int(p.name),
         )
     except OSError:
         return None
-    summary = None
-    run = None
     for p in reversed(nums):
         summary = _json(p / "summary.json")
         if summary is not None:
-            run = p.name
-            break
-    if summary is None:
+            return p.name, summary, p / "summary.json"
+    return None
+
+
+def epic_status(
+    place: Place, epic_dir_for: Callable[[Path, str], Path] | None
+) -> EpicStatus | None:
+    root = _epic_root(place, epic_dir_for)
+    latest = latest_summary(root) if root is not None else None
+    if latest is None:
         return None
+    run, summary, _ = latest
     children = []
     for c in summary.get("children") or []:
         if isinstance(c, dict) and c.get("id"):
@@ -1008,3 +1021,199 @@ def change_status(
         unpushed=unpushed,
         writable=place.write is not None,
     )
+
+
+# --- needs you -------------------------------------------------------------------
+
+# Parks a PM answers (`pm-spec revise`); every other park waits on an engineer.
+PM_CAUSES = frozenset({"spec-issues", "spec-not-ready"})
+NEED_STOPS = (1, 2, 3, 4)  # stop 5 is approved on GitHub; its threads are read there
+
+
+def people_of(
+    role: str, cfg: ViewerConfig, people: Mapping[str, Person]
+) -> list[Reviewer]:
+    """The names config lists for *role*, else the people.json people of that role."""
+    known = {p.name for p in people.values()}
+    names = list(cfg.reviewers.get(role, [])) or [
+        p.name for p in people.values() if p.role == role
+    ]
+    return [
+        Reviewer(name=n, role=role, invited=n in known) for n in dict.fromkeys(names)
+    ]
+
+
+def _waited(since: str | None, now: datetime) -> float | None:
+    t = parse_utc(since)
+    return (now - t).total_seconds() if t is not None else None
+
+
+def _open_issues(place: Place) -> list[tuple[str | None, Path]]:
+    """Each open `spec-issues.md` a copy's `.change.yaml` `spec_issues` names
+    (buildme's `readiness.open_issues`), at the change or one of its
+    `components/<id>/`: (component id or None, the file), first copy first."""
+    from multiplai_core.specs import read_change_meta
+
+    found: dict[str | None, Path] = {}
+    for d in dict.fromkeys(
+        [place.read_dir()] + [c.change_dir(place.name) for c in place.copies]
+    ):
+        try:
+            parts = sorted(p for p in (d / "components").iterdir() if p.is_dir())
+        except OSError:
+            parts = []
+        for where, at in [(None, d), *((p.name, p) for p in parts)]:
+            if where in found:
+                continue
+            try:
+                value = read_change_meta(at).get("spec_issues")
+            except (OSError, UnicodeError, ValueError):
+                continue
+            if not value:
+                continue
+            path = Path(str(value))
+            path = path if path.is_absolute() else at / path
+            if path.is_file():
+                found[where] = path
+    return list(found.items())
+
+
+def _children(root: Path | None) -> tuple[list[dict], str | None]:
+    """The latest summary's children and when that run ended (its
+    `finished_at`, else the file's time)."""
+    latest = latest_summary(root) if root is not None else None
+    if latest is None:
+        return [], None
+    _, summary, path = latest
+    since = iso_utc(summary.get("finished_at"))
+    if since is None:
+        try:
+            since = iso_utc(path.stat().st_mtime)
+        except OSError:
+            since = None
+    kids = [c for c in summary.get("children") or [] if isinstance(c, dict)]
+    return [c for c in kids if c.get("id")], since
+
+
+def child_prs(
+    items: list[tuple[Place, ChangeStatus]],
+    epic_dir_for: Callable[[Path, str], Path] | None,
+) -> list[tuple[str, str, str]]:
+    """(change, child, pr) of every child PR not merged in each change's latest
+    epic summary: the PRs whose review threads `github.add_thread_rows` reads."""
+    out = []
+    for place, _ in items:
+        kids, _since = _children(_epic_root(place, epic_dir_for))
+        for c in kids:
+            if c.get("pr") and c.get("status") != "merged":
+                out.append((place.name, str(c["id"]), str(c["pr"])))
+    return out
+
+
+def needs_you(
+    items: list[tuple[Place, ChangeStatus]],
+    cfg: ViewerConfig,
+    people: Mapping[str, Person],
+    *,
+    epic_dir_for: Callable[[Path, str], Path] | None,
+    cause_of: Callable[[str, str], str | None] | None,
+    now: datetime,
+) -> NeedsYou:
+    """Everything in this repo waiting on a person, oldest first, from files
+    only (GitHub's review threads are `github.add_thread_rows`, a separate
+    step):
+
+    - a stop 1-4 `waiting` or `acknowledged` (`stop_status`), on its `waiting_on`;
+    - a child `parked` in the change's latest epic summary, with its cause (a
+      summary from before causes were recorded: read from `reason` by
+      *cause_of*, `inferred`), on the PMs for a spec cause, else the engineers;
+    - a child the latest summary marks `merge_waiting` (buildme's own list
+      after `EPIC:MERGE_WAITING`: its PR passed review at its current head, or
+      another child waits on it), on the engineers. A summary written before
+      buildme recorded it gives no merge row;
+    - an open `spec-issues.md` (`.change.yaml` `spec_issues`) of the change
+      or of one of its components, on the PMs.
+    """
+    rows: list[NeedsYouRow] = []
+    engineers = people_of("engineer", cfg, people)
+    pms = people_of("pm", cfg, people)
+    for place, st in items:
+        for s in st.stops:
+            if s.n not in NEED_STOPS or s.state not in ("waiting", "acknowledged"):
+                continue
+            rows.append(
+                NeedsYouRow(
+                    kind="stop",
+                    change=place.name,
+                    stop=s.n,
+                    what=f"Stop {s.n} of {place.name} ({s.label}) waits for approval",
+                    waiting_on=[r for r in s.reviewers if r.name in s.waiting_on],
+                    since=s.waiting_since,
+                    waited_s=_waited(s.waiting_since, now),
+                    link=f"#change={place.name}&stop={s.n}",
+                )
+            )
+        root = _epic_root(place, epic_dir_for)
+        kids, since = _children(root)
+        for c in kids:
+            cid, cstatus = str(c["id"]), str(c.get("status", ""))
+            reason = str(c.get("reason") or "")
+            pr = str(c["pr"]) if c.get("pr") else None
+            if cstatus == "parked":
+                cause, inferred = c.get("cause"), False
+                if cause is None and cause_of is not None:
+                    cause, inferred = cause_of(cstatus, reason), True
+                rows.append(
+                    NeedsYouRow(
+                        kind="parked",
+                        change=place.name,
+                        child=cid,
+                        what=f"{cid} of {place.name} is parked",
+                        waiting_on=pms if cause in PM_CAUSES else engineers,
+                        since=since,
+                        waited_s=_waited(since, now),
+                        link=f"#change={place.name}",
+                        url=pr,
+                        cause=cause,
+                        inferred=inferred,
+                        reason=reason,
+                    )
+                )
+            elif cstatus == "built" and pr and c.get("merge_waiting") is True:
+                rows.append(
+                    NeedsYouRow(
+                        kind="merge",
+                        change=place.name,
+                        child=cid,
+                        what=f"{cid}'s pull request waits for a person to merge it",
+                        waiting_on=engineers,
+                        since=since,
+                        waited_s=_waited(since, now),
+                        link=f"#change={place.name}",
+                        url=pr,
+                    )
+                )
+        for component, issues in _open_issues(place):
+            try:
+                at = iso_utc(issues.stat().st_mtime)
+            except OSError:
+                at = None
+            of = f"{component} of {place.name}" if component else place.name
+            rows.append(
+                NeedsYouRow(
+                    kind="spec-issues",
+                    change=place.name,
+                    child=component,
+                    what=f"spec-issues.md of {of} waits for /multiplai-pm:pm-spec revise",
+                    waiting_on=pms,
+                    since=at,
+                    waited_s=_waited(at, now),
+                    link=f"#change={place.name}",
+                )
+            )
+    return NeedsYou(rows=sort_needs(rows))
+
+
+def sort_needs(rows: list[NeedsYouRow]) -> list[NeedsYouRow]:
+    """Oldest wait first; rows with no time last."""
+    return sorted(rows, key=lambda r: (r.since is None, r.since or "", r.change))

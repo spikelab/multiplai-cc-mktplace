@@ -30,6 +30,8 @@
     acked: new Set(),
     review: null,
     scorecard: null,
+    needs: null,
+    needsJson: "",
     changesTimer: null,
     changesBackoff: CHANGES_EVERY_MS,
     pollTimer: null,
@@ -236,12 +238,34 @@
       banner("");
       if (changed && state.started) render(false);
       if (state.review && state.review.steps) refreshQuestions(state.review);
+      refreshNeeds();
     } catch (err) {
       if (err.status === 401) return;
       state.changesBackoff = Math.min(state.changesBackoff * 2, MAX_BACKOFF_MS);
       banner(err.message + " Trying again in " + Math.round(state.changesBackoff / 1000) + " s.");
     }
     if (!document.hidden) state.changesTimer = setTimeout(refreshChanges, state.changesBackoff);
+  }
+
+  /* The needs-you list, read after each changes refresh. It is not awaited:
+   * its GitHub step can take seconds, and the changes list never waits on it. */
+  let needsBusy = false;
+  async function refreshNeeds() {
+    if (needsBusy || state.stopped) return;
+    needsBusy = true;
+    try {
+      const data = await api("/api/needs-you");
+      const json = JSON.stringify([data.rows, data.github]);
+      const changed = json !== state.needsJson;
+      state.needs = data;
+      state.needsJson = json;
+      const r = route();
+      if (changed && state.started && !r.change && !r.view) render(false);
+    } catch (err) {
+      /* The changes list shows the error banner; this one keeps its last answer. */
+    } finally {
+      needsBusy = false;
+    }
   }
 
   /* A question this browser asked since it opened the page has no final
@@ -375,6 +399,7 @@
           (updated ? " · updated " + updated : "") + " · this page refreshes itself"),
         h("p", {}, h("a", { href: L.makeHash({ view: "scorecard" }) }, "Scorecard: buildme's runs by version →"))),
     ];
+    kids.push(needsSection());
     if (!state.changes.length) {
       kids.push(h("p", { class: "card" }, "No changes yet. A change appears here once pm-spec starts one in specs/changes/."));
     }
@@ -386,6 +411,43 @@
         h("ul", { class: "cards" }, list.map((c) => h("li", {}, changeCard(c, i === 0))))));
     });
     setMain(kids);
+  }
+
+  const NEED_LABELS = {
+    stop: ["Approval", "warn"],
+    parked: ["Parked", "bad"],
+    merge: ["Merge", "accent"],
+    "spec-issues": ["Spec issues", "warn"],
+    "review-threads": ["Review threads", "warn"],
+  };
+
+  /* Everything waiting on a person, first on the home page. */
+  function needsSection() {
+    const n = state.needs;
+    if (!n) return h("section", { class: "group needs" }, h("h2", {}, "Needs you"), h("p", { class: "muted" }, "Loading…"));
+    const rows = L.needsMineFirst(n.rows, state.me);
+    const gh = n.github || {};
+    return h("section", { class: "group needs" },
+      h("h2", {}, "Needs you ", h("span", { class: "count" }, String(rows.length))),
+      h("p", { class: "muted" }, "Everything in " + n.repo + " waiting on a person, the longest wait first; what waits on you comes first."),
+      rows.length ? h("ul", { class: "cards" }, rows.map((r) => h("li", {}, needCard(r)))) :
+        h("p", { class: "card" }, "Nothing is waiting on anyone."),
+      gh.checked ? null : h("p", { class: "warn-text small" },
+        "Review threads on GitHub could not be read" + (gh.error ? ": " + gh.error : "") + ". The rest of the list does not depend on GitHub."));
+  }
+
+  function needCard(r) {
+    const label = NEED_LABELS[r.kind] || [r.kind, ""];
+    const mine = (r.waiting_on || []).some((w) => w.name === state.me);
+    return h("div", { class: "card need" + (mine ? " mine" : "") },
+      h("div", { class: "row" },
+        h("a", { class: "change-name", href: r.link }, r.what),
+        h("span", { class: "grow" }),
+        chip(label[0], label[1])),
+      h("p", { class: "line" }, L.needLine(r, state.me, now())),
+      r.cause ? h("p", { class: "small" }, L.causeLabel(r.cause) + (r.inferred ? " (inferred from text)" : "")) : null,
+      r.reason ? h("p", {}, h("code", {}, r.reason)) : null,
+      r.url ? h("p", { class: "small" }, h("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, "Pull request on GitHub")) : null);
   }
 
   function changeCard(c, mine) {

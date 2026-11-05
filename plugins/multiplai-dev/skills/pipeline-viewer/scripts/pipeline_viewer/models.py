@@ -235,6 +235,45 @@ class Scorecard(_Out):
     skipped_rows: int = 0
 
 
+NeedKind = Literal["stop", "parked", "merge", "spec-issues", "review-threads"]
+
+
+class NeedsYouRow(_Out):
+    """One thing waiting on a person (`status.needs_you`, `github.add_thread_rows`)."""
+
+    kind: NeedKind
+    change: str
+    child: str | None = None
+    stop: int | None = None
+    what: str
+    waiting_on: list[Reviewer] = Field(default_factory=list)
+    since: str | None = None
+    waited_s: float | None = None
+    # The page's address for it, and the pull request on GitHub when there is one.
+    link: str
+    url: str | None = None
+    # A parked child's cause (`inferred`: read from `reason`).
+    cause: str | None = None
+    inferred: bool = False
+    reason: str = ""
+    # Unresolved review threads on the pull request.
+    count: int | None = None
+
+
+class GitHubCheck(_Out):
+    """The last step: unresolved review threads read with `gh api graphql`."""
+
+    checked: bool = False
+    prs: int = 0
+    error: str | None = None
+
+
+class NeedsYou(_Out):
+    repo: str = ""
+    rows: list[NeedsYouRow] = Field(default_factory=list)
+    github: GitHubCheck = Field(default_factory=GitHubCheck)
+
+
 class ChangeStatus(_Out):
     name: str
     branch: str | None = None

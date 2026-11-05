@@ -63,6 +63,11 @@ The five stops:
   buildme's files (`.build-state*.json`, `plan-approval.md`, the last note in
   `build-progress.md`), not from a lock: buildme takes none for a single
   build.
+- **Runs `gh api graphql`** (read only) for the needs-you list: for each
+  epic child's pull request not yet merged, its unresolved review threads,
+  with the `gh` login of whoever runs the server, at most once a minute per
+  pull request. Without `gh`, or without access to the repository, those
+  rows are left out and the page says so.
 - **Reads `SLACK_TOKEN`** from the environment (a Slack token, the one
   `multiplai-messaging:slack` uses) and posts to the channel set in
   `specs/config.yaml` (`pipeline_viewer.slack.channel`): one message per stop
@@ -248,6 +253,19 @@ a deadline that passed while it was down fires once (row S1).
 - A write answered 409 → its message says why (pm-spec running, buildme
   building, uncommitted edits, a diverged branch, no checkout on the branch);
   pass it on as is.
+
+## Needs you
+
+The first section of the home page (`GET /api/needs-you`) lists everything
+in the repository waiting on a person, the longest wait first, the viewer's
+own first: a stop waiting for approval, a parked epic child with its cause
+and reason, a child pull request buildme says waits for a person to merge
+it (`EPIC:MERGE_WAITING`), an open `spec-issues.md` of the change or one of
+its components waiting for `/multiplai-pm:pm-spec revise`, and unresolved
+review threads on the children's pull requests. Each row says who it waits on
+and for how long, and links to the change or the pull request. Only the
+review threads need GitHub; the rest is read from files, and GitHub gets at
+most ten seconds per refresh of the list, so a slow GitHub never holds it up.
 
 ## The scorecard
 

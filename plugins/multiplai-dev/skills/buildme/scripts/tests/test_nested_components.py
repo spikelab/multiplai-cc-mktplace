@@ -431,6 +431,29 @@ def test_buildme_on_a_nested_change_builds_its_components_in_order_then_archives
     assert _launched(tmp_path) == ["e/a", "e/b"]
 
 
+def test_the_summary_marks_each_child_waiting_for_a_merge(tmp_path, monkeypatch):
+    """`merge_waiting`: the children `EPIC:MERGE_WAITING` names, for a
+    reader (pipeline-viewer's needs-you list) that cannot rerun buildme's check."""
+    import json
+
+    from build_pipeline.epic import store
+
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    Fakes(tmp_path, monkeypatch, {"a": [{"commit": {"a.txt": "a\n"}}]})
+    config = make_build(project)
+    config.epic = EpicSettings(max_parallel=2, merge="manual")
+    _push_nested(config)
+    assert run_coordinator(config) == 3 and merge_waiting() == [pr_url("e-a")]
+    epic_dir = store.epic_dir_for(project, "e", "ENG-40-e")
+    last = max((epic_dir / "runs").iterdir())
+    kids = {
+        c["id"]: c for c in json.loads((last / "summary.json").read_text())["children"]
+    }
+    assert kids["a"]["merge_waiting"] is True
+    assert kids["b"]["merge_waiting"] is False
+
+
 def test_an_epic_whose_archive_failed_has_a_failed_row_after_the_attempt(
     tmp_path, monkeypatch
 ):
