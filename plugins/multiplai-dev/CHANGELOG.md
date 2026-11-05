@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.155.3] - 2026-11-04
+
+### Fixed
+
+- **buildme**: in an epic, a child whose fixer parked and whose PR was then
+  reviewed again (after a push) no longer stays parked on the old fixer's
+  reason. The newest review, post or fix decides, so a review that parks at
+  the round cap parks on its open findings, and `epic.accepted_findings` for
+  them now lets the child through.
+- **buildme**: in an epic, a parked, failed or unknown child whose PR a person
+  merged on GitHub is now taken as merged on the next run, and the children
+  that depend on it are launched instead of skipped. An open or closed PR
+  leaves the child as it was.
+
 ## [0.155.2] - 2026-11-04
 
 ### Fixed
