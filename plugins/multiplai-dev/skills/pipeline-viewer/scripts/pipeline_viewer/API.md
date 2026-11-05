@@ -292,13 +292,16 @@ component counted, for every count.
 
 - `id`: `<folder>#<run>` for an epic run (the folder relative to the data
   dir), `build:<change>:<finished_at>` for a single build (`epic` is then
-  the change).
+  the change), and `epic:<change>:<finished_at>` for an epic refused or
+  failed before it wrote a summary (`run` is then null). A build an epic
+  started for one of its components (its row's `requested_by` is set) is no
+  run of its own: its epic's run already counts its spend.
 - `outcome`, `cause`: the row's (`multiplai_core.runs` outcomes); `null` for
   a run read from its summary.
 - `spend_usd`: the row's; from a summary, its `spent_usd` less the previous
   run's.
 - `stopped`: every component the run ended with parked, failed, unknown or
-  skipped. `cause` is one of buildme's `epic.causes.CAUSES` (a single build's
+  skipped, or waiting on another component (cause `dependency`). `cause` is one of buildme's `epic.causes.CAUSES` (a single build's
   is its last marker, such as `SPEC:NOT_READY`); `inferred: true` when it was
   read from `reason`. `same_as_previous_run: true` marks one shown but not
   counted.

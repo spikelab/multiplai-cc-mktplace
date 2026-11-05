@@ -27,7 +27,9 @@ time, not derived from a tag.
   every run summary of the repository's epics, in the old epic folders and
   the new ones. Runs from before buildme recorded its version are listed
   apart, with their causes read from the reason text and marked "inferred
-  from text".
+  from text". A build an epic started for a component counts in its epic's
+  run, not as a run of its own; a component waiting on another counts as
+  held back; an epic refused before its summary is a run of its own.
 
 ## [0.156.0] - 2026-11-05
 
