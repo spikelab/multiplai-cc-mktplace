@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from conftest import BRANCH, TICKET, run
-from multiplai_core import runs
+from multiplai_core import UsageLimitError, runs
 from pm_spec_pipeline import runrow
 
 PLUGIN_JSON = Path(__file__).resolve().parents[4] / ".claude-plugin" / "plugin.json"
@@ -86,6 +86,16 @@ def test_the_budget_writes_stopped(repo, runs_file):
     assert run(repo, "new", "throttle", "--auto", "--max-usd", "0.001") == 1
     [row] = rows(runs_file)
     assert (row["outcome"], row["cause"]) == ("stopped", "budget")
+
+
+def test_a_usage_limit_in_the_prototype_writes_stopped(repo, model, runs_file):
+    def limit(prompt, label, kw):
+        raise UsageLimitError("You've hit your session limit", limit="session")
+
+    model["prototype"] = limit
+    assert run(repo, "new", "throttle", "--auto") == 1
+    [row] = rows(runs_file)
+    assert (row["outcome"], row["cause"]) == ("stopped", "usage-limit")
 
 
 def test_an_argument_refused_before_the_change_writes_no_row(repo, runs_file):

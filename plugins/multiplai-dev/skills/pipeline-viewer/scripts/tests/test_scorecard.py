@@ -164,3 +164,83 @@ def test_fixture_rows_are_valid_json_lines(tmp_path, shared_fx):
     lines = (tmp_path / "runs.jsonl").read_text().splitlines()
     assert sum(1 for line in lines if line.endswith("}")) == len(lines) - 1
     assert json.loads(lines[0])["kind"] == "epic"
+
+
+def _append_rows(data, rows):
+    with (data / "runs.jsonl").open("a") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+
+def _row(repo, **over):
+    row = {
+        "row_version": 1,
+        "producer": epic_fixture.ROW_PRODUCER,
+        "kind": "build",
+        "target": {"repo": buildme.repo_folder(repo), "branch": "TCK-9-cart"},
+        "folder": None,
+        "requested_by": None,
+        "started_at": "2026-01-07T09:00:00Z",
+        "finished_at": "2026-01-07T09:10:00Z",
+        "outcome": "succeeded",
+        "cause": None,
+        "spend_usd": 4.0,
+        "run": {},
+    }
+    return {**row, **over}
+
+
+def test_an_epics_child_builds_are_in_its_run_not_counted_again(shared_fx, tmp_path):
+    epic_fixture.build(tmp_path, shared_fx["repo"])
+    repo = shared_fx["repo"]
+    before = _version(
+        status.scorecard(buildme.scorecard_sources(repo, tmp_path)), "0.157.0"
+    )
+    child = _row(
+        repo,
+        target={**_row(repo)["target"], "change": "cart/x"},
+        requested_by={"branch": "TCK-9-cart", "child": "x"},
+    )
+    _append_rows(tmp_path, [child])
+    after = _version(
+        status.scorecard(buildme.scorecard_sources(repo, tmp_path)), "0.157.0"
+    )
+    assert (after.runs.count, after.spend_usd) == (before.runs.count, before.spend_usd)
+
+
+def test_a_component_waiting_on_another_is_held_back(shared_fx, tmp_path):
+    folders = epic_fixture.build(tmp_path, shared_fx["repo"])
+    epic_fixture._summary(
+        folders["cart"] / "runs" / "02",
+        [
+            epic_fixture._child("x", "parked", "SPEC:ISSUES:/x"),
+            epic_fixture._child("y", "waiting", "waiting on x"),
+            epic_fixture._child("z", "waiting", "PLAN:WAITING:/p"),
+        ],
+        9.0,
+        buildme_version="0.157.0",
+    )
+    card = status.scorecard(buildme.scorecard_sources(shared_fx["repo"], tmp_path))
+    run = _run(card, "cart", "02")
+    assert [c.id for c in run.stopped if c.status == "waiting"] == ["y"]
+    v = _version(card, "0.157.0")
+    assert (run.id, "y") in [(r.run, r.child) for r in v.blocked.refs]
+
+
+def test_an_epic_refused_before_its_summary_is_a_run(shared_fx, tmp_path):
+    epic_fixture.build(tmp_path, shared_fx["repo"])
+    repo = shared_fx["repo"]
+    refused = _row(
+        repo,
+        kind="epic",
+        target={**_row(repo)["target"], "change": "cart"},
+        outcome="failed",
+        cause="SPEC:NOT_READY",
+        spend_usd=0.0,
+        run={"exit_code": 2},
+    )
+    _append_rows(tmp_path, [refused])
+    card = status.scorecard(buildme.scorecard_sources(repo, tmp_path))
+    [r] = [r for r in card.runs if r.epic == "cart" and r.run is None]
+    assert (r.kind, r.outcome, r.cause) == ("epic", "failed", "SPEC:NOT_READY")
+    assert [c.cause for c in r.stopped] == ["SPEC:NOT_READY"]

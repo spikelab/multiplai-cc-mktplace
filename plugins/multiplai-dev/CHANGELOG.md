@@ -42,7 +42,9 @@ time, not derived from a tag.
   every run summary of the repository's epics, in the old epic folders and
   the new ones. Runs from before buildme recorded its version are listed
   apart, with their causes read from the reason text and marked "inferred
-  from text".
+  from text". A build an epic started for a component counts in its epic's
+  run, not as a run of its own; a component waiting on another counts as
+  held back; an epic refused before its summary is a run of its own.
 
 ## [0.156.0] - 2026-11-05
 
@@ -60,6 +62,9 @@ time, not derived from a tag.
 - **buildme**: an epic's `runs/<NN>/summary.json` now records the buildme
   version, when the run started and finished, and a `cause` for each parked or
   failed child.
+- **buildme**: `epic status` and `epic watch` take `--branch` to name the
+  feature branch when several kept branches hold an epic of that name, and a
+  component built by hand reads its own feature branch's epic.
 
 ### Changed
 
@@ -68,6 +73,10 @@ time, not derived from a tag.
   origin's repository name, as review names `reviews/<repo>/`. An epic started
   before this version keeps using `<data_dir>/buildme/epics/<owner>-<repo>--<change>/`
   until it is moved.
+  When that folder holds an epic of another owner's same-named repository, the
+  new epic uses `<repo>@<owner>`.
+- **buildme**: a failed child's reason now names a Claude usage limit from its
+  build's log, or an agent timeout (`exit 4: an agent timed out`).
 
 ## [0.155.3] - 2026-11-04
 

@@ -494,6 +494,7 @@ def epic_status(
 # of another child, counted apart from the causes.
 STOPPED_AS = {"parked": "parked", "failed": "failed", "unknown": "failed"}
 BLOCKED_STATUS = "skipped"
+WAITING_STATUS = "waiting"  # held back when its cause is `dependency`
 BLOCKED_CAUSE = "dependency"
 BUILDME_SKILL = ":buildme "
 
@@ -544,7 +545,10 @@ def _child_cause(c: dict, cause_of) -> tuple[str | None, bool]:
 def _epic_entries(src: ScorecardSources) -> tuple[list[dict], list[dict], int]:
     """(epic runs, single builds, rows skipped) of the repo, each run a dict
     for `_scorecard_run`. A run with a row is read from the row; the others
-    from their summary."""
+    from their summary. An epic's child build (its row names the epic in
+    `requested_by`) is left out, since the epic's run counts its spend; an
+    epic row with no run folder (refused before its summary) is listed with
+    the single builds."""
     rows, skipped = runs_mod.read_rows(src.runs_file)
     epics: dict[tuple[str, str], dict] = {}
     builds: list[dict] = []
@@ -567,9 +571,14 @@ def _epic_entries(src: ScorecardSources) -> tuple[list[dict], list[dict], int]:
             "spend_complete": run.get("spend_complete") is not False,
             "children": [c for c in run.get("children") or [] if isinstance(c, dict)],
         }
+        if row.get("kind") == "build" and row.get("requested_by"):
+            continue  # an epic's child build: its epic's run holds its spend
         if row.get("kind") == "build":
             builds.append({**entry, "kind": "build", "run": None, "folder": None})
-        elif row.get("kind") == "epic" and row.get("folder") and run.get("run"):
+        elif row.get("kind") == "epic" and not (row.get("folder") and run.get("run")):
+            # refused or failed before its coordinator wrote a summary
+            builds.append({**entry, "kind": "epic", "run": None, "folder": None})
+        elif row.get("kind") == "epic":
             folder = Path(str(row["folder"]))
             folder = folder if folder.is_absolute() else src.data_dir / folder
             key = (_rel(folder, src.data_dir), str(run["run"]))
@@ -649,9 +658,11 @@ def _scorecard_run(e: dict, prev: dict | None, cause_of) -> ScorecardRun:
             if before.get(cid, (None,))[0] != "merged":
                 merged.append(cid)
             continue
-        if st not in STOPPED_AS and st != BLOCKED_STATUS:
+        if st not in STOPPED_AS and st not in (BLOCKED_STATUS, WAITING_STATUS):
             continue
         cause, inferred = _child_cause(c, cause_of)
+        if st == WAITING_STATUS and cause != BLOCKED_CAUSE:
+            continue  # waiting on a merge or a plan approval: not held back
         stopped.append(
             ScorecardChild(
                 id=cid,
@@ -663,13 +674,13 @@ def _scorecard_run(e: dict, prev: dict | None, cause_of) -> ScorecardRun:
                 same_as_previous_run=before.get(cid) == (st, c.get("reason") or ""),
             )
         )
-    if e["kind"] == "build" and e["outcome"] == "failed":
+    if e["run"] is None and e["outcome"] == "failed":
         stopped.append(ScorecardChild(id=e["epic"], status="failed", cause=e["cause"]))
     finished = iso_utc(e["finished_at"])
     run_id = (
         f"{e['folder']}#{e['run']}"
-        if e["kind"] == "epic"
-        else f"build:{e['epic']}:{finished or ''}"
+        if e["run"] is not None
+        else f"{e['kind']}:{e['epic']}:{finished or ''}"
     )
     return ScorecardRun(
         id=run_id,

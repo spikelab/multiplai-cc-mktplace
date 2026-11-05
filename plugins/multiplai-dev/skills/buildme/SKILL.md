@@ -1016,7 +1016,7 @@ reading logs, run
 
 ```bash
 uv run -q --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" python -m build_pipeline \
-  epic status --change <parent> --project-dir <project>
+  epic status --change <parent> --project-dir <project> [--branch <feature branch>]
 ```
 
 It prints one JSON object per child, one per line: `state` (the epic's
@@ -1035,8 +1035,11 @@ with nobody watching, run
 
 ```bash
 uv run -q --directory "${CLAUDE_PLUGIN_ROOT}/skills/buildme/scripts" python -m build_pipeline \
-  epic watch --change <parent> --project-dir <project> --trust-repo [--viewer-repo <repo>]
+  epic watch --change <parent> --project-dir <project> --trust-repo [--branch <feature branch>] [--viewer-repo <repo>]
 ```
+
+`--branch` on either command names the feature branch when several kept
+branches hold an epic of that name; without it they exit `2` and list them.
 
 It runs the epic (`build --change <parent> --auto`, in its own session, its
 output appended to `<epic dir>/watch-epic.log`) and reads its exit code, its

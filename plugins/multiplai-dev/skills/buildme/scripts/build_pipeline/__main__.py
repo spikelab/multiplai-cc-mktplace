@@ -349,6 +349,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--change", required=True, help="The epic's change name")
     status.add_argument("--project-dir", default=".", help="Project directory")
+    status.add_argument(
+        "--branch",
+        default="",
+        help="The epic's feature branch, when several branches hold an epic of "
+        "this name",
+    )
     watch = epic_sub.add_parser(
         "watch",
         help="Run the epic, and again after a network failure, an agent timeout "
@@ -357,6 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     watch.add_argument("--change", required=True, help="The epic's change name")
     watch.add_argument("--project-dir", default=".", help="Project directory")
+    watch.add_argument(
+        "--branch",
+        default="",
+        help="The epic's feature branch, when several branches hold an epic of "
+        "this name",
+    )
     watch.add_argument(
         "--viewer-repo",
         help="The --repo the pipeline-viewer page was served with, for its "
@@ -545,6 +557,12 @@ def _main(args: argparse.Namespace) -> int:
         try:
             code = asyncio.run(run_orchestrator(config, args))
             return code
+        except SystemExit as e:  # SIGTERM and SIGHUP: 128 + the signal
+            code = e.code if isinstance(e.code, int) else None
+            raise
+        except Exception:
+            code = 1  # what the traceback exits with
+            raise
         finally:
             sys.stdout = watch.stream
             build_row.append(config, code, started, watch.marker)

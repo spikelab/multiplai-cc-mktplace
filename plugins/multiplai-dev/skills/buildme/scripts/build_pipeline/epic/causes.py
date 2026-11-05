@@ -16,6 +16,8 @@ the causes of the child that held it.
 
 from __future__ import annotations
 
+import re
+
 from .. import intake, readiness
 
 # (cause, module whose source writes the words, the words, how they match:
@@ -58,10 +60,19 @@ PATTERNS: tuple[tuple[str, str, str, str], ...] = (
     ("dependency", "epic.coordinator", "dependency ", "start"),
     ("dependency", "epic.coordinator", "waiting on ", "start"),
     ("timeout", "epic.coordinator", "timed out after", "in"),
+    ("timeout", "epic.coordinator", "an agent timed out", "in"),
     ("exit-code", "epic.coordinator", "exit ", "start"),
 )
 # Matched anywhere in the text, before PATTERNS: a usage limit can end any step.
 USAGE_LIMIT_WORDS = ("usage limit", "rate limit", "rate_limit")
+# The Claude CLI's limit text anywhere in a line (multiplai-core's
+# `UsageLimitError` reads it at the start of an answer; here it is inside a
+# log line): "You've hit your session limit · resets 9:40am (UTC)".
+USAGE = re.compile(
+    r"you(?:'|’)ve hit your [^\n·]{0,60}?\s*(?:limit|budget)\b"
+    r"(?:\s*·\s*resets\s+(?P<resets>[^()\n·]*(?:\((?!exit code)[^()\n]*\))?))?",
+    re.IGNORECASE,
+)
 
 CAUSES = tuple(dict.fromkeys(["usage-limit", *(p[0] for p in PATTERNS), "other"]))
 
@@ -75,7 +86,7 @@ def cause_of(status: str, reason: str) -> str | None:
     if status in NO_CAUSE:
         return None
     text = reason or ""
-    if any(w in text.lower() for w in USAGE_LIMIT_WORDS):
+    if USAGE.search(text) or any(w in text.lower() for w in USAGE_LIMIT_WORDS):
         return "usage-limit"
     for cause, _, words, how in PATTERNS:
         if text.startswith(words) if how == "start" else words in text:

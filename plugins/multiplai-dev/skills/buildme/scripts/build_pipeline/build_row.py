@@ -1,9 +1,12 @@
 """The shared run row of a single build (`multiplai_core.runs`).
 
 `__main__` calls `append` once a `build` command ends, however it ends, with
-its exit code (None when it raised). An epic's parent writes its own rows
-from the coordinator (`epic.coordinator._run_row`), so a `build` that ran an
-epic (`mark_epic`) writes none here.
+its exit code (None after Ctrl-C). An epic's parent writes its own row from
+the coordinator (`epic.coordinator._run_row`), so a `build` that ran an epic
+writes none here once that row is written (`epic_row_written`); an epic
+refused or failed before then gets its one row here, of kind `epic`
+(`mark_epic`). A child build started by an epic names it in `requested_by`:
+the epic's own row already holds that child's spend.
 
 The row copies what the build's checkpoint holds that the scorecard reads
 (phase, failed phase, blocks, spend), so deleting the build's worktree loses
@@ -12,7 +15,7 @@ none of it. The outcome comes from the exit code:
 - 0: `succeeded`;
 - 3: `waiting` (`PLAN:WAITING`, `RESEARCH:NEEDED`, `SPLIT:REQUIRED`,
   `BUILD:COMPLETE`: the last marker is the cause);
-- 128 + a signal, or None after a stop: `stopped`;
+- 128 + a signal, or None after Ctrl-C: `stopped`;
 - anything else: `failed`, with the last marker line as the cause when the
   run printed one, else `exit-<code>`.
 """
@@ -20,6 +23,7 @@ none of it. The outcome comes from the exit code:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -28,7 +32,8 @@ from multiplai_core import runs
 log = logging.getLogger(__name__)
 
 PRODUCER = runs.producer(Path(__file__).resolve().parents[4], "buildme")
-_epic_ran = False
+_is_epic = False
+_epic_row_written = False
 
 # The marker lines a build prints when it stops short; the last one printed
 # is the row's cause. Other marker lines (`BOARD:`, `WORKTREE:`, `PR:`) are not.
@@ -47,9 +52,15 @@ MARKER = re.compile(r"^(" + "|".join(map(re.escape, STOP_MARKERS)) + r")\b")
 
 
 def mark_epic() -> None:
-    """This process ran an epic: the coordinator writes the rows."""
-    global _epic_ran
-    _epic_ran = True
+    """This process runs an epic: a row written here has kind `epic`."""
+    global _is_epic
+    _is_epic = True
+
+
+def epic_row_written() -> None:
+    """The coordinator wrote this run's row: none is written here."""
+    global _epic_row_written
+    _epic_row_written = True
 
 
 def outcome_of(code: int | None, marker: str | None) -> tuple[str, str | None]:
@@ -100,11 +111,11 @@ def _state(config) -> dict:
 
 def append(config, code: int | None, started_at: str, marker: str | None) -> None:
     """Append this build's row. Never raises."""
-    if _epic_ran:
+    if _epic_row_written:
         return
     try:
         from .budget import process_spend
-        from .epic import store
+        from .epic import CHILD_ENV, store
         from .git_ops import repo_root
 
         project = Path(config.project_dir)
@@ -112,15 +123,22 @@ def append(config, code: int | None, started_at: str, marker: str | None) -> Non
         outcome, cause = outcome_of(code, marker)
         spend = process_spend()
         state = _state(config)
+        branch = config.feature_branch or state.get("branch")
+        child = getattr(config, "epic_child", False) or os.environ.get(CHILD_ENV) == "1"
         row = runs.make_row(
             producer=PRODUCER,
-            kind="build",
+            kind="epic" if _is_epic else "build",
             target={
                 "repo": store.repo_folder(repo),
                 "remote": store._remote_url(repo),
-                "branch": config.feature_branch or state.get("branch"),
+                "branch": branch,
                 "change": config.change_name,
             },
+            requested_by=(
+                {"branch": branch, "child": config.change_name.rpartition("/")[2]}
+                if child
+                else None
+            ),
             started_at=started_at,
             outcome=outcome,
             cause=cause,

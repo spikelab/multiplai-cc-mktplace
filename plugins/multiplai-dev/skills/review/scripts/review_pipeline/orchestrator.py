@@ -196,7 +196,12 @@ async def run_state(
     t = state.target
     number = f"{rounds.round_number(target_dir):02d}"
     state.runs.append(
-        RunStart(producer=producer(), session_id=session_id, started_at=timings.now())
+        RunStart(
+            producer=producer(),
+            session_id=session_id,
+            started_at=timings.now(),
+            spend_before_usd=float((state.budget or {}).get("cost_usd", 0.0) or 0.0),
+        )
     )
     save_state(state, target_dir)
     review_ledger.started(
@@ -280,8 +285,10 @@ def _append_run_row(
     """Append the run's row to `<data_dir>/runs.jsonl` (`multiplai_core.runs`).
 
     No `stopped` is `succeeded`; `failed: <Error>` is `failed` with the error's class
-    name as the cause; any other `stopped` is `stopped` with it as the cause. Never
-    raises: a review must not fail because its row could not be written."""
+    name as the cause; any other `stopped` is `stopped` with it as the cause. The row's
+    `started_at` and `spend_usd` are this run's alone, so the rows of a stopped and
+    resumed review add up; its `run` holds the review's totals so far. Never raises: a
+    review must not fail because its row could not be written."""
     try:
         from multiplai_core import runs
 
@@ -302,6 +309,8 @@ def _append_run_row(
             folder = str(target_dir)
         run = run or {}
         cost = run.get("cost_usd")
+        this_run = state.runs[-1] if state.runs else None
+        before = this_run.spend_before_usd if this_run else 0.0
         row = runs.make_row(
             producer=producer(),
             kind="review",
@@ -317,11 +326,11 @@ def _append_run_row(
             },
             folder=folder,
             requested_by=requested_by,
-            started_at=run.get("started_at"),
+            started_at=this_run.started_at if this_run else run.get("started_at"),
             finished_at=run.get("ended_at"),
             outcome=outcome,
             cause=cause,
-            spend_usd=float(cost) if cost is not None else None,
+            spend_usd=round(float(cost) - before, 6) if cost is not None else None,
             run=run,
         )
         runs.append_row(row, data / runs.RUNS_FILE)

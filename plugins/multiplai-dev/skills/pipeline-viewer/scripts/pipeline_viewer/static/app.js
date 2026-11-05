@@ -748,7 +748,8 @@
   }
 
   function runName(r) {
-    return r.kind === "build" ? "Build of " + r.epic : r.epic + " run " + r.run;
+    if (r.kind === "build") return "Build of " + r.epic;
+    return r.run == null ? r.epic + " run, stopped before its summary" : r.epic + " run " + r.run;
   }
 
   function showRefs(title, refs, runs) {
