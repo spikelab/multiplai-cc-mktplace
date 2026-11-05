@@ -22,6 +22,7 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -38,9 +39,9 @@ from viewer_kit.people import PEOPLE_FILE, PeopleError, Person, load_people
 from viewer_kit.request_checks import Reject, check_origin, check_person, read_json_body
 
 from . import config as config_mod
-from . import deadlines, gitio, record, status
+from . import deadlines, github, gitio, record, status
 from . import questions as questions_mod
-from .models import ChangeStatus, InboxRow, Scorecard
+from .models import ChangeStatus, InboxRow, NeedsYou, Scorecard
 from .places import CHANGES, Place, list_changes
 from .slack import Slack
 
@@ -82,6 +83,11 @@ class Viewer:
     epic_dir_for: Callable[[Path, str], Path] | None = None
     # What `/api/scorecard` reads (`buildme.scorecard_sources`); None: no runs.
     scorecard_sources: Callable[[Path], status.ScorecardSources] | None = None
+    # What `/api/needs-you` uses beyond the files: buildme's `cause_of` and
+    # `merge_mode` (None: causes only as recorded, no merge rows), and GitHub.
+    cause_of: Callable[[str, str], str | None] | None = None
+    merge_mode: Callable[[Path, str | None], str] | None = None
+    thread_reader: github.ThreadReader = field(default_factory=github.ThreadReader)
     started: str = field(default_factory=utc_now)
     httpd: PipelineHTTPServer | None = None
     stopped: threading.Event = field(default_factory=threading.Event)
@@ -132,6 +138,31 @@ class Viewer:
         if self.scorecard_sources is None:
             return Scorecard(repo=self.repo.name)
         return status.scorecard(self.scorecard_sources(self.repo))
+
+    def needs_you(self) -> NeedsYou:
+        cfg, people = self.config(), self.people()
+        items = [(p, self.status_of(p, cfg, people)) for p in self.places().values()]
+        now = datetime.now(UTC)
+        needs = status.needs_you(
+            items,
+            cfg,
+            people,
+            epic_dir_for=self.epic_dir_for,
+            cause_of=self.cause_of,
+            merge_mode=self.merge_mode,
+            now=now,
+        )
+        needs.repo = self.repo.name
+        origin = github.origin_repo(gitio.ok(self.repo, "remote", "get-url", "origin"))
+        return github.add_thread_rows(
+            needs,
+            status.child_prs(items, self.epic_dir_for),
+            self.thread_reader,
+            cfg,
+            people,
+            origin,
+            now,
+        )
 
     def statuses(self) -> list[ChangeStatus]:
         cfg, people = self.config(), self.people()
@@ -298,6 +329,12 @@ def make_handler(viewer: Viewer):
                 "/api/diff": lambda: self._diff(q),
                 "/api/poll": lambda: self._poll(q),
                 "/api/questions": lambda: self._questions(q),
+                "/api/needs-you": lambda: self._json(
+                    {
+                        **viewer.needs_you().model_dump(mode="json"),
+                        "generated_at": utc_now(),
+                    }
+                ),
                 "/api/scorecard": lambda: self._json(
                     {
                         **viewer.scorecard().model_dump(mode="json"),

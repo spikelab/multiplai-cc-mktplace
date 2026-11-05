@@ -443,6 +443,23 @@
     return version ? "buildme " + version : "Before buildme recorded its version";
   }
 
+  /* --- the needs-you list -------------------------------------------------------- */
+
+  /* The rows waiting on the viewer first, each group in the server's order
+   * (oldest wait first). */
+  function needsMineFirst(rows, me) {
+    const list = rows || [];
+    const isMine = (r) => (r.waiting_on || []).some((w) => w.name === me);
+    return list.filter(isMine).concat(list.filter((r) => !isMine(r)));
+  }
+
+  /* "Waiting on you and Eli Engineer for 3 h"; "Waiting for 2 days" with nobody named. */
+  function needLine(row, me, now) {
+    const who = namesText((row.waiting_on || []).map((w) => w.name), me);
+    const wait = row.since ? formatDuration(since(row.since, now)) : "";
+    return "Waiting" + (who ? " on " + who : "") + (wait ? " for " + wait : "");
+  }
+
   /* --- the address ------------------------------------------------------------ */
 
   /* "#change=a&stop=2&review=1&s=4" → {change:"a", stop:2, review:true, s:4}. */
@@ -476,6 +493,6 @@
     changeGroup, sortChanges, estimateRemaining, budgetShare, formatUsd,
     isMarkdown, codeLanguage, splitSections, parseReviewFile, reviewSteps,
     groupReplies, questionsFor, askerLabel, diffLineKind, parseHash, makeHash,
-    causeLabel, versionLabel,
+    causeLabel, versionLabel, needsMineFirst, needLine,
   };
 });

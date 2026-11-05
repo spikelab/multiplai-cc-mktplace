@@ -14,17 +14,18 @@ cd plugins/multiplai-dev/skills/pipeline-viewer/scripts && \
 | Module | Does |
 |---|---|
 | `__main__.py` | CLI: `serve`, `invite`, `reply`, `pending`, `watch`, `notify`, `post` (a message from stdin once per `--change` and `--key`, for buildme's `epic watch`), `record decided`. The box is `--box`, else `<data_dir>/pipeline-viewer/<repo>-<hash>/`. No command prints a token. |
-| `models.py` | `ChangeStatus` and its parts, the `Scorecard`, the inbox and outbox rows. `API.md` restates them. |
+| `models.py` | `ChangeStatus` and its parts, the `Scorecard`, the `NeedsYou` list, the inbox and outbox rows. `API.md` restates them. |
 | `config.py` | `pipeline_viewer:` in `specs/config.yaml`: reviewers per role, reviewers and timeouts per stop, the Slack channel. |
 | `places.py` | A change's copies (repo, pm-spec's `pm-spec-<branch>` worktree, a build's worktree, buildme's `buildme-feature-<branch>` worktree of a change with components) and the write checkout. |
 | `gitio.py` | Git argv runner and read helpers (worktrees, upstream, review commits and trailers, the docs revision, dirty files). |
-| `status.py` | Pure: files and git → `ChangeStatus`. Which file each stop's state comes from is in its docstring. `scorecard`: run rows and epic summaries → `Scorecard`. |
+| `status.py` | Pure: files and git → `ChangeStatus`. Which file each stop's state comes from is in its docstring. `scorecard`: run rows and epic summaries → `Scorecard`. `needs_you`: what waits on a person, from files → `NeedsYou`. |
+| `github.py` | The needs-you list's last step and only network read: unresolved review threads of child PRs, `gh api graphql`, cached 60 s. |
 | `record.py` | The only module that writes the repo: comment, acknowledge, approve, rework, decided, answer, push. Refusals S4-S6 and S18 (buildme at work), and never through a symlink. Person text is quoted (`> `); a failed commit puts its files back. |
 | `fenced.py` | Inbox rows as the session reads them (`pending`, `watch`): person-typed fields inside one `multiplai_core.untrusted` fence, with the notice. |
 | `questions.py` | Pure: inbox `ask` rows + outbox rows → the questions and answers everyone sees, and which answers are not in git yet (S17). |
 | `deadlines.py` | Reminder and timeout row, once per `(change, stop, revision)` in `deadlines.json`. |
 | `slack.py` | One post per stop revision (`notified.json`), or per key (`post_once`), thread replies; `SLACK_TOKEN` only handed to `slack_sdk`. |
-| `buildme.py` | Imports `write_issues`, `epic_dir_for`, the epic folder names and `cause_of` from `../../buildme/scripts` (not a declared dependency: uv refuses a workspace member as a path source); `scorecard_sources` gathers what `status.scorecard` reads. |
+| `buildme.py` | Imports `write_issues`, `epic_dir_for`, the epic folder names and `cause_of` from `../../buildme/scripts` (not a declared dependency: uv refuses a workspace member as a path source); `scorecard_sources` gathers what `status.scorecard` reads; `merge_mode` is buildme's `epic.merge` rule. |
 | `server.py` | `ThreadingHTTPServer`, the routes of `API.md`, people.json auth (re-read on change), the deadline thread. |
 | `static/` | The page, vanilla JS with no build step. `boot.js` takes the token out of `?t=` and keeps it for the origin, and applies the theme; `logic.js` holds the pure functions (tested by `tests/logic.test.js` under node); `app.js` the views (changes list, one change's stops and build, review mode); `tokens.css` is a copy of the neutral design system's tokens (`test_static.py` checks it matches), because the CSP allows no inline style. |
 
@@ -47,5 +48,5 @@ was written makes buildme ask again); stops
 worktrees at stops 1-3 and build worktrees at stop 4, mid-TDD and stop 5
 (`python tests/fixture_repo.py <dir>` builds it anywhere). All content is
 invented. `fixture_repo.change_plan_change` adds a change with components whose plan waits at
-stop 4 (`test_change_plan_stop.py`). `tests/epic_fixture.py` writes a scratch data dir with two epics (old and new folder, mixed versions and causes) and a `runs.jsonl` (`test_scorecard.py`). `test_resume.py` covers rows S1-S7, S11, S13, S17 and S18; `test_hardening.py` covers symlinks, fenced rows, quoting, a failed commit, the request timeout and the log; `slackstub.py`
+stop 4 (`test_change_plan_stop.py`). `tests/epic_fixture.py` writes a scratch data dir with two epics (old and new folder, mixed versions and causes) and a `runs.jsonl` (`test_scorecard.py`). `test_needs_you.py` covers every row kind, with a fake `gh`. `test_resume.py` covers rows S1-S7, S11, S13, S17 and S18; `test_hardening.py` covers symlinks, fenced rows, quoting, a failed commit, the request timeout and the log; `slackstub.py`
 replaces `slack_sdk.WebClient`.

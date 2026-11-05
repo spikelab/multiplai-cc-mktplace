@@ -278,6 +278,24 @@ test("causes and versions read as words", () => {
   assert.equal(L.versionLabel(null), "Before buildme recorded its version");
 });
 
+test("the needs-you rows waiting on me come first, then the rest, in order", () => {
+  const rows = [
+    { what: "a", waiting_on: [{ name: "Bo" }] },
+    { what: "b", waiting_on: [{ name: "Ada" }] },
+    { what: "c", waiting_on: [] },
+    { what: "d", waiting_on: [{ name: "Bo" }, { name: "Ada" }] },
+  ];
+  assert.deepEqual(L.needsMineFirst(rows, "Ada").map((r) => r.what), ["b", "d", "a", "c"]);
+  assert.deepEqual(L.needsMineFirst(null, "Ada"), []);
+});
+
+test("a needs-you line names who and how long", () => {
+  const now = Date.parse("2026-01-02T13:00:00Z");
+  const row = { since: "2026-01-02T10:00:00Z", waiting_on: [{ name: "Ada" }, { name: "Bo" }] };
+  assert.equal(L.needLine(row, "Ada", now), "Waiting on you and Bo for 3 h");
+  assert.equal(L.needLine({ since: null, waiting_on: [] }, "Ada", now), "Waiting");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

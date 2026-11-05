@@ -15,6 +15,21 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.158.0] - 2026-11-05
+
+### Added
+
+- **pipeline-viewer**: a "Needs you" list, first on the home page, and
+  `GET /api/needs-you`. It lists everything in the repository waiting on a
+  person, the longest wait first and your own first: stops waiting for
+  approval, parked epic components with their cause and reason, component
+  pull requests waiting for a person to merge them, open `spec-issues.md`
+  files waiting for `pm-spec revise`, and unresolved review threads on the
+  components' pull requests. Each row says who it waits on, for how long, and
+  links to the change or the pull request, so nobody has to watch GitHub
+  mentions. The review threads are read with `gh` (once a minute per pull
+  request); without `gh` the rest of the list still shows.
+
 ## [0.157.0] - 2026-11-05
 
 ### Added

@@ -303,6 +303,48 @@ component counted, for every count.
   read from `reason`. `same_as_previous_run: true` marks one shown but not
   counted.
 
+### NeedsYou
+
+```json
+{"repo": "<repo directory name>",
+ "rows": [NeedsYouRow, …],
+ "github": {"checked": true, "prs": 3, "error": null},
+ "generated_at": "…"}
+```
+
+Everything in this server's repository waiting on a person, oldest wait
+first (rows with no time last). Only this repository: the server serves one.
+
+### NeedsYouRow
+
+```json
+{"kind": "parked", "change": "account-management", "child": "ui", "stop": null,
+ "what": "ui of account-management is parked",
+ "waiting_on": [{"name": "Eli Engineer", "role": "engineer", "invited": true}],
+ "since": "2026-01-09T08:00:00Z", "waited_s": 3600.0,
+ "link": "#change=account-management", "url": "https://github.com/o/r/pull/2",
+ "cause": "merge-conflict", "inferred": true, "reason": "merging origin/… conflicts in …",
+ "count": null}
+```
+
+| `kind` | When | `waiting_on` | `since` |
+|---|---|---|---|
+| `stop` | stop 1-4 is `waiting` or `acknowledged` | the stop's `waiting_on` | the stop's `waiting_since` |
+| `parked` | a child is `parked` in the change's latest epic `summary.json` | the PMs for a cause `spec-issues` or `spec-not-ready`, else the engineers | that run's `finished_at`, else the summary's file time |
+| `merge` | a child is `built` with a PR, the epic merges by hand (`epic.merge: manual` in `specs/config.yaml`, or unset and the feature branch is origin's default branch), and the child's latest review agent record finished with exit 0 and no blocking finding: buildme waits on it with `EPIC:MERGE_WAITING` | the engineers | as `parked` |
+| `spec-issues` | a copy's `.change.yaml` `spec_issues` names a `spec-issues.md` that exists: it waits for `/multiplai-pm:pm-spec revise` | the PMs | the file's time |
+| `review-threads` | a child PR not merged in the latest summary has unresolved review threads on GitHub (`count`) | the engineers | the oldest unresolved thread's first comment |
+
+- The PMs and engineers are the names `specs/config.yaml` lists for the
+  role, else the people of that role in `people.json`.
+- `link`: the page's address for it; `url`: the pull request, when there is one.
+- `cause`, `inferred`, `reason`: a `parked` row's (as in `ScorecardChild`).
+- `waited_s`: seconds from `since` to when the server answered.
+- `github`: the review threads are the one network read, and the last step.
+  Each PR is read with `gh api graphql` (the person's `gh` login) and kept
+  for 60 s. `checked: false` with `error` when a read failed; every other
+  row is there regardless.
+
 ### OutboxRow (answers from the session)
 
 ```json
@@ -347,6 +389,11 @@ call re-reads the files, so the page polls it (every 15 s is enough).
 ### `GET /api/change?name=<name>`
 
 One `ChangeStatus`. 404 for an unknown name.
+
+### `GET /api/needs-you`
+
+One `NeedsYou`. The page shows it first on the home page and reads it after
+each `/api/changes`.
 
 ### `GET /api/scorecard`
 
