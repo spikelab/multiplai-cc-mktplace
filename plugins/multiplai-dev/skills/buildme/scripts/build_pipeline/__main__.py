@@ -545,6 +545,12 @@ def _main(args: argparse.Namespace) -> int:
         try:
             code = asyncio.run(run_orchestrator(config, args))
             return code
+        except SystemExit as e:  # SIGTERM and SIGHUP: 128 + the signal
+            code = e.code if isinstance(e.code, int) else None
+            raise
+        except Exception:
+            code = 1  # what the traceback exits with
+            raise
         finally:
             sys.stdout = watch.stream
             build_row.append(config, code, started, watch.marker)

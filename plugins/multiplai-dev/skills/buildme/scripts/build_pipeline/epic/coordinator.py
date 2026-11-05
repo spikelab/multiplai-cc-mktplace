@@ -104,7 +104,15 @@ from multiplai_core import runs
 
 from build_pipeline.budget import BudgetExceededError
 
-from .. import budget, feature_branch, git_ops, intake, readiness, stop_record
+from .. import (
+    budget,
+    build_row,
+    feature_branch,
+    git_ops,
+    intake,
+    readiness,
+    stop_record,
+)
 from ..config import git_toggles
 from ..models import AgentResult
 from . import (
@@ -3453,6 +3461,7 @@ class Coordinator:
             log.warning("EPIC could not build this run's row: %s", e)
             return
         runs.append_row(row)
+        build_row.epic_row_written()
 
 
 PRODUCER = runs.producer(Path(__file__).resolve().parents[5], "buildme")
