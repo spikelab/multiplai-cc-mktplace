@@ -182,6 +182,17 @@ def _earlier_decisions_flag(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _requested_by_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--requested-by",
+        metavar="BRANCH[:CHILD]",
+        default=None,
+        help="The change (feature branch, and epic child) of the pipeline that asked for this "
+        "run, written to the run's row in <data_dir>/runs.jsonl; leave it out for a run a "
+        "person started",
+    )
+
+
 def _mode_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--mode",
@@ -325,6 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
     _review_settings_flags(rv)
     _verify_low_flag(rv)
     _earlier_decisions_flag(rv)
+    _requested_by_flag(rv)
 
     bt = sub.add_parser(
         "batch",
@@ -365,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     _model_flag(rs)
     _verify_low_flag(rs)
     _earlier_decisions_flag(rs)
+    _requested_by_flag(rs)
 
     an = sub.add_parser(
         "answers",
@@ -522,6 +535,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise orchestrator.ReviewError(str(e)) from e
         if getattr(args, "finder_model", None):
             config.finder_model = args.finder_model
+        if getattr(args, "requested_by", None):
+            branch, _, child = args.requested_by.partition(":")
+            if not branch:
+                raise orchestrator.ReviewError(
+                    f"--requested-by {args.requested_by!r}: expected BRANCH[:CHILD]"
+                )
+            config.requested_by = {"branch": branch, "child": child or None}
         return config
 
     from .post import PostError, post
@@ -846,6 +866,11 @@ def main(argv: list[str] | None = None) -> int:
                 getattr(args, "verify_low", False), ""
             )
             + (f" --model {args.model}" if getattr(args, "model", None) else "")
+            + (
+                f" --requested-by {args.requested_by}"
+                if getattr(args, "requested_by", None)
+                else ""
+            )
         )
         commands = "\n".join(
             f"  python -m review_pipeline resume {d} --trust-repo{flags}" for d in dirs

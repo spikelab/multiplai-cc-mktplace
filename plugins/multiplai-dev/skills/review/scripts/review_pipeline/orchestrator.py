@@ -226,7 +226,12 @@ async def run_state(
     finally:
         if not interrupted:
             _finish(
-                state, target_dir, session_id=session_id, number=number, stopped=stopped
+                state,
+                target_dir,
+                session_id=session_id,
+                number=number,
+                stopped=stopped,
+                requested_by=config.requested_by,
             )
 
 
@@ -237,8 +242,9 @@ def _finish(
     session_id: str,
     number: str,
     stopped: str | None,
+    requested_by: dict | None = None,
 ) -> None:
-    """The `finished` ledger line of a run that ended."""
+    """The `finished` ledger line of a run that ended, and its row in `<data_dir>/runs.jsonl`."""
     t = state.target
     try:
         run = run_record(state)
@@ -258,6 +264,69 @@ def _finish(
         stopped=stopped,
         run=run,
     )
+    _append_run_row(
+        state, target_dir, stopped=stopped, run=run, requested_by=requested_by
+    )
+
+
+def _append_run_row(
+    state: ReviewState,
+    target_dir: Path,
+    *,
+    stopped: str | None,
+    run: dict | None,
+    requested_by: dict | None,
+) -> None:
+    """Append the run's row to `<data_dir>/runs.jsonl` (`multiplai_core.runs`).
+
+    No `stopped` is `succeeded`; `failed: <Error>` is `failed` with the error's class
+    name as the cause; any other `stopped` is `stopped` with it as the cause. Never
+    raises: a review must not fail because its row could not be written."""
+    try:
+        from multiplai_core import runs
+
+        t = state.target
+        if stopped is None:
+            outcome, cause = "succeeded", None
+        elif stopped.startswith("failed"):
+            outcome, cause = "failed", stopped.partition(": ")[2] or None
+        else:
+            outcome, cause = "stopped", stopped
+        kind = t.kind
+        if kind == "tree" and target_dir.name.startswith("dir-"):
+            kind = "dir"
+        data = review_ledger.data_dir()
+        try:
+            folder = str(target_dir.resolve().relative_to(data.resolve()))
+        except ValueError:
+            folder = str(target_dir)
+        run = run or {}
+        cost = run.get("cost_usd")
+        row = runs.make_row(
+            producer=producer(),
+            kind="review",
+            target={
+                "repo": target_dir.parent.name,
+                "object": target_dir.name,
+                "slug": t.slug,
+                "kind": kind,
+                "pr": t.pr,
+                "head_sha": t.head_sha,
+                "base_sha": t.base_sha,
+                "remote": t.remote_url,
+            },
+            folder=folder,
+            requested_by=requested_by,
+            started_at=run.get("started_at"),
+            finished_at=run.get("ended_at"),
+            outcome=outcome,
+            cause=cause,
+            spend_usd=float(cost) if cost is not None else None,
+            run=run,
+        )
+        runs.append_row(row, data / runs.RUNS_FILE)
+    except Exception:  # the row must not hide the run's own error, nor fail a run
+        log.warning("cannot append the run's row to runs.jsonl", exc_info=True)
 
 
 def _with_deps(state: ReviewState, snapshot: Path, config: ReviewConfig) -> None:
