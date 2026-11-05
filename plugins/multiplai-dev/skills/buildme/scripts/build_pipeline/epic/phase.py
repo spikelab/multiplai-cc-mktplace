@@ -326,7 +326,7 @@ async def run_epic_from_specs(config, args) -> int:
             resume=True,
             ticket_ref=True,
         )
-    epic_dir = store.epic_dir_for(repo, name)
+    epic_dir = store.epic_dir_for(repo, name, branch)
     with tempfile.TemporaryDirectory(prefix="buildme-epic-") as tmp:
         _, rel = where
         try:
@@ -397,6 +397,7 @@ async def run_epic_from_specs(config, args) -> int:
             return 1
     else:
         epic = store.Epic(name=name)
+    epic.remote = store._remote_url(repo)
     epic.children = children
     epic.child_status = {
         cid: s

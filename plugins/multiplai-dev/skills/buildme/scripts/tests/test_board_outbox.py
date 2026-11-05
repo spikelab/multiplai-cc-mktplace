@@ -111,7 +111,7 @@ class Root:
             CallLog(root / "split.log"),
             tickets={"a": "ENG-41"} if tickets is None else tickets,
         )
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
 
     def run(self) -> int:
         use_workspace(self.mp, self.root)

@@ -15,6 +15,38 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.156.0] - 2026-11-05
+
+### Added
+
+- **review**, **buildme**: every run that ends appends one row to the shared
+  `<data_dir>/runs.jsonl`, with the plugin version that ran (`producer`), what
+  it ran on (repo, branch, change, ticket, epic child), the outcome and a cause
+  from a fixed list. A buildme row also copies what the build's checkpoint
+  holds (phase, blocks, spend), so deleting the worktree loses none of it.
+  pipeline-viewer can now count runs, merges and parks per buildme version.
+- **review**: `--requested-by BRANCH[:CHILD]` on `review` and `resume` names
+  who asked for the review in its row. buildme's epics pass it for every
+  review they start, resume or reuse.
+- **buildme**: an epic's `runs/<NN>/summary.json` now records the buildme
+  version, when the run started and finished, and a `cause` for each parked or
+  failed child.
+- **buildme**: `epic status` and `epic watch` take `--branch` to name the
+  feature branch when several kept branches hold an epic of that name, and a
+  component built by hand reads its own feature branch's epic.
+
+### Changed
+
+- **buildme**: a new epic keeps its records in
+  `<data_dir>/changes/<repo>/<feature branch>/buildme/`, where `<repo>` is
+  origin's repository name, as review names `reviews/<repo>/`. An epic started
+  before this version keeps using `<data_dir>/buildme/epics/<owner>-<repo>--<change>/`
+  until it is moved.
+  When that folder holds an epic of another owner's same-named repository, the
+  new epic uses `<repo>@<owner>`.
+- **buildme**: a failed child's reason now names a Claude usage limit from its
+  build's log, or an agent timeout (`exit 4: an agent timed out`).
+
 ## [0.155.3] - 2026-11-04
 
 ### Fixed

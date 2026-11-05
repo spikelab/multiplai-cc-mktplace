@@ -706,6 +706,8 @@ class RunStart(BaseModel):
     producer: str  # "multiplai-dev:review 0.111.0"
     session_id: str = ""
     started_at: str = ""
+    # The saved spend when this run began: its row counts only what it adds.
+    spend_before_usd: float = 0.0
 
 
 class Scope(BaseModel):

@@ -1,9 +1,19 @@
 """The epic directory: where it is, and the file in it (items 5 and 7).
 
-`<data_dir>/buildme/epics/<owner>-<repo>--<epic>/`, where `<epic>` is the
-parent change's name and `<owner>-<repo>` comes from the review skill's
-slug rule (`origin_owner_repo`, `slug_repo_name`, `sanitize_slug` in
-`review_pipeline/target.py`), copied here and pinned by `tests/test_epic_store.py`.
+`<data_dir>/changes/<repo>/<branch>/buildme/` (`multiplai_core.runs.change_folder`),
+where `<branch>` is the parent change's feature branch (`<TICKET>-<change>`)
+and `<repo>` is origin's repository name, as the review skill names its
+`reviews/<repo>/` folders (`repo_folder`). The branch exists before the epic's
+first file is written, so the folder never needs renaming. When that folder
+holds an epic of another owner's same-named repository, `<repo>` is
+`<repo>@<owner>`, as in `reviews/`.
+
+Before multiplai-dev 0.156 the folder was `<data_dir>/buildme/epics/<owner>-<repo>--<epic>/`
+(`legacy_epic_dir`, from the review skill's slug rule: `origin_owner_repo`,
+`slug_repo_name`, `sanitize_slug` in `review_pipeline/target.py`, copied here
+and pinned by `tests/test_epic_store.py`). `epic_dir_for` keeps using an
+existing old folder until `python -m build_pipeline move-epics` moves it and
+leaves a symlink in its place, so one epic's records never split in two.
 
 `epic.json` (`Epic`) holds the children as the parent's and the children's
 `.change.yaml` list them (`phase.run_epic_from_specs` sets them on every
@@ -23,7 +33,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from multiplai_core import checkpoint
+from multiplai_core import checkpoint, runs
 from multiplai_core.paths import get_paths
 from pydantic import BaseModel, Field
 
@@ -76,6 +86,8 @@ class Epic(BaseModel):
     # ledger at each save; incomplete when a spend could not be read.
     spent_usd: float = 0.0
     spend_complete: bool = True
+    # Origin's URL: a same-named repository of another owner uses another folder.
+    remote: str | None = None
 
 
 # --- the directory name (copied from review_pipeline/target.py) ---------------
@@ -131,8 +143,9 @@ def sanitize_slug(text: str) -> str:
     return slug or "target"
 
 
-def epic_dir_for(repo: Path, change_name: str) -> Path:
-    """`<data_dir>/buildme/epics/<owner>-<repo>--<change>/`."""
+def legacy_epic_dir(repo: Path, change_name: str) -> Path:
+    """`<data_dir>/buildme/epics/<owner>-<repo>--<change>/`: where epics lived
+    before multiplai-dev 0.156."""
     repo = Path(repo)
     return (
         get_paths().data_dir
@@ -140,6 +153,94 @@ def epic_dir_for(repo: Path, change_name: str) -> Path:
         / "epics"
         / sanitize_slug(f"{slug_repo_name(repo)}--{change_name}")
     )
+
+
+def repo_folder(repo: Path) -> str:
+    """The `<repo>` part of the change folder: origin's repository name, else the
+    directory name, as the review skill's `checkout_repo_part` names `reviews/<repo>/`."""
+    repo = Path(repo)
+    pair = origin_owner_repo(_remote_url(repo)) if repo.is_dir() else None
+    return runs.folder_name(pair[1] if pair else repo.name)
+
+
+def _owned_folder(repo: Path) -> str:
+    """`<repo>@<owner>` (`@local` with no owner): the repo's folder when another
+    owner's same-named repository holds `repo_folder`, as review names its own."""
+    pair = origin_owner_repo(_remote_url(repo)) if Path(repo).is_dir() else None
+    return f"{repo_folder(repo)}@{pair[0] if pair else 'local'}"
+
+
+def _remote_key(url: str | None) -> tuple[str, ...] | None:
+    """*url*'s owner and repository without case, so the `https://` and `git@`
+    forms of one repository compare equal."""
+    pair = origin_owner_repo(url)
+    return tuple(x.lower() for x in pair) if pair else None
+
+
+def _other_remote(saved: str | None, repo: Path) -> bool:
+    """Whether an epic that recorded *saved* belongs to another repository."""
+    return bool(saved) and _remote_key(saved) != _remote_key(_remote_url(repo))
+
+
+def _holds_other_remote(epic_dir: Path, repo: Path) -> bool:
+    try:
+        return _other_remote(load_epic(epic_dir).remote, repo)
+    except EpicFileError:
+        return False
+
+
+class AmbiguousEpic(Exception):
+    """Several change folders of one repository hold an epic of this name."""
+
+
+def _epics_named(repo: Path, change_name: str) -> list[Path]:
+    """Every change folder's `buildme/` of *repo*, under `<repo>` or
+    `<repo>@<owner>`, whose `epic.json` names *change_name*."""
+    found = []
+    for folder in (repo_folder(repo), _owned_folder(repo)):
+        root = runs.changes_root() / folder
+        for d in sorted(root.glob(f"*/buildme/{EPIC_FILE}")):
+            try:
+                epic = load_epic(d.parent)
+            except EpicFileError:
+                continue
+            if epic.name == change_name and not _other_remote(epic.remote, repo):
+                found.append(d.parent)
+    return found
+
+
+def epic_dir_for(repo: Path, change_name: str, branch: str | None = None) -> Path:
+    """Where the epic *change_name* of *repo* keeps its records (module docstring).
+
+    With *branch* (the run that creates or runs the epic knows it), its change
+    folder's `buildme/`, unless that does not exist yet and the old folder does:
+    then the old one, until it is moved. Without *branch* (status, watch,
+    preflight, the viewer), the one change folder holding an epic of that name;
+    with none, the old folder. Raises AmbiguousEpic when two branches of the
+    repository hold an epic of that name. A change folder holding another
+    owner's same-named repository is passed over for `<repo>@<owner>`."""
+    repo = Path(repo)
+    legacy = legacy_epic_dir(repo, change_name)
+    if branch:
+        new = runs.change_folder(repo_folder(repo), branch) / "buildme"
+        if _holds_other_remote(new, repo):
+            new = (
+                runs.changes_root()
+                / _owned_folder(repo)
+                / runs.folder_name(branch)
+                / "buildme"
+            )
+        if not new.exists() and legacy.is_dir() and not legacy.is_symlink():
+            return legacy
+        return new
+    found = _epics_named(repo, change_name)
+    if len(found) > 1:
+        raise AmbiguousEpic(
+            f"several branches hold an epic {change_name}: "
+            + ", ".join(str(d) for d in found)
+            + "; name the feature branch with --branch"
+        )
+    return found[0] if found else legacy
 
 
 # --- epic.json -----------------------------------------------------------------

@@ -168,7 +168,7 @@ def commit_and_push(run: Run, name: str) -> None:
             f"Fix that, then run `resume {run.config.change_name}`.",
             flush=True,
         )
-        raise Stop(EXIT_FAILED, str(e)) from e
+        raise Stop(EXIT_FAILED, str(e), "commit-failed") from e
     if sha:
         run.progress(name.upper(), f"Committed {sha}")
     where = run.config.place
@@ -184,7 +184,7 @@ def commit_and_push(run: Run, name: str) -> None:
             "and stops for review again.",
             flush=True,
         )
-        raise Stop(EXIT_FAILED, str(e)) from e
+        raise Stop(EXIT_FAILED, str(e), "push-failed") from e
     run.progress(name.upper(), f"Pushed {where.branch}")
 
 
@@ -204,7 +204,7 @@ def review_stop(run: Run, name: str) -> None:
     F.record_passed(run, name, "", "Pushed for review")
     print(f"{MARKER_REVIEW}:{name}", flush=True)
     _print_branch(run)
-    raise Stop(EXIT_WAITING, f"review of the {name}")
+    raise Stop(EXIT_WAITING, f"review of the {name}", f"review-{name}")
 
 
 def _flag_lines(run: Run, missing: list[str]) -> str:
@@ -239,7 +239,7 @@ def tickets_step(run: Run, refs: dict[str, str], later: bool) -> None:
         run.save()
         print(f"{MARKER_TICKETS}:{path}", flush=True)
         _print_branch(run)
-        raise Stop(EXIT_WAITING, "waiting for the tickets")
+        raise Stop(EXIT_WAITING, "waiting for the tickets", "tickets")
     unknown = sorted(c for c in refs if not _known(run, c))
     if unknown:
         print(
@@ -247,7 +247,7 @@ def tickets_step(run: Run, refs: dict[str, str], later: bool) -> None:
             f"{run.config.change_name}",
             flush=True,
         )
-        raise Stop(EXIT_REFUSED, "unknown component")
+        raise Stop(EXIT_REFUSED, "unknown component", "unknown-component")
     missing = [c for c in tickets.pending(change_dir) if c not in refs]
     if missing and not later:
         # Nothing is written: the refs given are taken with the rest, or not at all.
@@ -257,7 +257,7 @@ def tickets_step(run: Run, refs: dict[str, str], later: bool) -> None:
             + _flag_lines(run, tickets.pending(change_dir)),
             flush=True,
         )
-        raise Stop(EXIT_REFUSED, "tickets pending")
+        raise Stop(EXIT_REFUSED, "tickets pending", "tickets-pending")
     if refs:
         tickets.apply_refs(change_dir, refs)
         run.progress(

@@ -72,7 +72,7 @@ def _commit(run: Run) -> None:
             f"Fix that, then run `resume {run.config.change_name}`: it retries only the commit.",
             flush=True,
         )
-        raise Stop(EXIT_FAILED, str(e)) from e
+        raise Stop(EXIT_FAILED, str(e), "commit-failed") from e
     handoff.committed = True
     handoff.commit = sha
     run.save()
@@ -121,7 +121,7 @@ def commit_ticket(run: Run) -> None:
             f"Fix that, then run `resume {run.config.change_name}` again.",
             flush=True,
         )
-        raise Stop(EXIT_FAILED, str(e)) from e
+        raise Stop(EXIT_FAILED, str(e), "commit-failed") from e
     if sha is None:
         print_ready(run, handoff.revision)
         return
@@ -148,7 +148,7 @@ def _push(run: Run) -> None:
                 f"Fix that, then run `resume {run.config.change_name}`: it retries only the push.",
                 flush=True,
             )
-            raise Stop(EXIT_FAILED, str(e)) from e
+            raise Stop(EXIT_FAILED, str(e), "push-failed") from e
         run.progress("HANDOFF", f"Pushed {where.branch}")
     handoff.pushed = True
     run.save()
@@ -185,7 +185,7 @@ def refuse_open_issues(run: Run) -> None:
         flush=True,
     )
     print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
-    raise Stop(EXIT_BLOCKED, "open requirements issues")
+    raise Stop(EXIT_BLOCKED, "open requirements issues", "open-issues")
 
 
 def _stale(run: Run, why: str) -> bool:
@@ -233,7 +233,7 @@ async def check_and_hand_off(run: Run) -> None:
         "run `resume` once they are saved.",
         flush=True,
     )
-    raise Stop(EXIT_FAILED, "files kept changing")
+    raise Stop(EXIT_FAILED, "files kept changing", "files-kept-changing")
 
 
 def pending_commit(run: Run) -> bool:

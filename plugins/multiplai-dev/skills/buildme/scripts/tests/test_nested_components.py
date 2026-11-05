@@ -32,6 +32,7 @@ from build_pipeline.orchestrator import pr_title
 from build_pipeline.rubric import _gather_spec_summaries
 from build_pipeline.spec_generator import _plan_hashes
 from build_pipeline.tdd_engine import assemble_context
+from multiplai_core import runs
 from multiplai_core.specs import is_ready, mark_ready, write_change_meta
 
 from .epic_row_helpers import (
@@ -428,6 +429,33 @@ def test_buildme_on_a_nested_change_builds_its_components_in_order_then_archives
     assert run_coordinator(config) == 0
     assert _git(origin, "rev-parse", "ENG-40-e") == head
     assert _launched(tmp_path) == ["e/a", "e/b"]
+
+
+def test_an_epic_whose_archive_failed_has_a_failed_row_after_the_attempt(
+    tmp_path, monkeypatch
+):
+    use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    fakes = Fakes(tmp_path, monkeypatch, {"a": [{"commit": {"a.txt": "a\n"}}]})
+    config = make_build(project)
+    config.epic = EpicSettings(max_parallel=2, merge="manual")
+    _push_nested(config)
+    assert run_coordinator(config) == 3
+    fakes.set_pr(pr_url("e-a"), "MERGED")
+    assert run_coordinator(config) == 3
+    fakes.set_pr(pr_url("e-b"), "MERGED")
+    attempted = []
+
+    def fails(*args):
+        attempted.append(runs.read_rows()[0])
+        return feature_branch.Merged("failed", error="push failed")
+
+    monkeypatch.setattr(feature_branch, "archive_on", fails)
+    assert run_coordinator(config) == 1
+    last = runs.read_rows()[0][-1]
+    assert (last["kind"], last["outcome"]) == ("epic", "failed")
+    assert last["cause"] == "archive-failed"
+    assert len(runs.read_rows()[0]) == len(attempted[0]) + 1
 
 
 def test_a_component_depending_on_an_unknown_id_is_refused(

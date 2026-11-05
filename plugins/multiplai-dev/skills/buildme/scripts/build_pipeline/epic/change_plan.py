@@ -142,10 +142,12 @@ async def ensure(
     *,
     approve: bool,
     analysis: Callable[[str], Awaitable[Path | None]],
+    recorded: Callable[[Awaitable[str]], Awaitable[str]],
 ) -> Outcome:
     """Write the change's plan when it has none, and look for its approval
     (see the module docstring). *analysis*: the coordinator's shared
-    codebase analysis at a commit, None when it failed."""
+    codebase analysis at a commit, None when it failed. *recorded*: awaits
+    the plan's model call and keeps what it spent."""
     from ..code_analysis import SHARED_REPORT
     from ..llm_steps.spec_steps import generate_change_plan
     from ..orchestrator import (
@@ -182,12 +184,16 @@ async def ensure(
         at.project_dir = project
         at.specs_dir = project / Path(config.specs_dir).relative_to(project_dir)
         research = change / "research.md"
-        text = await generate_change_plan(
-            change,
-            at,
-            codebase_analysis=report.read_text() if report and report.is_file() else "",
-            research=research.read_text() if research.is_file() else "",
-            reference_docs=config.reference_docs_text(),
+        text = await recorded(
+            generate_change_plan(
+                change,
+                at,
+                codebase_analysis=report.read_text()
+                if report and report.is_file()
+                else "",
+                research=research.read_text() if research.is_file() else "",
+                reference_docs=config.reference_docs_text(),
+            )
         )
         issues = design_spec_issues(text)
         if issues:

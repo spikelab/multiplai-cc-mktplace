@@ -83,7 +83,7 @@ when nothing ran. It makes no model call and no network call.
 
 ```sh
 python evals/epic_metrics.py --self-check
-python evals/epic_metrics.py --epic-dir <data_dir>/buildme/epics/<owner>-<repo>--<change> \
+python evals/epic_metrics.py --epic-dir <data_dir>/changes/<repo>/<feature branch>/buildme \
   --transcripts-root <claude config dir>/projects \
   --interventions factory-interventions.csv --output metrics.json --markdown metrics.md
 ```

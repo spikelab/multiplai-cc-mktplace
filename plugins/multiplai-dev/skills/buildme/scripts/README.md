@@ -56,7 +56,8 @@ else (`epic.phase.is_epic`). It reads each child's `depends_on` from its own
 when a child is misnamed, missing, depends on an unlisted child, is in a
 cycle or is not ready, or when the parent's or a child's change dir is
 uncommitted or not in HEAD. Then it reads HEAD's sha once, takes the lock on
-`<data_dir>/buildme/epics/<owner>-<repo>--<change>/` and loads or starts
+`<data_dir>/changes/<repo>/<feature branch>/buildme/` (`store.epic_dir_for`;
+an existing `<data_dir>/buildme/epics/<owner>-<repo>--<change>/` is kept) and loads or starts
 `epic.json` with the children as the change dirs list them now, and runs the
 children (`epic/coordinator.py`): each is its own `python -m build_pipeline
 build --change <parent>-<id> --auto --trust-repo --epic-child --pr-ready

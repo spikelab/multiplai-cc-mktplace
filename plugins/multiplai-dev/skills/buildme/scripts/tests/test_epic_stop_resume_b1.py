@@ -75,7 +75,7 @@ class Root:
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=parallel, merge="manual")
         self.specs = approve(self.config, answer, CallLog(root / "split.log"))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
 
     def use(self) -> None:
         use_workspace(self.mp, self.root)

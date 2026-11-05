@@ -118,6 +118,9 @@ class ReviewConfig:
     # The `--earlier-decisions <file>` entries (`review` and `resume` only; no file key): decisions an
     # earlier reviewer of the same change made, which the repeats stage matches the findings against.
     earlier_decisions: list[EarlierDecision] = field(default_factory=list)
+    # `--requested-by BRANCH[:CHILD]` (`review` and `resume` only): the change (and epic child) of the
+    # pipeline that asked for this run, as {"branch", "child"}; None for a run a person started.
+    requested_by: dict | None = None
 
 
 _TRUE = ("1", "true", "yes", "on")

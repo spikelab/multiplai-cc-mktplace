@@ -817,6 +817,17 @@ directory that holds another remote's review (or, for a branch or range, another
 ref's) does not stop yours: that directory is read without its lock and passed
 over, as when no run holds it.
 
+Each run that writes a `finished` line also appends one row to the shared
+`<data_dir>/runs.jsonl` (multiplai-core's `runs` format, `kind: "review"`):
+its target (repo folder, object, slug,
+kind, PR, shas, remote), its folder, what that run alone spent, and its outcome, `succeeded`,
+`stopped` (the `stopped` value is the cause) or `failed` (the error's class
+name is the cause). A run killed or stopped with Ctrl-C writes no row, as it
+writes no `finished` line. `--requested-by BRANCH[:CHILD]` on `review` and
+`resume` names the change (and epic child) of the pipeline that asked for the
+run, such as buildme, and is written to the row as `requested_by`; without it
+`requested_by` is null.
+
 Each target gets `<out>/<repo>/<object>/` with `progress.log`. While the run is going,
 check it with a bounded loop, never a bare `tail -f`:
 

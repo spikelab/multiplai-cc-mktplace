@@ -40,7 +40,7 @@ class Run:
         self.project = make_project(root)
         self.config = make_build(self.project)
         approve(self.config, THREE)
-        self.epic = self.data / "buildme" / "epics" / "o-r--e"
+        self.epic = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
 
     def build(self, monkeypatch, **flags) -> int:
         use_workspace(monkeypatch, self.root)

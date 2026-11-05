@@ -74,6 +74,9 @@ async def run_orchestrator(config: BuildConfig, args) -> int:
     from .epic import phase as epic_phase
 
     if epic_phase.is_epic(config):
+        from . import build_row
+
+        build_row.mark_epic()
         return await epic_phase.run_epic_from_specs(config, args)
     # Resume re-binding, before anything derives a path from the config: a
     # previous run's state file lives INSIDE its worktree, so a plain

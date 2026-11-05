@@ -53,6 +53,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .. import git_ops
 from ..change_manager import normalize_change_name
 from . import coordinator, records, status, store
+from .causes import USAGE
 
 WATCH_LOG = "watch.log"
 EPIC_OUTPUT = "watch-epic.log"
@@ -84,14 +85,6 @@ NETWORK = re.compile(
     r"|Name or service not known|nodename nor servname provided"
     r"|Network is unreachable|Connection reset by peer|Connection timed out"
     r"|Failed to connect to|error connecting to|API Error: Connection error",
-    re.IGNORECASE,
-)
-# The Claude CLI's limit text anywhere in a line (multiplai-core's
-# `UsageLimitError` reads it at the start of an answer; here it is inside a
-# log line): "You've hit your session limit · resets 9:40am (UTC)".
-USAGE = re.compile(
-    r"you(?:'|’)ve hit your [^\n·]{0,60}?\s*(?:limit|budget)\b"
-    r"(?:\s*·\s*resets\s+(?P<resets>[^()\n·]*(?:\((?!exit code)[^()\n]*\))?))?",
     re.IGNORECASE,
 )
 _RESET = re.compile(
@@ -332,12 +325,20 @@ class WatchLog:
 # --- running -----------------------------------------------------------------------
 
 
-def epic_argv(change: str, project: Path, *, session_id: str, trust: bool) -> list:
+def epic_argv(
+    change: str,
+    project: Path,
+    *,
+    session_id: str,
+    trust: bool,
+    branch: str | None = None,
+) -> list:
     """The epic command of the plan's Paths: `build --change <epic> --auto`."""
     argv = [sys.executable, "-m", "build_pipeline"]
     if session_id:
         argv += ["--session-id", session_id]
     argv += ["build", "--change", change, "--project-dir", str(project), "--auto"]
+    argv += ["--branch", branch] if branch else []
     return argv + (["--trust-repo"] if trust else [])
 
 
@@ -521,19 +522,25 @@ def run_cli(args) -> int:
     project = Path(args.project_dir).absolute()
     repo = git_ops.repo_root(project) or project
     change = normalize_change_name(args.change)
-    epic_dir = store.epic_dir_for(repo, change)
+    branch = getattr(args, "branch", "") or None
+    try:
+        epic_dir = store.epic_dir_for(repo, change, branch)
+    except store.AmbiguousEpic as e:
+        print(f"ERROR:{e}", file=sys.stderr, flush=True)
+        return 2
     viewer_repo = Path(args.viewer_repo).absolute() if args.viewer_repo else repo
     argv = epic_argv(
         args.change,
         project,
         session_id=getattr(args, "session_id", "") or "",
         trust=bool(getattr(args, "trust_repo", False)),
+        branch=branch,
     )
     return Watch(
         change=change,
         epic_dir=epic_dir,
         run_epic=lambda output: run_command(argv, output),
-        read_status=lambda: status.epic_status(project, args.change),
+        read_status=lambda: status.epic_status(project, args.change, branch=branch),
         notify=lambda key, text: slack_post(viewer_repo, change, key, text),
         clock=Clock(),
     ).run()

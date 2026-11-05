@@ -156,12 +156,12 @@ def read_issues(run: Run, from_respec: bool) -> tuple[Path, str, list[str]]:
             f"ERROR: revise: {path} does not exist; there is nothing to revise",
             flush=True,
         )
-        raise Stop(EXIT_REFUSED, "no issues file")
+        raise Stop(EXIT_REFUSED, "no issues file", "no-issues-file")
     text = path.read_text()
     issues = parse_respec(text) if from_respec else parse_spec_issues(text)
     if not issues:
         print(f"ERROR: revise: {path} holds no issue", flush=True)
-        raise Stop(EXIT_REFUSED, "no issues")
+        raise Stop(EXIT_REFUSED, "no issues", "no-issues")
     return path, text, issues
 
 

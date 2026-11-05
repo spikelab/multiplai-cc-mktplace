@@ -207,7 +207,7 @@ async def _ticket_interview(
     if questions_path.is_file():
         # Row S1, no answers: the same marker again, exit 3, nothing written.
         print(f"{MARKER_INTERVIEW_WAITING}:{questions_path}", flush=True)
-        raise Stop(EXIT_WAITING, "waiting for the ticket replies")
+        raise Stop(EXIT_WAITING, "waiting for the ticket replies", "interview-replies")
 
     questions = await ask_questions(
         run, intake.interview_inputs(change_dir, summary, contexts), has_prd=has_prd
@@ -226,4 +226,4 @@ async def _ticket_interview(
         f"Waiting for replies on {run.state.options.ticket_ref}; questions in {questions_path}",
     )
     print(f"{MARKER_INTERVIEW_WAITING}:{questions_path}", flush=True)
-    raise Stop(EXIT_WAITING, "waiting for the ticket replies")
+    raise Stop(EXIT_WAITING, "waiting for the ticket replies", "interview-replies")

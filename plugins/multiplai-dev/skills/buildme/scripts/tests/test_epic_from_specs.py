@@ -79,7 +79,7 @@ class Epic:
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=2, merge="manual")
         self.specs = approve(self.config, answer)
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
         self.changes = self.config.specs_dir / "changes"
 
     def run(self) -> int:

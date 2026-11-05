@@ -765,7 +765,7 @@ def accept_findings(run: Run) -> None:
         )
     if problem:
         print(f"ERROR: {problem}", flush=True)
-        raise Stop(EXIT_REFUSED, problem)
+        raise Stop(EXIT_REFUSED, problem, "bad-accept")
     stamp = datetime.now(UTC).strftime("%Y-%m-%d")
     for finding_id in dict.fromkeys(run.accept):
         finding = open_ids[finding_id]
@@ -845,7 +845,7 @@ def refuse_at_round_cap(run: Run) -> None:
     print(text, flush=True)
     print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
     run.progress("CONSISTENCY_ROUND_CAP", text)
-    raise Stop(EXIT_BLOCKED, "round cap")
+    raise Stop(EXIT_BLOCKED, "round cap", "round-cap")
 
 
 def _not_accepted(run: Run, found: list[dict]) -> list[dict]:

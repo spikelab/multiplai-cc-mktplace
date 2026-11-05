@@ -92,7 +92,7 @@ class NewInputs:
 
 def _missing(path: Path, flag: str) -> None:
     print(f"ERROR: {flag} {path}: no such file", flush=True)
-    raise Stop(EXIT_REFUSED, f"{flag} not found")
+    raise Stop(EXIT_REFUSED, f"{flag} not found", "missing-input")
 
 
 def intake_new(config: SpecConfig, inputs: NewInputs) -> RunState:
@@ -192,7 +192,7 @@ def _refuse_while_issues_are_open(run: Run) -> None:
         print(F.refusal_text(revise.NAME, step), flush=True)
         print(f"Fix the files, then run `revise {run.config.change_name}`.", flush=True)
         print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
-        raise Stop(EXIT_BLOCKED, "revise blocked")
+        raise Stop(EXIT_BLOCKED, "revise blocked", "revise-blocked")
 
 
 @dataclass
@@ -247,7 +247,7 @@ def _load(config: SpecConfig) -> RunState | None:
         return state_mod.load(config.run_dir)
     except state_mod.Unreadable as e:
         print(f"ERROR: {e}", flush=True)
-        raise Stop(EXIT_REFUSED, str(e)) from e
+        raise Stop(EXIT_REFUSED, str(e), "unreadable-state") from e
 
 
 async def cmd_new(
@@ -263,7 +263,7 @@ async def cmd_new(
             f"continue it with `resume {config.change_name}`",
             flush=True,
         )
-        raise Stop(EXIT_REFUSED, "run exists")
+        raise Stop(EXIT_REFUSED, "run exists", "run-exists")
     state_mod.ensure_run_dir(config.run_dir)
     with runlock.hold(config.run_dir):
         sdk.start_budget(max_usd, None)
@@ -281,7 +281,7 @@ def _no_run(config: SpecConfig) -> None:
         f"start one with `new {config.change_name}`",
         flush=True,
     )
-    raise Stop(EXIT_REFUSED, "no run")
+    raise Stop(EXIT_REFUSED, "no run", "no-run")
 
 
 def _start(config: SpecConfig, max_usd: float | None) -> Run:

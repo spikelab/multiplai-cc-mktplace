@@ -35,6 +35,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from multiplai_core import is_usage_limit
+
 from . import artifacts, layout, sdk
 from . import findings as F
 from .prompts import UNTRUSTED_NOTICE
@@ -152,6 +154,8 @@ async def run_prototype(run: Run) -> Gate:
                 cwd=str(prototype_dir),
             )
         except sdk.CallFailed as e:
+            if is_usage_limit(e):  # the run stops; `resume` tries this step again
+                raise
             return Gate(False, f"Prototype writer failed: {e}")
         if outside := files_outside(answer.files_changed, prototype_dir):
             return Gate(
@@ -169,7 +173,7 @@ async def run_prototype(run: Run) -> Gate:
 def _fail(run: Run, reason: str) -> None:
     F.record_error(run, NAME, reason)
     print(f"ERROR: prototype: {reason}", flush=True)
-    raise Stop(EXIT_FAILED, reason)
+    raise Stop(EXIT_FAILED, reason, "prototype-failed")
 
 
 async def run_prototype_stage(run: Run) -> None:

@@ -21,6 +21,21 @@ Cutting `0.2.0` on 2026-08-16 closed it; only `0.1.0` carries a git tag so far.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-05
+
+### Added
+
+- **pm-spec**: each invocation that reaches the change's branch appends one
+  row to the shared `<data_dir>/runs.jsonl` when it ends: the plugin version,
+  the repo, branch, change and ticket, the outcome (succeeded, waiting, stopped,
+  failed) with a fixed cause code, the stop reached, each step's outcome, the
+  exit code and the invocation's spend. `state.json` is unchanged.
+
+### Fixed
+
+- **pm-spec**: a usage limit during the prototype now stops the run, keeping
+  the step for `resume`, instead of failing the prototype stage.
+
 ## [0.16.3] - 2026-11-02
 
 ### Fixed

@@ -360,7 +360,7 @@ def block_on_findings(
     run.progress(name.upper() + "_BLOCKED", f"{reason}\n{report}")
     print(f"{name} blocked: {reason}\n{report}\n{next_step}", flush=True)
     print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
-    raise Stop(EXIT_BLOCKED, reason)
+    raise Stop(EXIT_BLOCKED, reason, "findings")
 
 
 def refusal_text(name: str, step: StepOutcome, next_step: str = REOPEN_LINE) -> str:
@@ -394,7 +394,7 @@ def refuse_if_blocked(
         print(text, flush=True)
         print(f"{MARKER_BLOCKED}:{run.config.change_dir}", flush=True)
         log.error("%s refused: %s", name, text.replace("\n", " | ")[:1000])
-        raise Stop(EXIT_BLOCKED, f"{name} blocked")
+        raise Stop(EXIT_BLOCKED, f"{name} blocked", "findings")
 
 
 def dependencies_changed(run: Run, step: StepOutcome) -> bool:
