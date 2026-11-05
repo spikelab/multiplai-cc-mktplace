@@ -31,6 +31,7 @@ KINDS = (
     "merge",
     "merge-tests",
     "analysis",
+    "plan",
 )
 NAMED_MARKERS = ("WORKTREE", "BRANCH", "PR", "SPEND")
 # The kind and child come from the started record, which the name must match:

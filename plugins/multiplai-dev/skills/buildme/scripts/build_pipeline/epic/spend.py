@@ -6,7 +6,8 @@ Two sources, each read from disk on every look:
   log line, so its `spend` is the change in `budget.process_spend()` around
   the merge agent's call (`Coordinator._resolve_conflicts`), and an
   interrupted call leaves it null. An `analysis` result (the shared codebase
-  analysis, `Coordinator._shared_analysis`) is counted the same way. A result
+  analysis, `Coordinator._shared_analysis`) and a `plan` result (the change's
+  shared plan, `Coordinator._recorded_plan`) are counted the same way. A result
   with no spend, or an attempt with no result yet, counts 0 and makes the
   total incomplete. Only the kinds that call a model count (`SPEND_KINDS`);
   a review's spend is in the review ledger, and posting a review or running
@@ -51,7 +52,7 @@ from . import records
 
 log = logging.getLogger(__name__)
 
-SPEND_KINDS = ("build", "fix", "merge", "analysis")
+SPEND_KINDS = ("build", "fix", "merge", "analysis", "plan")
 LEDGER = Path("reviews") / "ledger.jsonl"
 _PR_NUMBER = re.compile(r"/pull/(\d+)(?:[/?#]|$)")
 

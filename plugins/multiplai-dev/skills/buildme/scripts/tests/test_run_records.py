@@ -3,13 +3,16 @@ the cause of a child that stopped short, and the rows a run appends."""
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import inspect
 import json
 
 import pytest
-from build_pipeline import build_row
-from build_pipeline.epic import causes, coordinator, store
+from build_pipeline import build_row, orchestrator, preflight
+from build_pipeline.__main__ import main
+from build_pipeline.epic import CHILD_ENV, causes, coordinator, store, watch
+from build_pipeline.epic import status as estatus
 from multiplai_core import runs
 
 from .epic_row_helpers import make_project, use_workspace
@@ -61,6 +64,71 @@ def test_two_branches_with_one_epic_name_are_refused(tmp_path, monkeypatch):
     assert store.epic_dir_for(project, "e", "ENG-41-e").parent.name == "ENG-41-e"
 
 
+def test_status_can_name_the_branch_of_a_shared_epic_name(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    _epic(data / "changes" / "r" / "ENG-40-e" / "buildme")
+    _epic(data / "changes" / "r" / "ENG-41-e" / "buildme")
+    assert estatus.epic_status(project, "e", branch="ENG-40-e") == []
+    args = argparse.Namespace(project_dir=str(project), change="e", branch="ENG-40-e")
+    assert estatus.run_cli(args) == 0
+    with pytest.raises(estatus.StatusError):
+        estatus.epic_status(project, "e")
+
+
+def test_preflight_uses_the_childs_feature_branch(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    _epic(data / "changes" / "r" / "ENG-40-e" / "buildme")
+    _epic(data / "changes" / "r" / "ENG-41-e" / "buildme")
+    monkeypatch.delenv(CHILD_ENV, raising=False)
+
+    class Config:
+        change_name = "e/a"
+        project_dir = project
+        feature_branch = "ENG-40-e"
+
+    assert preflight._epic_lock(Config()) is None
+    Config.feature_branch = None
+    assert "several branches" in preflight._epic_lock(Config())
+
+
+def test_watch_runs_the_branch_it_was_named(tmp_path):
+    argv = watch.epic_argv("e", tmp_path, session_id="", trust=False, branch="ENG-40-e")
+    assert argv[argv.index("--branch") + 1] == "ENG-40-e"
+    assert "--branch" not in watch.epic_argv("e", tmp_path, session_id="", trust=False)
+
+
+def _owned(d, remote, name="e"):
+    d.mkdir(parents=True)
+    (d / store.EPIC_FILE).write_text(
+        json.dumps({"name": name, "children": [], "remote": remote})
+    )
+
+
+def test_a_same_named_repo_of_another_owner_gets_its_own_folder(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    owner = store.origin_owner_repo(store._remote_url(project))[0]
+    theirs = data / "changes" / "r" / "ENG-40-e" / "buildme"
+    _owned(theirs, "https://github.com/someone-else/r.git")
+    ours = data / "changes" / f"r@{owner}" / "ENG-40-e" / "buildme"
+    assert store.epic_dir_for(project, "e", "ENG-40-e") == ours
+    assert store.epic_dir_for(project, "e") != theirs
+    _owned(ours, store._remote_url(project))
+    assert store.epic_dir_for(project, "e") == ours
+
+
+def test_the_same_repo_over_another_url_keeps_its_folder(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    owner, name = store.origin_owner_repo(store._remote_url(project))
+    mine = data / "changes" / "r" / "ENG-40-e" / "buildme"
+    _owned(mine, f"git@github.com:{owner.upper()}/{name}.git")
+    assert store.epic_dir_for(project, "e", "ENG-40-e") == mine
+    assert store.epic_dir_for(project, "e") == mine
+
+
 # --- causes ----------------------------------------------------------------------
 
 
@@ -103,6 +171,12 @@ def test_two_branches_with_one_epic_name_are_refused(tmp_path, monkeypatch):
         ("waiting", "waiting on owner-permissions-core", "dependency"),
         ("failed", "exit 1", "exit-code"),
         ("failed", "Claude usage limit reached; resets 5pm", "usage-limit"),
+        (
+            "failed",
+            "exit 1: You've hit your session limit · resets 9:40am (UTC)",
+            "usage-limit",
+        ),
+        ("failed", "exit 4: an agent timed out", "timeout"),
         ("parked", "something nobody wrote yet", "other"),
         ("merged", "", None),
         ("built", "", None),
@@ -154,6 +228,7 @@ def test_the_producer_names_this_plugins_version():
         (2, "SPEC:NOT_READY", ("failed", "SPEC:NOT_READY")),
         (1, None, ("failed", "exit-1")),
         (143, None, ("stopped", "signal-15")),
+        (129, None, ("stopped", "signal-1")),
         (None, None, ("stopped", "interrupted")),
     ],
 )
@@ -182,7 +257,9 @@ def test_a_build_appends_one_row_and_an_epic_none(tmp_path, monkeypatch):
         def state_file_path(self):
             return project / "specs" / "changes" / "c" / ".build-state.json"
 
-    monkeypatch.setattr(build_row, "_epic_ran", False)
+    monkeypatch.setattr(build_row, "_is_epic", False)
+    monkeypatch.setattr(build_row, "_epic_row_written", False)
+    monkeypatch.delenv(CHILD_ENV, raising=False)
     build_row.append(Config(), 3, "2026-11-04T00:00:00Z", "PLAN:WAITING")
     rows, skipped = runs.read_rows(data / "runs.jsonl")
     assert skipped == 0 and len(rows) == 1
@@ -200,7 +277,71 @@ def test_a_build_appends_one_row_and_an_epic_none(tmp_path, monkeypatch):
     }
     assert row["producer"] == build_row.PRODUCER
 
-    build_row.mark_epic()
+    build_row.epic_row_written()
     build_row.append(Config(), 0, "2026-11-04T00:00:00Z", None)
     assert len(runs.read_rows(data / "runs.jsonl")[0]) == 1
-    monkeypatch.setattr(build_row, "_epic_ran", False)
+
+
+def _config(project):
+    class Config:
+        project_dir = project
+        feature_branch = "ENG-1-e"
+        change_name = "e"
+
+        def state_file_path(self):
+            return project / "specs" / "changes" / "e" / ".build-state.json"
+
+    return Config()
+
+
+def test_an_epic_stopping_before_its_summary_still_writes_a_row(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    monkeypatch.setattr(build_row, "_is_epic", False)
+    monkeypatch.setattr(build_row, "_epic_row_written", False)
+    build_row.mark_epic()
+    build_row.append(_config(project), 2, "2026-11-04T00:00:00Z", "SPEC:NOT_READY")
+    monkeypatch.setattr(build_row, "_is_epic", False)
+    [row], _ = runs.read_rows(data / "runs.jsonl")
+    assert (row["kind"], row["outcome"], row["cause"]) == (
+        "epic",
+        "failed",
+        "SPEC:NOT_READY",
+    )
+
+
+def test_an_epics_child_build_names_who_asked_for_it(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    monkeypatch.setattr(build_row, "_is_epic", False)
+    monkeypatch.setattr(build_row, "_epic_row_written", False)
+    monkeypatch.setenv(CHILD_ENV, "1")
+    build_row.append(_config(project), 0, "2026-11-04T00:00:00Z", None)
+    [row], _ = runs.read_rows(data / "runs.jsonl")
+    assert row["requested_by"] == {"branch": "ENG-1-e", "child": "e"}
+
+
+@pytest.mark.parametrize(
+    "raised,code",
+    [
+        (RuntimeError("boom"), 1),
+        (SystemExit(143), 143),
+        (KeyboardInterrupt(), None),
+    ],
+)
+def test_a_build_that_raises_hands_its_row_the_exit_it_ends_with(
+    tmp_path, monkeypatch, raised, code
+):
+    make_project(tmp_path)
+    seen = []
+
+    async def raises(config, args):
+        raise raised
+
+    monkeypatch.setattr(orchestrator, "run_orchestrator", raises)
+    monkeypatch.setattr(
+        build_row, "append", lambda config, c, started, marker: seen.append(c)
+    )
+    with pytest.raises(type(raised)):
+        main(["build", "--change", "c", "--project-dir", str(tmp_path)])
+    assert seen == [code]

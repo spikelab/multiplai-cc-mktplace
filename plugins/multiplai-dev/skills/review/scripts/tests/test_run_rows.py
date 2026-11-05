@@ -73,7 +73,7 @@ def test_a_succeeded_run_appends_one_row_with_its_target_and_run(
     ]
     assert row["run"] == finished[-1]["run"]
     assert row["spend_usd"] == row["run"]["cost_usd"] > 0
-    assert row["started_at"] == row["run"]["started_at"]
+    assert row["started_at"] <= row["run"]["started_at"]
     assert row["finished_at"] == row["run"]["ended_at"]
 
 
@@ -126,6 +126,29 @@ def test_a_usage_limit_stop_then_resume_appends_a_row_for_each_run(
     assert (resumed["outcome"], resumed["cause"]) == ("succeeded", None)
     for row in (stopped, resumed):
         assert row["requested_by"] == {"branch": "DB-1-epic", "child": "child-a"}
+
+
+def test_a_resumed_review_row_holds_only_that_run_s_spend_and_start(
+    fixture_repo, tmp_path, agents
+):
+    repo, base, head = fixture_repo
+    out = tmp_path / "out"
+    fake = agents(limit_at=3, cost=1.0)
+    assert main(_review_args(repo, base, head, out)) == 6
+    fake.limit_at = None
+    state_file = _folder(out, base, head) / "review-state.json"
+    saved = json.loads(state_file.read_text())
+    first_start = "2026-01-01T00:00:00Z"
+    saved["timings"]["run"][0]["started_at"] = first_start
+    state_file.write_text(json.dumps(saved))
+    assert main(["resume", str(state_file.parent), "--trust-repo"]) == 0
+
+    stopped, resumed = _rows(tmp_path)
+    assert stopped["spend_usd"] > 0
+    total = resumed["run"]["cost_usd"]
+    assert total > stopped["spend_usd"]
+    assert stopped["spend_usd"] + resumed["spend_usd"] == pytest.approx(total)
+    assert resumed["started_at"] > first_start
 
 
 def test_requested_by_without_a_child_has_a_null_child(fixture_repo, tmp_path, agents):

@@ -397,6 +397,7 @@ async def run_epic_from_specs(config, args) -> int:
             return 1
     else:
         epic = store.Epic(name=name)
+    epic.remote = store._remote_url(repo)
     epic.children = children
     epic.child_status = {
         cid: s

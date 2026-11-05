@@ -95,7 +95,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -104,7 +104,15 @@ from multiplai_core import runs
 
 from build_pipeline.budget import BudgetExceededError
 
-from .. import budget, feature_branch, git_ops, intake, readiness, stop_record
+from .. import (
+    budget,
+    build_row,
+    feature_branch,
+    git_ops,
+    intake,
+    readiness,
+    stop_record,
+)
 from ..config import git_toggles
 from ..models import AgentResult
 from . import (
@@ -834,7 +842,7 @@ class Coordinator:
                 records.wait_marker(last.get("markers", [])) or "exit 3",
             )
         else:
-            c.status, c.reason = "failed", f"exit {code}"
+            c.status, c.reason = "failed", _exit_reason(code, tries[-1].log)
             c.argv = tries[-1].started.get("argv")
 
     def _recover(self) -> None:
@@ -1331,6 +1339,26 @@ class Coordinator:
         log.info("EPIC shared analysis: written to %s at %s", directory, sha[:12])
         self.shared = directory
         return directory
+
+    async def _recorded_plan(self, call: Awaitable[str]) -> str:
+        """Await the shared plan's model call, as a `plan` record holding what
+        it spent; the plan's spend reaches no child's checkpoint."""
+        attempt = records.start(self.epic_dir, "plan", "shared", ["change-plan"])
+        before = budget.process_spend().cost_usd
+
+        def spent() -> dict:
+            return {"spend": round(budget.process_spend().cost_usd - before, 6)}
+
+        try:
+            text = await call
+        except Exception:
+            records.finish(attempt, 1, interrupted=False, extra=spent())
+            raise
+        except BaseException:  # a cancelled call records no usage: its spend is unknown
+            records.finish(attempt, None, interrupted=True)
+            raise
+        records.finish(attempt, 0, interrupted=False, extra=spent())
+        return text
 
     def _done(self, c: Child, exit_code: int | None, *, interrupted: bool) -> None:
         records.finish(c.attempt, exit_code, interrupted=interrupted)
@@ -3068,6 +3096,7 @@ class Coordinator:
                 self.branch,
                 approve=bool(getattr(self.args, "approve_plan", False)),
                 analysis=self._shared_analysis,
+                recorded=self._recorded_plan,
             )
             if planned.exit is not None:
                 self._summary(run_dir)
@@ -3138,7 +3167,18 @@ class Coordinator:
             if (c.status == "merged" or waits) and self._final_fix(c) is not None:
                 self._left_issue(c)
         await self._board_end()
-        self._summary(run_dir)
+        archived = None  # before the summary, whose row says how the run ended
+        if (
+            self.conflict is None
+            and self.plan_waiting is None
+            and self.nested
+            and all(c.status == "merged" for c in self.children.values())
+        ):
+            archived = self._archive()
+        if archived:
+            self._summary(run_dir, outcome="failed", cause="archive-failed")
+        else:
+            self._summary(run_dir)
         bad = [c for c in self.children.values() if c.status in ("failed", "unknown")]
         for c in bad:  # beside EPIC:MERGE_WAITING too, not only in the summary
             print(
@@ -3158,8 +3198,8 @@ class Coordinator:
             return feature_branch.conflict_exit(self.branch, self.conflict)
         if self.plan_waiting is not None and not bad:  # PLAN:WAITING was printed
             return 3
-        if self.nested and all(c.status == "merged" for c in self.children.values()):
-            return self._archive()
+        if archived is not None:
+            return archived
         if (
             self.budget_stop is not None
         ):  # the spend at exit, the running children's included
@@ -3453,9 +3493,34 @@ class Coordinator:
             log.warning("EPIC could not build this run's row: %s", e)
             return
         runs.append_row(row)
+        build_row.epic_row_written()
 
 
 PRODUCER = runs.producer(Path(__file__).resolve().parents[5], "buildme")
+
+
+AGENT_TIMED_OUT = "an agent timed out"
+LOG_TAIL = 65536  # bytes of a build's log that can hold why it stopped
+
+
+def _exit_reason(code: int | None, log_path: Path) -> str:
+    """Why a build exited *code*: the usage limit its log's end names, or
+    an agent timeout (exit 4, which `_classify_records` has told apart from
+    a refusal by its marker), so `causes.cause_of` can tell them from a bare
+    exit code."""
+    try:
+        with log_path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - LOG_TAIL))
+            tail = f.read().decode(errors="replace")
+    except OSError:
+        tail = ""
+    limit = causes.USAGE.search(tail)
+    if limit:
+        return f"exit {code}: {limit.group(0)}"
+    if code == readiness.EXIT_SPEC_ISSUES:
+        return f"exit {code}: {AGENT_TIMED_OUT}"
+    return f"exit {code}"
 
 
 def run_outcome(totals: dict[str, int]) -> str:
