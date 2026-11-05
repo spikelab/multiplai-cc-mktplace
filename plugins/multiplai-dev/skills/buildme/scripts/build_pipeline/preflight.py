@@ -237,7 +237,11 @@ def _epic_lock(config) -> str | None:
     if repo is None:
         return None
     for epic in epics:
-        holder = epic_lock.holder_elsewhere(store.epic_dir_for(repo, epic))
+        try:
+            epic_dir = store.epic_dir_for(repo, epic)
+        except store.AmbiguousEpic as e:
+            return str(e)
+        holder = epic_lock.holder_elsewhere(epic_dir)
         if holder is not None:
             return f"epic {epic} is running now ({holder})"
     return None

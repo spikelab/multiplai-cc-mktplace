@@ -116,7 +116,7 @@ class Epic:
             max_parallel=2, merge="manual", shared_analysis=shared
         )
         self.specs = approve(self.config, THREE, CallLog(root / "split.log"))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
         self.shared_dir = self.dir / code_analysis.SHARED_DIR
 
     def run(self) -> int:

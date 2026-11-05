@@ -90,7 +90,7 @@ class Epic:
             merge="manual",
         )
         approve(self.config, answer, CallLog(root / "split.log"))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
         self.target = self.data / "reviews" / "o-r" / f"pr-{N}"
         self.worktree = root / "ws" / ".worktrees" / "buildme-e-a"
 

@@ -326,7 +326,7 @@ async def run_epic_from_specs(config, args) -> int:
             resume=True,
             ticket_ref=True,
         )
-    epic_dir = store.epic_dir_for(repo, name)
+    epic_dir = store.epic_dir_for(repo, name, branch)
     with tempfile.TemporaryDirectory(prefix="buildme-epic-") as tmp:
         _, rel = where
         try:

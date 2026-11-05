@@ -300,7 +300,10 @@ def epic_status(
     project = Path(project_dir).absolute()
     repo = git_ops.repo_root(project) or project
     name = normalize_change_name(change)
-    epic_dir = store.epic_dir_for(repo, name)
+    try:
+        epic_dir = store.epic_dir_for(repo, name)
+    except store.AmbiguousEpic as e:
+        raise StatusError(str(e)) from None
     try:
         epic = store.load_epic(epic_dir)
     except store.EpicFileError as e:

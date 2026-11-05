@@ -521,7 +521,11 @@ def run_cli(args) -> int:
     project = Path(args.project_dir).absolute()
     repo = git_ops.repo_root(project) or project
     change = normalize_change_name(args.change)
-    epic_dir = store.epic_dir_for(repo, change)
+    try:
+        epic_dir = store.epic_dir_for(repo, change)
+    except store.AmbiguousEpic as e:
+        print(f"ERROR:{e}", file=sys.stderr, flush=True)
+        return 2
     viewer_repo = Path(args.viewer_repo).absolute() if args.viewer_repo else repo
     argv = epic_argv(
         args.change,

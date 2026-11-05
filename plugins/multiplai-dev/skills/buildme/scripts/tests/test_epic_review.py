@@ -88,7 +88,7 @@ class Epic:
             merge="manual",
         )
         approve(self.config, answer, CallLog(root / "split.log"))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
         self.ledger = self.data / "reviews" / "ledger.jsonl"
 
     def run(self) -> int:
@@ -151,6 +151,8 @@ def test_each_built_child_is_reviewed_and_the_result_recorded(tmp_path, monkeypa
         "--trust-repo",
         "--fetch",
         *review_options(e.config, verify_low="risky"),
+        "--requested-by",
+        "ENG-40-e:a",
     ]
     assert a.started["head_sha"] == e.head() and a.started["pr_round"] == 0
     r = a.result
@@ -594,6 +596,8 @@ def test_an_interrupted_review_is_resumed(tmp_path, monkeypatch):
         "--trust-repo",
         "--verify-low",
         "risky",
+        "--requested-by",
+        "ENG-40-e:a",
     ]
     assert (resume.result["pr_round"], resume.result["review_dir"]) == (
         1,

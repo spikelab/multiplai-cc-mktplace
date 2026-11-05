@@ -100,13 +100,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from multiplai_core import runs
 
 from build_pipeline.budget import BudgetExceededError
 
 from .. import budget, feature_branch, git_ops, intake, readiness, stop_record
 from ..config import git_toggles
 from ..models import AgentResult
-from . import CHILD_ENV, change_plan, fix, merge, outbox, records, review, spend, store
+from . import (
+    CHILD_ENV,
+    causes,
+    change_plan,
+    fix,
+    merge,
+    outbox,
+    records,
+    review,
+    spend,
+    store,
+)
 from .fix import write_decisions
 
 log = logging.getLogger(__name__)
@@ -525,6 +537,9 @@ class Coordinator:
     )  # each child's own ticket ref, read once per run
     plan_waiting: Path | None = (
         None  # the change's plan waits for its approval: launch no component
+    )
+    run_started: str | None = (
+        None  # this invocation's start, for its summary and run row
     )
 
     def change(self, cid: str) -> str:
@@ -1472,7 +1487,12 @@ class Coordinator:
         elif [a.result["blocking"] for a in tries if "blocking" in a.result][-1:] != [
             fields["blocking"]
         ]:
-            argv = review.review_argv(self._worktree(c), number, self.config)
+            argv = review.review_argv(
+                self._worktree(c),
+                number,
+                self.config,
+                requested_by=f"{self.branch}:{c.id}",
+            )
             a = records.start(
                 self.epic_dir, "review", c.id, argv, head_sha=head, pr_round=c.pr_round
             )
@@ -1560,6 +1580,7 @@ class Coordinator:
                         number,
                         self.config,
                         self._child_change_dir(c),
+                        requested_by=f"{self.branch}:{c.id}",
                     ),
                     head,
                 )
@@ -1582,6 +1603,7 @@ class Coordinator:
                             hint.group(1).strip(),
                             self.config,
                             self._child_change_dir(c),
+                            requested_by=f"{self.branch}:{c.id}",
                         ),
                         head,
                     )
@@ -3011,6 +3033,7 @@ class Coordinator:
             print(f"ERROR:{why}", file=sys.stderr, flush=True)
             return 1
         run_dir = _new_run_dir(self.epic_dir)
+        self.run_started = runs.now()
         self._recover()
         self._read_prs([c for c in self.children.values() if c.status == "built"])
         self._resolve()
@@ -3065,11 +3088,15 @@ class Coordinator:
                     signal.Signals(sig).name,
                 )
                 await self._stop_children(sig)
-            self._summary(run_dir)
+            self._summary(
+                run_dir, outcome="stopped", cause=f"signal-{signal.Signals(sig).name}"
+            )
             return 128 + sig
         except Exception:
             await self._cancel_reviews()
-            self._summary(run_dir)  # where each child stood when the run broke
+            self._summary(
+                run_dir, outcome="failed", cause="error"
+            )  # where each child stood when the run broke
             raise
         finally:
             for sig, handler in previous.items():  # asyncio would leave SIG_DFL
@@ -3310,7 +3337,14 @@ class Coordinator:
         park = fix.park_of(fixes[-1].result) if fixes else None
         return {"park_kind": park[0]} if park else {}
 
-    def _summary(self, run_dir: Path) -> Path:
+    def _summary(
+        self, run_dir: Path, *, outcome: str | None = None, cause: str | None = None
+    ) -> Path:
+        """`runs/<NN>/summary.json`, and one row in the shared `runs.jsonl`
+        (`_run_row`). A child stopped short carries its `cause`
+        (`causes.cause_of`); the summary names the buildme version and when
+        the run started and ended. *outcome* and *cause* name a run stopped
+        by a signal or an error; otherwise the children decide them."""
         children = [
             {
                 "id": cid,
@@ -3318,6 +3352,7 @@ class Coordinator:
                 "pr": c.pr,
                 "rounds": c.pr_round or 0,
                 "reason": c.reason,
+                "cause": causes.cause_of(c.status, c.reason),
                 **self._park_kind(c),
             }
             for cid, c in self.children.items()
@@ -3326,6 +3361,7 @@ class Coordinator:
         for c in children:
             totals[c["status"]] = totals.get(c["status"], 0) + 1
         usd, complete = self.spent()
+        finished = runs.now()
         path = run_dir / "summary.json"
         store._write_atomic(
             path,
@@ -3335,13 +3371,115 @@ class Coordinator:
                     "totals": totals,
                     "spent_usd": usd,
                     "spend_complete": complete,
+                    "buildme_version": PRODUCER.rsplit(" ", 1)[-1],
+                    "started_at": self.run_started,
+                    "finished_at": finished,
                 },
                 indent=2,
             )
             + "\n",
         )
         print(f"{MARKER_SUMMARY}:{path}", flush=True)
+        self._run_row(
+            run_dir, children, totals, usd, complete, finished, outcome, cause
+        )
         return path
+
+    def _run_row(
+        self,
+        run_dir: Path,
+        children: list[dict],
+        totals: dict[str, int],
+        usd: float,
+        complete: bool,
+        finished: str,
+        outcome: str | None,
+        cause: str | None,
+    ) -> None:
+        """This run's row in `<data_dir>/runs.jsonl` (`multiplai_core.runs`).
+        Its spend is the epic's spend less the previous run's summary, so the
+        rows of one epic add up to its total; None when that summary is
+        unreadable. Never raises."""
+        try:
+            if outcome is None:
+                outcome = run_outcome(totals)
+            before = _previous_spend(run_dir)
+            row = runs.make_row(
+                producer=PRODUCER,
+                kind="epic",
+                target={
+                    "repo": store.repo_folder(self.repo),
+                    "remote": store._remote_url(self.repo),
+                    "branch": self.branch,
+                    "change": self.epic.name,
+                },
+                folder=_under_data_dir(self.epic_dir),
+                started_at=self.run_started,
+                finished_at=finished,
+                outcome=outcome,
+                cause=cause,
+                spend_usd=None if before is None else round(usd - before, 6),
+                run={
+                    "run": run_dir.name,
+                    "children": children,
+                    "totals": totals,
+                    "spent_usd_total": usd,
+                    "spend_complete": complete,
+                },
+            )
+        except Exception as e:
+            log.warning("EPIC could not build this run's row: %s", e)
+            return
+        runs.append_row(row)
+
+
+PRODUCER = runs.producer(Path(__file__).resolve().parents[5], "buildme")
+
+
+def run_outcome(totals: dict[str, int]) -> str:
+    """A run's outcome from its children's statuses: `succeeded` when every
+    child merged, `failed` when one failed or is unknown, `parked` when one
+    parked, else `waiting` (on a merge, a plan approval or a dependency)."""
+    if totals and set(totals) == {"merged"}:
+        return "succeeded"
+    if totals.get("failed") or totals.get("unknown"):
+        return "failed"
+    if totals.get("parked"):
+        return "parked"
+    return "waiting"
+
+
+def _previous_spend(run_dir: Path) -> float | None:
+    """`spent_usd` of the last earlier run's summary; 0.0 when this is the
+    first run with one, None when the last one is unreadable."""
+    earlier = sorted(
+        (
+            p
+            for p in run_dir.parent.iterdir()
+            if p.name.isdigit() and int(p.name) < int(run_dir.name)
+        ),
+        key=lambda p: int(p.name),
+    )
+    for p in reversed(earlier):
+        f = p / "summary.json"
+        if not f.exists():
+            continue
+        try:
+            value = json.loads(f.read_text(encoding="utf-8")).get("spent_usd")
+        except (OSError, ValueError, AttributeError):
+            return None
+        return float(value) if isinstance(value, (int, float)) else None
+    return 0.0
+
+
+def _under_data_dir(path: Path) -> str:
+    """*path* relative to the data dir when under it, else absolute."""
+    from multiplai_core.paths import get_paths
+
+    try:
+        return str(Path(path).relative_to(Path(get_paths().data_dir)))
+    except ValueError:
+        return str(path)
 
 
 def _new_run_dir(epic_dir: Path) -> Path:

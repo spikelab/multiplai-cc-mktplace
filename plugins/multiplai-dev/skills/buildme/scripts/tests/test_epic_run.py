@@ -73,7 +73,7 @@ class Epic:
         self.config.epic = EpicSettings(max_parallel=parallel, merge="manual")
         self.answer = answer
         self.specs = approve(self.config, answer, CallLog(root / "split.log"))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
 
     def coord(self, config=None) -> coordinator.Coordinator:
         """A coordinator for this epic, as `run_epic_from_specs` builds one."""

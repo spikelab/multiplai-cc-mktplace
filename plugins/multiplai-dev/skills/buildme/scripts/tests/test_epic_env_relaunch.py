@@ -192,7 +192,16 @@ class Epic:
             env_relaunches=relaunches,
         )
         approve(self.config, CHAIN, CallLog(root / "split.log"))
-        self.dir = root / "ws" / ".multiplai" / "data" / "buildme" / "epics" / "o-r--e"
+        self.dir = (
+            root
+            / "ws"
+            / ".multiplai"
+            / "data"
+            / "changes"
+            / "r"
+            / "ENG-40-e"
+            / "buildme"
+        )
 
     def run(self) -> int:
         return run_coordinator(self.config)

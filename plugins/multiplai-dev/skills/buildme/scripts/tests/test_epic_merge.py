@@ -221,7 +221,7 @@ class MergeRoot:
         )  # the specs commit, on top, not pushed
         (root / "tests.json").write_text(json.dumps(tests or []))
         self.agent = agent or FakeAgent(root, at(RESOLVED))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
         self.w = root / "ws" / ".worktrees" / "buildme-e-a"
 
     def use(self) -> None:

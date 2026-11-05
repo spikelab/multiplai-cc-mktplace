@@ -411,6 +411,28 @@ def tag_log_records(change: str) -> None:
                 handler.addFilter(_ChangeTag(change))
 
 
+class _LastMarker:
+    """`sys.stdout` for a `build`: writes through, and keeps the cause of the
+    last marker line it printed (`build_row.MARKER`, e.g. `PLAN:WAITING`) for
+    the run's row."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.marker: str | None = None
+
+    def write(self, text: str) -> int:
+        from .build_row import MARKER
+
+        for line in text.splitlines():
+            m = MARKER.match(line)
+            if m:
+                self.marker = m.group(1)
+        return self.stream.write(text)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -510,11 +532,22 @@ def _main(args: argparse.Namespace) -> int:
         return 0
 
     elif args.command == "build":
+        from multiplai_core import runs
+
+        from . import build_row
         from .orchestrator import run_orchestrator
 
         config = BuildConfig.from_cli_args(args)
         tag_log_records(config.change_name)
-        return asyncio.run(run_orchestrator(config, args))
+        started, code = runs.now(), None
+        watch = _LastMarker(sys.stdout)
+        sys.stdout = watch
+        try:
+            code = asyncio.run(run_orchestrator(config, args))
+            return code
+        finally:
+            sys.stdout = watch.stream
+            build_row.append(config, code, started, watch.marker)
 
     elif args.command == "spec-generate":
         from .spec_generator import run_spec_generator

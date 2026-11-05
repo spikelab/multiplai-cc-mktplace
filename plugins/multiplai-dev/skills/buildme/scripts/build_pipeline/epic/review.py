@@ -86,7 +86,12 @@ def child_change_dir(project: Path, change: str) -> Path | None:
 
 
 def review_argv(
-    worktree: Path, number: int, config, change_dir: Path | None = None
+    worktree: Path,
+    number: int,
+    config,
+    change_dir: Path | None = None,
+    *,
+    requested_by: str | None = None,
 ) -> list[str]:
     """`--fetch`: the review needs the PR's head and base commits in the clone.
     A sibling's merge moves the base, and a push from elsewhere moves the
@@ -100,7 +105,9 @@ def review_argv(
     (`review_rounds.earlier_decisions_argv`), when there are some. Then
     `epic.review_dimensions` and `epic.review_finder_model` as `--dimensions`
     and `--finder-model`, when set (item 46). `resume_argv` passes neither: a
-    resumed review keeps the ones it saved (row S38)."""
+    resumed review keeps the ones it saved (row S38). Both pass
+    `--requested-by <feature branch>:<child>` when given *requested_by*, so
+    the review's row in the shared `runs.jsonl` names the epic child."""
     from ..findings.loop import review_options
     from ..review_rounds import earlier_decisions_argv
 
@@ -121,10 +128,17 @@ def review_argv(
         *review_options(config, verify_low=EPIC_VERIFY_LOW),
         *earlier_decisions_argv(change_dir),
         *settings,
+        *(["--requested-by", requested_by] if requested_by else []),
     )
 
 
-def resume_argv(target_dir: str, config, change_dir: Path | None = None) -> list[str]:
+def resume_argv(
+    target_dir: str,
+    config,
+    change_dir: Path | None = None,
+    *,
+    requested_by: str | None = None,
+) -> list[str]:
     from ..findings.loop import review_options
     from ..review_rounds import earlier_decisions_argv
 
@@ -134,6 +148,7 @@ def resume_argv(target_dir: str, config, change_dir: Path | None = None) -> list
         "--trust-repo",
         *review_options(config, exclude=False, verify_low=EPIC_VERIFY_LOW),
         *earlier_decisions_argv(change_dir),
+        *(["--requested-by", requested_by] if requested_by else []),
     )
 
 

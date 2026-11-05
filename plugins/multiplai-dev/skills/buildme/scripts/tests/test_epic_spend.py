@@ -468,7 +468,7 @@ class Epic:
             max_parallel=parallel, max_usd=max_usd, merge="manual"
         )
         approve(self.config, answer, CallLog(root / "split.log"))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
 
     def launches(self) -> list[str]:
         calls = CallLog(self.root / "calls.log").calls()

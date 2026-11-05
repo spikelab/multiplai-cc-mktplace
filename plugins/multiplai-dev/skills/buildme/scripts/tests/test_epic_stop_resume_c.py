@@ -68,7 +68,7 @@ class Root:
         self.config = make_build(self.project)
         self.config.epic = EpicSettings(max_parallel=1, merge="manual")
         approve(self.config, TWO, CallLog(root / "split.log"))
-        self.dir = self.data / "buildme" / "epics" / "o-r--e"
+        self.dir = self.data / "changes" / "r" / "ENG-40-e" / "buildme"
         self.target = self.data / "reviews" / "o-r" / f"pr-{N}"
 
     def use(self) -> None:
@@ -205,6 +205,8 @@ def _assert_same(
             "--trust-repo",
             "--verify-low",
             "risky",
+            "--requested-by",
+            "ENG-40-e:a",
         ],
     }
     want = [build if w == "<build>" else (w[0], argv[w[0]], *w[2:]) for w in want_a]
