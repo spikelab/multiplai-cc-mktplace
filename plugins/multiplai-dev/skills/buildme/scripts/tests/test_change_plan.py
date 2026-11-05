@@ -202,7 +202,7 @@ def test_a_change_planned_per_component_keeps_its_plans(tmp_path, monkeypatch):
 
 
 def test_the_plans_model_call_counts_in_the_epics_spend(change, monkeypatch):
-    config, fakes, origin = change
+    config, _fakes, _origin = change
     from build_pipeline import budget
     from build_pipeline.llm_steps import spec_steps
 
