@@ -6,11 +6,13 @@ fixer are fakes first on PATH (`epic_row_helpers.Fakes`)."""
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import subprocess
 import sys
 
 import pytest
-from build_pipeline.epic import records
+from build_pipeline.epic import coordinator, records
 
 from .test_epic_env_relaunch import BASELINE_TIMEOUT, DONE, ENV, HIGH, Epic, N
 
@@ -214,3 +216,93 @@ def test_a_later_review_park_keeps_today_s_behaviour(tmp_path, monkeypatch):
     assert e.status()["status"] == "parked"
     assert e.status()["reason"] == "the review failed: boom"
     assert len(e.fakes.review_launches()) == 1
+
+
+def test_a_later_round_cap_park_supersedes_an_earlier_fix_park(tmp_path, monkeypatch):
+    """A fixer parks at the old head; the head moves, and the review of the new
+    head parks at the round cap with open findings. The fix park is superseded:
+    the next run parks on the review's open findings, not the fixer's reason,
+    and `epic.accepted_findings` for them lets the child through. (Children
+    account-user-api and account-attribution of the DFACCMGMT-1 epic stayed
+    parked on their old fixer's reason in runs 20 and 21.)"""
+    e = _parked_epic(
+        tmp_path, monkeypatch, [_park(BASELINE), DONE], reviews=_reviews([HIGH], [HIGH])
+    )
+    e.config.epic = dataclasses.replace(e.config.epic, max_review_rounds=2)
+    e.fakes.set_head("e-a", NEW)
+    assert e.run() == 0
+    [*_, review] = [
+        a for a in records.attempts(e.dir) if a.child == "a" and a.kind == "review"
+    ]
+    assert review.started["head_sha"] == NEW
+    assert review.result["open_ids"] == ["f1"]
+    assert e.status()["status"] == "parked"
+    assert e.status()["reason"].startswith("review round 2 of 2")
+
+    assert e.run() == 0  # the same head: the review's park, not the fixer's
+    assert e.status()["status"] == "parked"
+    assert e.status()["reason"].startswith("review round 2 of 2")
+    assert len(e.fakes.review_launches()) == 2
+
+    e.config.epic = dataclasses.replace(
+        e.config.epic, accepted_findings={"a": {"f1": "Spike: f1 is acceptable"}}
+    )
+    assert e.run() == 3  # EPIC:MERGE_WAITING: its open findings were accepted
+    assert e.status()["status"] == "built"
+    assert len(e.fakes.review_launches()) == 2
+    assert len(e.fakes.fix_launches()) == 1
+
+
+def _count_pr_views(monkeypatch) -> dict[str, int]:
+    """Count `gh pr view <url>` calls the coordinator makes, per URL."""
+    seen: dict[str, int] = {}
+    real = coordinator._gh
+
+    def counted(repo, *args):
+        if args[:2] == ("pr", "view"):
+            seen[args[2]] = seen.get(args[2], 0) + 1
+        return real(repo, *args)
+
+    monkeypatch.setattr(coordinator, "_gh", counted)
+    return seen
+
+
+def test_a_parked_child_whose_pr_was_merged_on_github_is_merged(tmp_path, monkeypatch):
+    """A person merges the PR of a child its fixer parked: the next run marks
+    the child `merged`, reading its PR once, and launches its dependant (b),
+    which the park had skipped."""
+    e = _parked_epic(tmp_path, monkeypatch, [_park(BASELINE), DONE])
+    assert _b(e)["status"] == "skipped"
+    url = e.status()["pr"]
+    e.fakes.set_pr(url, "MERGED")
+    views = _count_pr_views(monkeypatch)
+    e.run()
+    assert e.status()["status"] == "merged"
+    assert views[url] == 1
+    assert _b(e)["status"] != "skipped"
+    assert any(a.kind == "build" and a.child == "b" for a in records.attempts(e.dir))
+    assert len(e.fakes.fix_launches()) == 1
+
+
+@pytest.mark.parametrize("state", ["OPEN", "CLOSED"])
+def test_a_parked_child_whose_pr_is_open_or_closed_stays_parked(
+    tmp_path, monkeypatch, state
+):
+    """An open or closed PR leaves the fixer's park as it is, and its
+    dependant skipped; the PR is read once."""
+    e = _parked_epic(tmp_path, monkeypatch, [_park(BASELINE), DONE])
+    url = e.status()["pr"]
+    e.fakes.set_pr(url, state)
+    views = _count_pr_views(monkeypatch)
+    assert e.run() == 0
+    assert e.status()["status"] == "parked"
+    assert BASELINE in e.status()["reason"]
+    assert views[url] == 1
+    assert _b(e)["status"] == "skipped"
+    assert not any(
+        a.kind == "build" and a.child == "b" for a in records.attempts(e.dir)
+    )
+
+
+def _b(e: Epic) -> dict:
+    return json.loads((e.dir / "epic.json").read_text())["child_status"]["b"]

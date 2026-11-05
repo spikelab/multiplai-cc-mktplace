@@ -526,6 +526,9 @@ class Coordinator:
     plan_waiting: Path | None = (
         None  # the change's plan waits for its approval: launch no component
     )
+    pr_views: dict[str, object] = field(
+        default_factory=dict
+    )  # `gh pr view` of a parked child's PR, read once per run (`_view_once`)
 
     def change(self, cid: str) -> str:
         """The `--change` the child *cid* builds as (`phase.child_change`)."""
@@ -887,18 +890,15 @@ class Coordinator:
                     )
                     c.status, c.reason = "pending", ""
         every = records.attempts(self.epic_dir)
-        latest_park = {
-            a.child: a
-            for a in every
-            if a.kind in (*REVIEW_KINDS, *FIX_KINDS) and (a.result or {}).get("parked")
-        }
+        # A later review, post or fix of the same child supersedes a park.
+        latest = {a.child: a for a in every if a.kind in (*REVIEW_KINDS, *FIX_KINDS)}
         before = {c.id: (c.status, c.reason) for c in self.children.values()}
         for a in every:  # a review's or fix's park stays (C.S6, C.S12, D2.S6)
             c = self.children.get(a.child)
             if (
                 c is not None
                 and c.status != "merged"
-                and a.kind in (*REVIEW_KINDS, *FIX_KINDS)
+                and latest.get(a.child) is a
                 and (a.result or {}).get("parked")
                 # S10: a park on open findings at the round cap is decided
                 # again by the review step: a new head is reviewed, and an
@@ -911,18 +911,12 @@ class Coordinator:
                     # Item 4 of plan-buildme-epic-speedups-2026-11-03.md: an
                     # environment park is left to `_fix_pending` while the
                     # child's relaunches are under `epic.env_relaunches`
-                    # (S9, S13), and once a later relaunch ran it again.
+                    # (S9, S13); a later relaunch supersedes it (`latest`).
                     times = self._env_relaunches(c.id, every)
-                    if times < self.settings.env_relaunches or any(
-                        b.child == a.child
-                        and b.kind == "fix"
-                        and b.n > a.n
-                        and b.started.get("env_relaunch")
-                        for b in every
-                    ):
+                    if times < self.settings.env_relaunches:
                         continue
                     why = fix.env_cap_reason(why, cause, times)
-                if a.kind == "fix" and latest_park.get(a.child) is a:
+                if a.kind == "fix":
                     # A fixer's park is decided again by the review step once
                     # the PR head moved since that fixer was launched (M1).
                     try:
@@ -986,7 +980,7 @@ class Coordinator:
         was = a.started.get("head_sha")
         if not was or not c.pr:
             return False
-        got = _gh(self.repo, "pr", "view", c.pr, "--json", "state,headRefOid")
+        got = self._view_once(c.pr)
         state = got.get("state") if isinstance(got, dict) else None
         if state is None:
             raise ReadFailed(PR_UNREAD)
@@ -1001,6 +995,33 @@ class Coordinator:
         )
         c.head = now
         return True
+
+    def _view_once(self, pr: str) -> object | None:
+        """`gh pr view` of *pr*, read at most once in this run."""
+        if pr not in self.pr_views:
+            self.pr_views[pr] = _gh(
+                self.repo, "pr", "view", pr, "--json", "state,headRefOid"
+            )
+        return self.pr_views[pr]
+
+    def _read_merged(self) -> None:
+        """A parked, failed or unknown child whose PR GitHub reports MERGED
+        (a person merged it) is `merged`, so its dependants launch. An open or
+        closed PR, or a failed read, leaves the child as it is."""
+        for c in self.children.values():
+            if c.status not in ("parked", "failed", "unknown") or not c.pr:
+                continue
+            got = self._view_once(c.pr)
+            if isinstance(got, dict) and got.get("state") == "MERGED":
+                log.info(
+                    "EPIC child %s: %s was merged on GitHub; taking it as merged (was %s: %s)",
+                    c.id,
+                    c.pr,
+                    c.status,
+                    c.reason,
+                )
+                c.status, c.reason = "merged", ""
+                c.head = got.get("headRefOid") or None
 
     def _read_prs(self, which: list[Child]) -> None:
         """`gh pr view` each PR. A failed read is not "still open": the child is
@@ -3013,6 +3034,7 @@ class Coordinator:
         run_dir = _new_run_dir(self.epic_dir)
         self._recover()
         self._read_prs([c for c in self.children.values() if c.status == "built"])
+        self._read_merged()
         self._resolve()
         self._save()
         self._board()  # S52: what an earlier run left unsent goes first
