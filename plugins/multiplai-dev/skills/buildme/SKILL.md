@@ -857,8 +857,10 @@ before it pushed: `pm-spec resume <parent>` moves it there). A change that
 names the parent but is not in its `children` list is not built.
 
 Only one process at a time writes an epic's directory
-(`<data_dir>/buildme/epics/<owner>-<repo>--<change>/`, which holds
-`epic.json`, the records and the summaries). A second one exits `2` with
+(`<data_dir>/changes/<repo>/<feature branch>/buildme/`, which holds
+`epic.json`, the records and the summaries; an epic started before
+multiplai-dev 0.156 keeps its old folder,
+`<data_dir>/buildme/epics/<owner>-<repo>--<change>/`, until it is moved). A second one exits `2` with
 `epic <name> is running now (pid <n> on <host>, since <time>)`. The parent's
 run writes nothing into the parent's change dir.
 

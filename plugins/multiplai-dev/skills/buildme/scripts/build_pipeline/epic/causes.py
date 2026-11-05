@@ -6,7 +6,7 @@ The coordinator writes a child's `reason` as text at about forty places
 different versions can be counted by cause in the run summary and the shared
 run row (`multiplai_core.runs`). `PATTERNS` lists, for each cause, the
 words it matches and the module that writes them;
-`tests/test_epic_causes.py` checks that every pattern still appears in that
+`tests/test_run_records.py` checks that every pattern still appears in that
 module's source, so a reworded message fails a test instead of falling into
 `other` unseen.
 
