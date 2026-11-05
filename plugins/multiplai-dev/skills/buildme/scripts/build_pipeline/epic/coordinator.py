@@ -834,7 +834,7 @@ class Coordinator:
                 records.wait_marker(last.get("markers", [])) or "exit 3",
             )
         else:
-            c.status, c.reason = "failed", f"exit {code}"
+            c.status, c.reason = "failed", _exit_reason(code, tries[-1].log)
             c.argv = tries[-1].started.get("argv")
 
     def _recover(self) -> None:
@@ -3456,6 +3456,30 @@ class Coordinator:
 
 
 PRODUCER = runs.producer(Path(__file__).resolve().parents[5], "buildme")
+
+
+AGENT_TIMED_OUT = "an agent timed out"
+LOG_TAIL = 65536  # bytes of a build's log that can hold why it stopped
+
+
+def _exit_reason(code: int | None, log_path: Path) -> str:
+    """Why a build exited *code*: the usage limit its log's end names, or
+    an agent timeout (exit 4, which `_classify_records` has told apart from
+    a refusal by its marker), so `causes.cause_of` can tell them from a bare
+    exit code."""
+    try:
+        with log_path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - LOG_TAIL))
+            tail = f.read().decode(errors="replace")
+    except OSError:
+        tail = ""
+    limit = causes.USAGE.search(tail)
+    if limit:
+        return f"exit {code}: {limit.group(0)}"
+    if code == readiness.EXIT_SPEC_ISSUES:
+        return f"exit {code}: {AGENT_TIMED_OUT}"
+    return f"exit {code}"
 
 
 def run_outcome(totals: dict[str, int]) -> str:

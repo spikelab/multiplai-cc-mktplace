@@ -103,6 +103,12 @@ def test_two_branches_with_one_epic_name_are_refused(tmp_path, monkeypatch):
         ("waiting", "waiting on owner-permissions-core", "dependency"),
         ("failed", "exit 1", "exit-code"),
         ("failed", "Claude usage limit reached; resets 5pm", "usage-limit"),
+        (
+            "failed",
+            "exit 1: You've hit your session limit · resets 9:40am (UTC)",
+            "usage-limit",
+        ),
+        ("failed", "exit 4: an agent timed out", "timeout"),
         ("parked", "something nobody wrote yet", "other"),
         ("merged", "", None),
         ("built", "", None),

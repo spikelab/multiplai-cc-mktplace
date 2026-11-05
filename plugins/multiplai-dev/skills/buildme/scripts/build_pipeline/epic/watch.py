@@ -53,6 +53,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .. import git_ops
 from ..change_manager import normalize_change_name
 from . import coordinator, records, status, store
+from .causes import USAGE
 
 WATCH_LOG = "watch.log"
 EPIC_OUTPUT = "watch-epic.log"
@@ -84,14 +85,6 @@ NETWORK = re.compile(
     r"|Name or service not known|nodename nor servname provided"
     r"|Network is unreachable|Connection reset by peer|Connection timed out"
     r"|Failed to connect to|error connecting to|API Error: Connection error",
-    re.IGNORECASE,
-)
-# The Claude CLI's limit text anywhere in a line (multiplai-core's
-# `UsageLimitError` reads it at the start of an answer; here it is inside a
-# log line): "You've hit your session limit · resets 9:40am (UTC)".
-USAGE = re.compile(
-    r"you(?:'|’)ve hit your [^\n·]{0,60}?\s*(?:limit|budget)\b"
-    r"(?:\s*·\s*resets\s+(?P<resets>[^()\n·]*(?:\((?!exit code)[^()\n]*\))?))?",
     re.IGNORECASE,
 )
 _RESET = re.compile(

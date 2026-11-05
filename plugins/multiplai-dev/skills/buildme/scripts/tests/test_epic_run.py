@@ -22,7 +22,7 @@ import yaml
 from build_pipeline import git_ops, intake, orchestrator
 from build_pipeline.change_manager import ChangeManager
 from build_pipeline.config import BuildConfig, EpicSettings
-from build_pipeline.epic import coordinator, records, store
+from build_pipeline.epic import causes, coordinator, records, store
 from build_pipeline.epic import lock as epic_lock
 from build_pipeline.git_ops import GitResult
 from build_pipeline.progress import ProgressWriter
@@ -1489,8 +1489,24 @@ def test_an_exit_4_with_no_refusal_marker_is_still_a_failure(tmp_path, monkeypat
     """Exit 4 is also an agent timeout: without the marker it is `failed`."""
     e = Epic(tmp_path, monkeypatch, answer=INDEPENDENT, steps={"a": [{"exit": 4}]})
     e.run()
-    assert e.status()["a"] == "failed" and e.reasons()["a"] == "exit 4"
+    assert e.status()["a"] == "failed"
+    assert e.reasons()["a"] == "exit 4: an agent timed out"
+    assert causes.cause_of("failed", e.reasons()["a"]) == "timeout"
     assert e.launches().count("a") == 2
+
+
+def test_a_usage_limit_in_a_builds_log_is_its_reason(tmp_path, monkeypatch):
+    limit = "You've hit your session limit · resets 9:40am (UTC)"
+    e = Epic(
+        tmp_path,
+        monkeypatch,
+        answer=INDEPENDENT,
+        steps={"a": [{"marker": f"ERROR: {limit}", "exit": 1}]},
+    )
+    e.run()
+    assert e.status()["a"] == "failed"
+    assert limit in e.reasons()["a"]
+    assert causes.cause_of("failed", e.reasons()["a"]) == "usage-limit"
 
 
 def test_a_parked_child_runs_again_once_its_spec_is_ready(tmp_path, monkeypatch):
