@@ -24,6 +24,9 @@ Exit codes: 0 ready, 1 failed, 2 refused, 3 waiting (for a review, the
 tickets or interview replies), 4 blocked on findings, 5 another run holds the
 lock. The last line is `SPEND:<usd>:<tokens>`, what this process's model
 calls cost.
+
+Each invocation that got as far as looking up the change's branch appends one
+row to `<data_dir>/runs.jsonl` as it ends (`runrow.py`).
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ from pathlib import Path
 
 from multiplai_core.specs import normalize_change_name
 
-from . import branch, runlock, sdk
+from . import branch, runlock, runrow, sdk
 from . import state as state_mod
 from .config import INTERVIEW_MODES, RUN_DIR, SpecConfig, read_specs_config
 from .pipeline import NewInputs, TicketInputs, cmd_new, cmd_resume, cmd_revise
@@ -265,7 +268,7 @@ def _component_refusal(name: str, command: str) -> str:
     )
 
 
-async def _dispatch(args: argparse.Namespace) -> int:
+async def _dispatch(args: argparse.Namespace, invocation: runrow.Invocation) -> int:
     if why := _component_refusal(args.change, args.command):
         print(f"ERROR: {why}", flush=True)
         return EXIT_REFUSED
@@ -283,6 +286,7 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     # The checkout the run writes in is the feature branch's (`branch.place`);
     # the input files are still read from `--project-dir`.
+    invocation.targeted = True
     where = branch.place(
         args.project_dir,
         args.change,
@@ -290,6 +294,7 @@ async def _dispatch(args: argparse.Namespace) -> int:
         command=args.command,
         ticket=args.ticket_ref,
     )
+    invocation.place = where
     # A change already in the checkout is locked before the checkout is
     # fetched into, fast-forwarded or written, so a second run changes nothing.
     change_dir = (
@@ -298,11 +303,14 @@ async def _dispatch(args: argparse.Namespace) -> int:
     with contextlib.ExitStack() as stack:
         if change_dir.is_dir():
             stack.enter_context(runlock.hold(change_dir / RUN_DIR, command=True))
-        return await _run_command(args, where, refs)
+        return await _run_command(args, where, refs, invocation)
 
 
 async def _run_command(
-    args: argparse.Namespace, where: branch.Place, refs: dict[str, str]
+    args: argparse.Namespace,
+    where: branch.Place,
+    refs: dict[str, str],
+    invocation: runrow.Invocation,
 ) -> int:
     branch.prepare(where)
     branch.adopt(where, args.project_dir, args.change, args.ticket_ref.strip())
@@ -322,6 +330,7 @@ async def _run_command(
         data=read_specs_config(Path(args.project_dir).expanduser() / "specs"),
         place=where,
     )
+    invocation.config = config
     replies = _path(getattr(args, "interview_replies", ""), args.project_dir)
     if args.command == "new":
         inputs = NewInputs(
@@ -365,30 +374,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         session_id=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
         packages=("pm_spec_pipeline",),
     )
+    invocation = runrow.Invocation(
+        command=args.command,
+        change=args.change,
+        project_dir=Path(args.project_dir).expanduser().resolve(),
+        ticket=args.ticket_ref.strip(),
+    )
+    code, cause = _run(args, invocation)
+    runrow.record(invocation, code, cause)
+    return code
+
+
+def _run(args: argparse.Namespace, invocation: runrow.Invocation) -> tuple[int, str]:
+    """The command's exit code, and the run row's cause (`runrow.CAUSES`)."""
     try:
-        return asyncio.run(_dispatch(args))
+        return asyncio.run(_dispatch(args, invocation)), ""
     except Stop as e:
-        return e.code
+        return e.code, e.cause
     except runlock.Locked as e:
         print(f"pm-spec: {e}", flush=True)
-        return EXIT_LOCKED
+        return EXIT_LOCKED, "locked"
     except sdk.RepoTrustError as e:
         print(f"pm-spec: {e}", flush=True)
-        return EXIT_REFUSED
+        return EXIT_REFUSED, "untrusted-repo"
     except state_mod.Unreadable as e:
         print(f"pm-spec: {e}", flush=True)
-        return EXIT_REFUSED
+        return EXIT_REFUSED, "unreadable-state"
     except sdk.BudgetExceededError as e:
         print(
             f"pm-spec: {e}. Everything paid for is saved; run `resume` with a higher --max-usd "
             "to continue.",
             flush=True,
         )
-        return EXIT_FAILED
+        return EXIT_FAILED, "budget"
     except Exception as e:  # every other failure is exit 1 with its message
         log.debug("pm-spec failed", exc_info=True)
         print(f"pm-spec: failed: {e}", flush=True)
-        return EXIT_FAILED
+        return EXIT_FAILED, runrow.error_cause(e)
 
 
 def cli(argv: Sequence[str] | None = None) -> int:

@@ -494,3 +494,12 @@ calls cost.
 | 3 | Waiting: for review (`SPEC:REVIEW:proposal`, `SPEC:REVIEW:components` or `SPEC:REVIEW:specs`), for the components' tickets (`SPEC:TICKETS:<path>`), or for the ticket replies (`INTERVIEW:WAITING:<path>`). Each but the last is pushed (`SPEC:BRANCH:<branch>`). |
 | 4 | Blocked on findings (`SPEC:BLOCKED:<change_dir>`). Edit the files, then run again, or `--accept` the findings; past the round cap, `--accept` or `--check-again`. Also `resume` while requirements issues are open or a revise is blocked: run `revise`. |
 | 5 | Another process holds the change's lock; the message names its pid, host and start time. |
+
+Each invocation that gets as far as looking up the change's branch also
+appends one row to `<data_dir>/runs.jsonl`, the record that outlives the
+checkout's `.pm-spec/`: the pm-spec version, the repository, branch, change
+and ticket, the stop reached, each step's outcome, the exit code and the
+spend. Its `outcome` is `succeeded` (exit 0), `waiting` for a person (exit 3,
+or 4), `stopped` by the spend cap or a usage limit, or `failed` (any other
+exit 1, and 2 or 5), with a `cause` code saying which (listed in
+`scripts/pm_spec_pipeline/runrow.py`).

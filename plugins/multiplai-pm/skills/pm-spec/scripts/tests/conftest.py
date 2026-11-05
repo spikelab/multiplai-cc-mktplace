@@ -305,6 +305,15 @@ def model(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def runs_file(tmp_path, monkeypatch) -> Path:
+    """The run rows' file (`runrow.py`), in the test's own folder: no test
+    writes to the data dir of whoever runs the suite."""
+    path = tmp_path / "data" / "runs.jsonl"
+    monkeypatch.setattr("multiplai_core.runs.runs_path", lambda: path)
+    return path
+
+
 def make_repo(path: Path) -> Path:
     """A checkout at *path*, on `main`, with `origin` (a bare repo beside it,
     `<parent>/origin.git`) holding `main`. pm-spec's worktrees go in
