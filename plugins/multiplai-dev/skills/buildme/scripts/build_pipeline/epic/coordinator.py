@@ -3406,7 +3406,10 @@ class Coordinator:
         (`_run_row`). A child stopped short carries its `cause`
         (`causes.cause_of`); the summary names the buildme version and when
         the run started and ended. *outcome* and *cause* name a run stopped
-        by a signal or an error; otherwise the children decide them."""
+        by a signal or an error; otherwise the children decide them. Each
+        child's `merge_waiting` says whether it is one `EPIC:MERGE_WAITING`
+        names (`_merge_waiting`), for readers that cannot redo that check."""
+        waiting = self._merge_waiting()
         children = [
             {
                 "id": cid,
@@ -3415,6 +3418,7 @@ class Coordinator:
                 "rounds": c.pr_round or 0,
                 "reason": c.reason,
                 "cause": causes.cause_of(c.status, c.reason),
+                "merge_waiting": cid in waiting,
                 **self._park_kind(c),
             }
             for cid, c in self.children.items()
@@ -3446,6 +3450,16 @@ class Coordinator:
             run_dir, children, totals, usd, complete, finished, outcome, cause
         )
         return path
+
+    def _merge_waiting(self) -> set[str]:
+        """The children with a PR waiting for a person to merge it: those
+        `EPIC:MERGE_WAITING` names (`_waited_on`, `built`). Empty when that
+        cannot be read, as in a summary written while the run breaks."""
+        try:
+            return {c.id for c in self._waited_on() if c.status == "built"}
+        except Exception as e:  # the summary is written regardless
+            log.warning("EPIC cannot tell which children wait for a merge: %s", e)
+            return set()
 
     def _run_row(
         self,

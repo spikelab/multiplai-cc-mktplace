@@ -83,10 +83,9 @@ class Viewer:
     epic_dir_for: Callable[[Path, str], Path] | None = None
     # What `/api/scorecard` reads (`buildme.scorecard_sources`); None: no runs.
     scorecard_sources: Callable[[Path], status.ScorecardSources] | None = None
-    # What `/api/needs-you` uses beyond the files: buildme's `cause_of` and
-    # `merge_mode` (None: causes only as recorded, no merge rows), and GitHub.
+    # What `/api/needs-you` uses beyond the files: buildme's `cause_of`
+    # (None: causes only as recorded), and GitHub.
     cause_of: Callable[[str, str], str | None] | None = None
-    merge_mode: Callable[[Path, str | None], str] | None = None
     thread_reader: github.ThreadReader = field(default_factory=github.ThreadReader)
     started: str = field(default_factory=utc_now)
     httpd: PipelineHTTPServer | None = None
@@ -149,7 +148,6 @@ class Viewer:
             people,
             epic_dir_for=self.epic_dir_for,
             cause_of=self.cause_of,
-            merge_mode=self.merge_mode,
             now=now,
         )
         needs.repo = self.repo.name

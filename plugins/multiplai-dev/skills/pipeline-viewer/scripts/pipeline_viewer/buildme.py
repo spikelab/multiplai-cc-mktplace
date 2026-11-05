@@ -114,25 +114,3 @@ def scorecard_sources(repo: Path, data_dir: Path | None = None):
         epic_dirs=epic_dirs(repo, data_dir),
         cause_of=cause_of,
     )
-
-
-def merge_mode(repo: Path, branch: str | None) -> str:
-    """How the epic on *branch* merges its children's PRs, as buildme decides
-    (`Coordinator.__post_init__`): `epic.merge` in `specs/config.yaml`, else
-    `manual` when *branch* is origin's default branch, else `auto`."""
-    import yaml
-
-    try:
-        data = yaml.safe_load((Path(repo) / "specs" / "config.yaml").read_text()) or {}
-    except (OSError, UnicodeError, yaml.YAMLError):
-        data = {}
-    epic = data.get("epic") if isinstance(data, dict) else None
-    merge = epic.get("merge") if isinstance(epic, dict) else None
-    if merge in ("auto", "manual"):
-        return merge
-    if merge is not None:
-        return "manual"  # buildme's own fallback for a value it does not know
-    _ensure_path()
-    from build_pipeline.feature_branch import default_name
-
-    return "manual" if branch and branch == default_name(Path(repo)) else "auto"

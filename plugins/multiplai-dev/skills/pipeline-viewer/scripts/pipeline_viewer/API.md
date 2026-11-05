@@ -334,8 +334,8 @@ first (rows with no time last). Only this repository: the server serves one.
 |---|---|---|---|
 | `stop` | stop 1-4 is `waiting` or `acknowledged` | the stop's `waiting_on` | the stop's `waiting_since` |
 | `parked` | a child is `parked` in the change's latest epic `summary.json` | the PMs for a cause `spec-issues` or `spec-not-ready`, else the engineers | that run's `finished_at`, else the summary's file time |
-| `merge` | a child is `built` with a PR, the epic merges by hand (`epic.merge: manual` in `specs/config.yaml`, or unset and the feature branch is origin's default branch), and the child's latest review agent record finished with exit 0 and no blocking finding: buildme waits on it with `EPIC:MERGE_WAITING` | the engineers | as `parked` |
-| `spec-issues` | a copy's `.change.yaml` `spec_issues` names a `spec-issues.md` that exists: it waits for `/multiplai-pm:pm-spec revise` | the PMs | the file's time |
+| `merge` | a child is `built` with a PR and the latest `summary.json` marks it `merge_waiting`: buildme listed it after `EPIC:MERGE_WAITING` (its PR passed review at its current head, or another child waits on it). A summary from before buildme 0.158.0 has no `merge_waiting` and gives no merge row | the engineers | as `parked` |
+| `spec-issues` | a copy's `.change.yaml` `spec_issues`, at the change or in one of its `components/<id>/` (then `child` is the component), names a `spec-issues.md` that exists: it waits for `/multiplai-pm:pm-spec revise` | the PMs | the file's time |
 | `review-threads` | a child PR not merged in the latest summary has unresolved review threads on GitHub (`count`) | the engineers | the oldest unresolved thread's first comment |
 
 - The PMs and engineers are the names `specs/config.yaml` lists for the

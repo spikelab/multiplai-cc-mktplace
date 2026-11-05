@@ -44,7 +44,7 @@ def _items(fx):
     return out, cfg
 
 
-def _needs(fx, epic=None, merge="manual"):
+def _needs(fx, epic=None):
     items, cfg = _items(fx)
     return status.needs_you(
         items,
@@ -52,7 +52,6 @@ def _needs(fx, epic=None, merge="manual"):
         people_map(),
         epic_dir_for=(lambda repo, name: epic) if epic else None,
         cause_of=buildme.cause_of,
-        merge_mode=lambda repo, branch: merge,
         now=NOW,
     )
 
@@ -112,28 +111,6 @@ def test_parked_children_of_the_latest_run(shared_fx, tmp_path):
     assert {w.role for w in ui.waiting_on} == {"engineer"}
     docs = next(r for r in rows if r.change == "audit-log" and r.child == "docs")
     assert {w.role for w in docs.waiting_on} == {"pm"}
-
-
-def test_child_pr_waiting_for_a_manual_merge(shared_fx, tmp_path):
-    epic = _epic(
-        tmp_path / "epic",
-        {
-            "01": [
-                {"id": "api", "status": "built", "pr": PR.format(3)},
-                {"id": "ui", "status": "built", "pr": PR.format(4)},
-            ]
-        },
-    )
-    _review(epic, 1, "api")
-    _review(epic, 2, "ui", exit_code=0)
-    _review(epic, 3, "ui", exit_code=0, blocking=["abc"])  # the last one has a blocker
-    rows = [r for r in _needs(shared_fx, epic).rows if r.kind == "merge"]
-    assert {(r.change, r.child, r.url) for r in rows if r.change == "audit-log"} == {
-        ("audit-log", "api", PR.format(3))
-    }
-    assert not [
-        r for r in _needs(shared_fx, epic, merge="auto").rows if r.kind == "merge"
-    ]
 
 
 def test_open_spec_issues(fx):
@@ -306,10 +283,125 @@ def test_needs_you_route(shared_fx):
         viewer.httpd.server_close()
 
 
-def test_merge_mode_as_buildme_decides(fx):
-    repo = fx["repo"]
-    assert buildme.merge_mode(repo, "main") == "manual"  # origin's default branch
-    assert buildme.merge_mode(repo, "TCK-9-feature") == "auto"
-    cfg = repo / "specs" / "config.yaml"
-    cfg.write_text(cfg.read_text() + "epic:\n  merge: manual\n")
-    assert buildme.merge_mode(repo, "TCK-9-feature") == "manual"
+# --- review fixes ----------------------------------------------------------------
+
+
+def test_a_merge_row_is_each_child_buildme_says_waits_for_a_merge(shared_fx, tmp_path):
+    """The latest summary's `merge_waiting` is buildme's own answer (the
+    children of `EPIC:MERGE_WAITING`): a review record alone is no merge row."""
+    epic = _epic(
+        tmp_path / "epic",
+        {
+            "01": [
+                {
+                    "id": "api",
+                    "status": "built",
+                    "pr": PR.format(3),
+                    "merge_waiting": True,
+                },
+                {
+                    "id": "ui",
+                    "status": "built",
+                    "pr": PR.format(4),
+                    "merge_waiting": False,
+                },
+                {"id": "docs", "status": "built", "pr": PR.format(5)},
+            ]
+        },
+    )
+    _review(epic, 1, "ui")
+    _review(epic, 2, "docs")
+    rows = [r for r in _needs(shared_fx, epic).rows if r.kind == "merge"]
+    assert {(r.child, r.url) for r in rows if r.change == "audit-log"} == {
+        ("api", PR.format(3))
+    }
+
+
+def test_open_spec_issues_of_a_component(fx):
+    d = place(fx, "export-csv").read_dir() / "components" / "api"
+    d.mkdir(parents=True)
+    (d / "spec-issues.md").write_text("# Spec issues\n\n## A thing is unclear\n")
+    (d / ".change.yaml").write_text("spec_issues: spec-issues.md\n")
+    rows = [r for r in _needs(fx).rows if r.kind == "spec-issues"]
+    assert [(r.change, r.child, [w.role for w in r.waiting_on]) for r in rows] == [
+        ("export-csv", "api", ["pm"])
+    ]
+
+
+def _page(nodes, after=None):
+    return json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": nodes,
+                            "pageInfo": {
+                                "hasNextPage": after is not None,
+                                "endCursor": after,
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+
+def test_every_page_of_review_threads_is_read():
+    def thread(done, at="2026-01-08T10:00:00Z"):
+        return {"isResolved": done, "comments": {"nodes": [{"createdAt": at}]}}
+
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if "after=c1" in argv:
+            out = _page([thread(False, "2026-01-02T10:00:00Z")])
+        else:
+            out = _page([thread(True)] * 100, after="c1")
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    reader = github.ThreadReader(run=run, clock=lambda: 0.0)
+    res = reader.unresolved(PR.format(5), default_repo=None)
+    assert (res.count, res.oldest) == (1, "2026-01-02T10:00:00Z")
+    assert len(calls) == 2
+
+
+def test_a_slow_github_stops_at_the_lists_budget_and_failures_are_kept(
+    shared_fx, tmp_path
+):
+    now = [0.0]
+    timeouts = []
+
+    def slow(argv, **kw):
+        timeouts.append(kw["timeout"])
+        now[0] += 9.0
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    epic = _epic(
+        tmp_path / "epic",
+        {
+            "01": [
+                {"id": c, "status": "parked", "pr": PR.format(n)}
+                for n, c in ((2, "a"), (3, "b"), (4, "c"))
+            ]
+        },
+    )
+    items, cfg = _items(shared_fx)
+    reader = github.ThreadReader(run=slow, clock=lambda: now[0])
+    prs = [p for p in status.child_prs(items, lambda r, n: epic) if p[0] == "audit-log"]
+    needs = github.add_thread_rows(
+        _needs(shared_fx, epic), prs, reader, cfg, people_map(), None, NOW
+    )
+    assert len(timeouts) == 2 and timeouts[1] <= github.BUDGET_S - 9.0
+    assert not needs.github.checked and "not read" in needs.github.error
+    assert [r.kind for r in needs.rows].count("parked") >= 3
+    # A failed read is kept like an answer: the next refresh does not wait again.
+    with pytest.raises(github.GitHubError):
+        reader.unresolved(PR.format(2), default_repo=None)
+    assert len(timeouts) == 2
+    # The PR no time was left for is read on the next refresh.
+    with pytest.raises(github.GitHubError):
+        reader.unresolved(PR.format(4), default_repo=None)
+    assert len(timeouts) == 3

@@ -25,7 +25,7 @@ cd plugins/multiplai-dev/skills/pipeline-viewer/scripts && \
 | `questions.py` | Pure: inbox `ask` rows + outbox rows → the questions and answers everyone sees, and which answers are not in git yet (S17). |
 | `deadlines.py` | Reminder and timeout row, once per `(change, stop, revision)` in `deadlines.json`. |
 | `slack.py` | One post per stop revision (`notified.json`), or per key (`post_once`), thread replies; `SLACK_TOKEN` only handed to `slack_sdk`. |
-| `buildme.py` | Imports `write_issues`, `epic_dir_for`, the epic folder names and `cause_of` from `../../buildme/scripts` (not a declared dependency: uv refuses a workspace member as a path source); `scorecard_sources` gathers what `status.scorecard` reads; `merge_mode` is buildme's `epic.merge` rule. |
+| `buildme.py` | Imports `write_issues`, `epic_dir_for`, the epic folder names and `cause_of` from `../../buildme/scripts` (not a declared dependency: uv refuses a workspace member as a path source); `scorecard_sources` gathers what `status.scorecard` reads |
 | `server.py` | `ThreadingHTTPServer`, the routes of `API.md`, people.json auth (re-read on change), the deadline thread. |
 | `static/` | The page, vanilla JS with no build step. `boot.js` takes the token out of `?t=` and keeps it for the origin, and applies the theme; `logic.js` holds the pure functions (tested by `tests/logic.test.js` under node); `app.js` the views (changes list, one change's stops and build, review mode); `tokens.css` is a copy of the neutral design system's tokens (`test_static.py` checks it matches), because the CSP allows no inline style. |
 

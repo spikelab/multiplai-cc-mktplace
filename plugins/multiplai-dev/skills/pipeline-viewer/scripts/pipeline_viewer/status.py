@@ -1048,45 +1048,34 @@ def _waited(since: str | None, now: datetime) -> float | None:
     return (now - t).total_seconds() if t is not None else None
 
 
-def _last_review(root: Path, child: str) -> dict | None:
-    """The result of the child's latest review agent (`agents/NNN-review-<child>`)."""
-    best: tuple[int, Path] | None = None
-    try:
-        files = list((root / "agents").glob("*-review-*.started.json"))
-    except OSError:
-        return None
-    for f in files:
-        head = f.name.split("-", 1)[0]
-        if not head.isdigit() or (_json(f) or {}).get("child") != child:
-            continue
-        if best is None or int(head) > best[0]:
-            best = (int(head), f)
-    if best is None:
-        return None
-    return _json(
-        best[1].with_name(best[1].name.replace(".started.json", ".result.json"))
-    )
-
-
-def _open_issues(place: Place) -> Path | None:
-    """The open `spec-issues.md` that a copy's `.change.yaml` `spec_issues`
-    names (buildme's `readiness.open_issues`), first found."""
+def _open_issues(place: Place) -> list[tuple[str | None, Path]]:
+    """Each open `spec-issues.md` a copy's `.change.yaml` `spec_issues` names
+    (buildme's `readiness.open_issues`), at the change or one of its
+    `components/<id>/`: (component id or None, the file), first copy first."""
     from multiplai_core.specs import read_change_meta
 
+    found: dict[str | None, Path] = {}
     for d in dict.fromkeys(
         [place.read_dir()] + [c.change_dir(place.name) for c in place.copies]
     ):
         try:
-            value = read_change_meta(d).get("spec_issues")
-        except (OSError, UnicodeError, ValueError):
-            continue
-        if not value:
-            continue
-        path = Path(str(value))
-        path = path if path.is_absolute() else d / path
-        if path.is_file():
-            return path
-    return None
+            parts = sorted(p for p in (d / "components").iterdir() if p.is_dir())
+        except OSError:
+            parts = []
+        for where, at in [(None, d), *((p.name, p) for p in parts)]:
+            if where in found:
+                continue
+            try:
+                value = read_change_meta(at).get("spec_issues")
+            except (OSError, UnicodeError, ValueError):
+                continue
+            if not value:
+                continue
+            path = Path(str(value))
+            path = path if path.is_absolute() else at / path
+            if path.is_file():
+                found[where] = path
+    return list(found.items())
 
 
 def _children(root: Path | None) -> tuple[list[dict], str | None]:
@@ -1128,7 +1117,6 @@ def needs_you(
     *,
     epic_dir_for: Callable[[Path, str], Path] | None,
     cause_of: Callable[[str, str], str | None] | None,
-    merge_mode: Callable[[Path, str | None], str] | None,
     now: datetime,
 ) -> NeedsYou:
     """Everything in this repo waiting on a person, oldest first, from files
@@ -1139,12 +1127,12 @@ def needs_you(
     - a child `parked` in the change's latest epic summary, with its cause (a
       summary from before causes were recorded: read from `reason` by
       *cause_of*, `inferred`), on the PMs for a spec cause, else the engineers;
-    - a child `built` with a PR whose latest review agent finished with exit 0
-      and no blocking finding, when the epic merges by hand (*merge_mode*
-      `manual`): buildme waits on it with `EPIC:MERGE_WAITING`. This reads
-      only the records, so it stands in for buildme's own check (the review
-      was of the PR's current head);
-    - an open `spec-issues.md` (`.change.yaml` `spec_issues`), on the PMs.
+    - a child the latest summary marks `merge_waiting` (buildme's own list
+      after `EPIC:MERGE_WAITING`: its PR passed review at its current head, or
+      another child waits on it), on the engineers. A summary written before
+      buildme recorded it gives no merge row;
+    - an open `spec-issues.md` (`.change.yaml` `spec_issues`) of the change
+      or of one of its components, on the PMs.
     """
     rows: list[NeedsYouRow] = []
     engineers = people_of("engineer", cfg, people)
@@ -1167,7 +1155,6 @@ def needs_you(
             )
         root = _epic_root(place, epic_dir_for)
         kids, since = _children(root)
-        mode = None
         for c in kids:
             cid, cstatus = str(c["id"]), str(c.get("status", ""))
             reason = str(c.get("reason") or "")
@@ -1192,35 +1179,32 @@ def needs_you(
                         reason=reason,
                     )
                 )
-            elif cstatus == "built" and pr and merge_mode is not None:
-                if mode is None:
-                    mode = merge_mode(place.repo, place.branch)
-                last = _last_review(root, cid) if mode == "manual" else None
-                if last and last.get("exit_code") == 0 and not last.get("blocking"):
-                    rows.append(
-                        NeedsYouRow(
-                            kind="merge",
-                            change=place.name,
-                            child=cid,
-                            what=f"{cid}'s pull request passed review and waits for a person to merge it",
-                            waiting_on=engineers,
-                            since=since,
-                            waited_s=_waited(since, now),
-                            link=f"#change={place.name}",
-                            url=pr,
-                        )
+            elif cstatus == "built" and pr and c.get("merge_waiting") is True:
+                rows.append(
+                    NeedsYouRow(
+                        kind="merge",
+                        change=place.name,
+                        child=cid,
+                        what=f"{cid}'s pull request waits for a person to merge it",
+                        waiting_on=engineers,
+                        since=since,
+                        waited_s=_waited(since, now),
+                        link=f"#change={place.name}",
+                        url=pr,
                     )
-        issues = _open_issues(place)
-        if issues is not None:
+                )
+        for component, issues in _open_issues(place):
             try:
                 at = iso_utc(issues.stat().st_mtime)
             except OSError:
                 at = None
+            of = f"{component} of {place.name}" if component else place.name
             rows.append(
                 NeedsYouRow(
                     kind="spec-issues",
                     change=place.name,
-                    what=f"spec-issues.md of {place.name} waits for /multiplai-pm:pm-spec revise",
+                    child=component,
+                    what=f"spec-issues.md of {of} waits for /multiplai-pm:pm-spec revise",
                     waiting_on=pms,
                     since=at,
                     waited_s=_waited(at, now),

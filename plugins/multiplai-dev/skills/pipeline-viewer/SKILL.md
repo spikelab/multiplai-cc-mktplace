@@ -259,12 +259,13 @@ a deadline that passed while it was down fires once (row S1).
 The first section of the home page (`GET /api/needs-you`) lists everything
 in the repository waiting on a person, the longest wait first, the viewer's
 own first: a stop waiting for approval, a parked epic child with its cause
-and reason, a child pull request waiting for a person to merge it
-(`epic.merge: manual`), an open `spec-issues.md` waiting for
-`/multiplai-pm:pm-spec revise`, and unresolved review threads on the
-children's pull requests. Each row says who it waits on and for how long, and
-links to the change or the pull request. Only the review threads need
-GitHub; the rest is read from files.
+and reason, a child pull request buildme says waits for a person to merge
+it (`EPIC:MERGE_WAITING`), an open `spec-issues.md` of the change or one of
+its components waiting for `/multiplai-pm:pm-spec revise`, and unresolved
+review threads on the children's pull requests. Each row says who it waits on
+and for how long, and links to the change or the pull request. Only the
+review threads need GitHub; the rest is read from files, and GitHub gets at
+most ten seconds per refresh of the list, so a slow GitHub never holds it up.
 
 ## The scorecard
 
