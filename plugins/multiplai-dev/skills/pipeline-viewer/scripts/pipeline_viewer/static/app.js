@@ -29,6 +29,7 @@
     mine: new Set(),
     acked: new Set(),
     review: null,
+    scorecard: null,
     changesTimer: null,
     changesBackoff: CHANGES_EVERY_MS,
     pollTimer: null,
@@ -310,7 +311,8 @@
     }
     state.review = null;
     const scroll = window.scrollY;
-    if (r.change) renderChange(r);
+    if (r.view === "scorecard") renderScorecard(fresh);
+    else if (r.change) renderChange(r);
     else renderList();
     if (fresh) {
       if (r.change && r.stop) {
@@ -370,7 +372,8 @@
       h("div", { class: "page-head" },
         h("h1", {}, "Changes"),
         h("p", { class: "muted" }, state.changes.length + " change" + (state.changes.length === 1 ? "" : "s") +
-          (updated ? " · updated " + updated : "") + " · this page refreshes itself")),
+          (updated ? " · updated " + updated : "") + " · this page refreshes itself"),
+        h("p", {}, h("a", { href: L.makeHash({ view: "scorecard" }) }, "Scorecard: buildme's runs by version →"))),
     ];
     if (!state.changes.length) {
       kids.push(h("p", { class: "card" }, "No changes yet. A change appears here once pm-spec starts one in specs/changes/."));
@@ -635,6 +638,106 @@
         (e.spent_usd != null ? " · " + L.formatUsd(e.spent_usd) + " spent" : "")),
       h("div", { class: "table-wrap" }, h("table", { class: "blocks" },
         h("thead", {}, h("tr", {}, ["Component", "Status", "Pull request", "Rounds", "Why"].map((t) => h("th", {}, t)))),
+        h("tbody", {}, rows))));
+  }
+
+  /* --- the scorecard: buildme's runs by version ------------------------------ */
+
+  /* fresh: the address changed, so the runs are read again; otherwise the
+   * last answer is drawn again (the changes list refreshes every 15 s). */
+  async function renderScorecard(fresh) {
+    const back = h("a", { class: "back", href: "#" }, "← All changes");
+    if (fresh || !state.scorecard) {
+      if (!state.scorecard) setMain(back, h("p", { class: "muted" }, "Loading the scorecard…"));
+      try {
+        state.scorecard = await api("/api/scorecard");
+      } catch (err) {
+        if (err.status === 401) return;
+        setMain(back, h("section", { class: "card narrow" }, h("h1", {}, "The scorecard cannot load"), h("p", {}, err.message)));
+        return;
+      }
+      if (route().view !== "scorecard") return;
+    }
+    const sc = state.scorecard;
+    const runs = new Map(sc.runs.map((r) => [r.id, r]));
+    const kids = [
+      back,
+      h("div", { class: "page-head" },
+        h("h1", {}, "Scorecard"),
+        h("p", { class: "muted" }, sc.runs.length + " buildme run" + (sc.runs.length === 1 ? "" : "s") +
+          " of " + sc.repo + ", grouped by the buildme version that ran them. A component counts once in the run that merged it, " +
+          "and again as parked or failed only when its status or reason changed since the epic's previous run.")),
+    ];
+    if (sc.skipped_rows) {
+      kids.push(h("p", { class: "warn-text small" }, sc.skipped_rows + " line" + (sc.skipped_rows === 1 ? "" : "s") +
+        " of runs.jsonl could not be read (cut short, or written by a newer version) and are left out."));
+    }
+    if (!sc.runs.length) kids.push(h("p", { class: "card" }, "No buildme runs recorded for this repository yet."));
+    for (const v of sc.versions) kids.push(versionCard(v, runs));
+    if (sc.runs.length) kids.push(runsTable(sc.runs));
+    setMain(kids);
+  }
+
+  /* A count that opens the runs (and components) it came from. */
+  function countButton(count, title, runs) {
+    if (!count.count) return h("span", { class: "muted" }, "0");
+    return h("button", { class: "btn quiet small", type: "button", onclick: () => showRefs(title, count.refs, runs) },
+      String(count.count));
+  }
+
+  function runName(r) {
+    return r.kind === "build" ? "Build of " + r.epic : r.epic + " run " + r.run;
+  }
+
+  function showRefs(title, refs, runs) {
+    openViewer(title, h("ul", { class: "refs" }, refs.map((ref) => {
+      const r = runs.get(ref.run);
+      if (!r) return h("li", {}, ref.run);
+      const child = ref.child ? (r.stopped || []).find((c) => c.id === ref.child) : null;
+      return h("li", {},
+        h("strong", {}, runName(r)), ref.child ? " · " + ref.child : "",
+        r.finished_at ? h("span", { class: "muted small" }, " · " + L.formatClock(r.finished_at, now())) : null,
+        child ? h("p", { class: "small" }, L.causeLabel(child.cause) + (child.inferred ? " (inferred from text)" : "")) : null,
+        child && child.reason ? h("p", {}, h("code", {}, child.reason)) : null);
+    })));
+  }
+
+  function versionCard(v, runs) {
+    const label = L.versionLabel(v.version);
+    const top = Math.max(1, ...v.causes.map((c) => c.count));
+    const cell = (name, count) => h("td", { "data-label": name }, countButton(count, label + ": " + name.toLowerCase(), runs));
+    return h("section", { class: "block card" },
+      h("h2", {}, label),
+      h("p", { class: "muted" }, L.formatUsd(v.spend_usd) + " spent" + (v.spend_complete ? "" : " (some spend could not be read)")),
+      h("div", { class: "table-wrap" }, h("table", { class: "blocks" },
+        h("thead", {}, h("tr", {}, ["Runs", "Merged", "Parked", "Failed", "Held back"].map((t) => h("th", {}, t)))),
+        h("tbody", {}, h("tr", {},
+          cell("Runs", v.runs), cell("Merged", v.merged), cell("Parked", v.parked),
+          cell("Failed", v.failed), cell("Held back", v.blocked))))),
+      v.causes.length ? h("h3", {}, "Parked and failed, by cause") : null,
+      v.causes.length ? h("ul", { class: "causes" }, v.causes.map((c) => h("li", { class: "cause" },
+        h("span", { class: "cause-name" }, L.causeLabel(c.cause)),
+        h("meter", { class: "cause-bar", min: "0", max: String(top), value: String(c.count), title: c.count + " of " + top }),
+        countButton(c, label + ": " + L.causeLabel(c.cause), runs),
+        c.inferred ? h("span", { class: "muted small" }, (c.inferred === c.count ? "all" : c.inferred) + " inferred from text") : null))) : null);
+  }
+
+  function runsTable(list) {
+    const rows = list.map((r) => {
+      const stopped = (r.stopped || []).filter((c) => !c.same_as_previous_run);
+      return h("tr", {},
+        h("td", { "data-label": "Run" }, runName(r)),
+        h("td", { "data-label": "Version" }, r.version || "—"),
+        h("td", { "data-label": "Finished" }, r.finished_at ? L.formatClock(r.finished_at, now()) : r.source === "run-folder" ? "no summary" : "—"),
+        h("td", { "data-label": "Spend" }, r.spend_usd != null ? L.formatUsd(r.spend_usd) : "—"),
+        h("td", { "data-label": "Merged" }, (r.merged || []).join(", ") || "—"),
+        h("td", { "data-label": "New parks and failures" }, stopped.length ? stopped.map((c) =>
+          chip(c.id + ": " + L.causeLabel(c.cause) + (c.inferred ? " (inferred)" : ""), c.status === "skipped" ? "" : c.status === "parked" ? "warn" : "bad")) : "—"));
+    });
+    return h("section", { class: "block" },
+      h("h2", {}, "Every run, newest first"),
+      h("div", { class: "table-wrap" }, h("table", { class: "blocks" },
+        h("thead", {}, h("tr", {}, ["Run", "Version", "Finished", "Spend", "Merged", "New parks and failures"].map((t) => h("th", {}, t)))),
         h("tbody", {}, rows))));
   }
 

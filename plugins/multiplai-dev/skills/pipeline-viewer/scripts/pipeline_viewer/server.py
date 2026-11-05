@@ -40,7 +40,7 @@ from viewer_kit.request_checks import Reject, check_origin, check_person, read_j
 from . import config as config_mod
 from . import deadlines, gitio, record, status
 from . import questions as questions_mod
-from .models import ChangeStatus, InboxRow
+from .models import ChangeStatus, InboxRow, Scorecard
 from .places import CHANGES, Place, list_changes
 from .slack import Slack
 
@@ -80,6 +80,8 @@ class Viewer:
     agent: str = "Claude"
     session_id: str = ""
     epic_dir_for: Callable[[Path, str], Path] | None = None
+    # What `/api/scorecard` reads (`buildme.scorecard_sources`); None: no runs.
+    scorecard_sources: Callable[[Path], status.ScorecardSources] | None = None
     started: str = field(default_factory=utc_now)
     httpd: PipelineHTTPServer | None = None
     stopped: threading.Event = field(default_factory=threading.Event)
@@ -125,6 +127,11 @@ class Viewer:
         return status.change_status(
             place, cfg or self.config(), people or self.people(), self.epic_dir_for
         )
+
+    def scorecard(self) -> Scorecard:
+        if self.scorecard_sources is None:
+            return Scorecard(repo=self.repo.name)
+        return status.scorecard(self.scorecard_sources(self.repo))
 
     def statuses(self) -> list[ChangeStatus]:
         cfg, people = self.config(), self.people()
@@ -291,6 +298,12 @@ def make_handler(viewer: Viewer):
                 "/api/diff": lambda: self._diff(q),
                 "/api/poll": lambda: self._poll(q),
                 "/api/questions": lambda: self._questions(q),
+                "/api/scorecard": lambda: self._json(
+                    {
+                        **viewer.scorecard().model_dump(mode="json"),
+                        "generated_at": utc_now(),
+                    }
+                ),
             }
             posts = {
                 "/api/ask": lambda: self._ask(body, person),

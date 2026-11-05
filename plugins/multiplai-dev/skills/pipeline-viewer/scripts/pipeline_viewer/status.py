@@ -34,7 +34,9 @@ import socket
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
+from multiplai_core import runs as runs_mod
 from viewer_kit.people import Person
 
 from . import gitio
@@ -43,6 +45,7 @@ from .models import (
     STOP_LABELS,
     BlockRow,
     BuildStatus,
+    CauseCount,
     ChangeStatus,
     DocRef,
     EpicAgent,
@@ -50,6 +53,11 @@ from .models import (
     EpicStatus,
     PmSpecStatus,
     Record,
+    RunRef,
+    Scorecard,
+    ScorecardChild,
+    ScorecardRun,
+    ScorecardVersion,
     StopStatus,
 )
 from .places import BUILD_STATE, BUILD_STATE_DONE, CHANGES, PM_SPEC_DIR, Place
@@ -463,6 +471,281 @@ def epic_status(
         totals=totals,
         spent_usd=_float(summary.get("spent_usd")),
         agents=agents,
+    )
+
+
+# --- scorecard -------------------------------------------------------------------
+
+# A child's status at the end of a run → what the scorecard counts it as.
+# `skipped` (a dependency parked) and a `dependency` cause are a consequence
+# of another child, counted apart from the causes.
+STOPPED_AS = {"parked": "parked", "failed": "failed", "unknown": "failed"}
+BLOCKED_STATUS = "skipped"
+BLOCKED_CAUSE = "dependency"
+BUILDME_SKILL = ":buildme "
+
+
+class ScorecardSources(NamedTuple):
+    """What `scorecard` reads (`buildme.scorecard_sources` builds it)."""
+
+    repo: str
+    data_dir: Path
+    runs_file: Path
+    epic_dirs: list[Path]
+    cause_of: Callable[[str, str], str | None]
+
+
+def _version_key(v: str | None) -> tuple:
+    if v is None:
+        return (0, ())
+    try:
+        return (2, tuple(int(x) for x in v.split(".")))
+    except ValueError:
+        return (1, (v,))
+
+
+def _rel(path: Path, data_dir: Path) -> str:
+    try:
+        return path.relative_to(data_dir).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _epic_name(epic_dir: Path) -> str:
+    name = (_json(epic_dir / "epic.json") or {}).get("name")
+    return str(name) if isinstance(name, str) and name else epic_dir.name
+
+
+def _child_cause(c: dict, cause_of) -> tuple[str | None, bool]:
+    """(cause, inferred): recorded when the child carries `cause`, else read
+    from its reason text by buildme's own patterns."""
+    status, reason = str(c.get("status", "")), str(c.get("reason") or "")
+    if c.get("cause") is not None:
+        return str(c["cause"]), False
+    try:
+        return cause_of(status, reason), True
+    except Exception:  # noqa: BLE001 - an unreadable reason is no cause
+        return None, True
+
+
+def _epic_entries(src: ScorecardSources) -> tuple[list[dict], list[dict], int]:
+    """(epic runs, single builds, rows skipped) of the repo, each run a dict
+    for `_scorecard_run`. A run with a row is read from the row; the others
+    from their summary."""
+    rows, skipped = runs_mod.read_rows(src.runs_file)
+    epics: dict[tuple[str, str], dict] = {}
+    builds: list[dict] = []
+    for row in rows:
+        producer = str(row.get("producer") or "")
+        target = row.get("target") if isinstance(row.get("target"), dict) else {}
+        run = row.get("run") if isinstance(row.get("run"), dict) else {}
+        if BUILDME_SKILL not in producer or target.get("repo") != src.repo:
+            continue
+        entry = {
+            "source": "row",
+            "version": producer.rsplit(" ", 1)[-1],
+            "epic": str(target.get("change") or ""),
+            "started_at": row.get("started_at"),
+            "finished_at": row.get("finished_at"),
+            "outcome": row.get("outcome"),
+            "cause": row.get("cause"),
+            "spend": _float(row.get("spend_usd")),
+            "total": _float(run.get("spent_usd_total")),
+            "spend_complete": run.get("spend_complete") is not False,
+            "children": [c for c in run.get("children") or [] if isinstance(c, dict)],
+        }
+        if row.get("kind") == "build":
+            builds.append({**entry, "kind": "build", "run": None, "folder": None})
+        elif row.get("kind") == "epic" and row.get("folder") and run.get("run"):
+            folder = Path(str(row["folder"]))
+            folder = folder if folder.is_absolute() else src.data_dir / folder
+            key = (_rel(folder, src.data_dir), str(run["run"]))
+            epics[key] = {**entry, "kind": "epic", "folder": key[0], "run": key[1]}
+    for d in src.epic_dirs:
+        folder, name = _rel(d, src.data_dir), _epic_name(d)
+        try:
+            nums = [p for p in (d / "runs").iterdir() if p.name.isdigit()]
+        except OSError:
+            continue
+        for p in nums:
+            if (folder, p.name) in epics:
+                continue
+            summary = _json(p / "summary.json")
+            if summary is None:
+                # A run that stopped before writing its summary (killed), or
+                # whose summary cannot be read: a run, with nothing known.
+                epics[(folder, p.name)] = {
+                    "source": "run-folder",
+                    "kind": "epic",
+                    "version": None,
+                    "epic": name,
+                    "folder": folder,
+                    "run": p.name,
+                    "started_at": None,
+                    "finished_at": None,
+                    "outcome": None,
+                    "cause": None,
+                    "spend": None,
+                    "total": None,
+                    "spend_complete": False,
+                    "children": [],
+                }
+                continue
+            version = summary.get("buildme_version")
+            epics[(folder, p.name)] = {
+                "source": "summary",
+                "kind": "epic",
+                "version": str(version) if version else None,
+                "epic": name,
+                "folder": folder,
+                "run": p.name,
+                "started_at": summary.get("started_at"),
+                "finished_at": summary.get("finished_at"),
+                "outcome": None,
+                "cause": None,
+                "spend": None,
+                "total": _float(summary.get("spent_usd")),
+                "spend_complete": summary.get("spend_complete") is not False,
+                "children": [
+                    c for c in summary.get("children") or [] if isinstance(c, dict)
+                ],
+            }
+    return list(epics.values()), builds, skipped
+
+
+def _scorecard_run(e: dict, prev: dict | None, cause_of) -> ScorecardRun:
+    """One run, its spend and its children compared with the epic's last
+    earlier run that has a summary or row (*prev*): merged means merged in
+    this run."""
+    before = {
+        str(c.get("id")): (c.get("status"), c.get("reason") or "")
+        for c in (prev or {}).get("children", [])
+    }
+    spend = e["spend"]
+    if e["source"] == "summary" and e["total"] is not None:
+        if prev is None:
+            spend = e["total"]
+        elif prev["total"] is not None:
+            spend = round(e["total"] - prev["total"], 6)
+    merged, stopped = [], []
+    for c in e["children"]:
+        cid, st = str(c.get("id") or ""), str(c.get("status", ""))
+        if not cid:
+            continue
+        if st == "merged":
+            if before.get(cid, (None,))[0] != "merged":
+                merged.append(cid)
+            continue
+        if st not in STOPPED_AS and st != BLOCKED_STATUS:
+            continue
+        cause, inferred = _child_cause(c, cause_of)
+        stopped.append(
+            ScorecardChild(
+                id=cid,
+                status=st,
+                cause=cause,
+                inferred=inferred,
+                reason=str(c.get("reason") or ""),
+                pr=c.get("pr"),
+                same_as_previous_run=before.get(cid) == (st, c.get("reason") or ""),
+            )
+        )
+    if e["kind"] == "build" and e["outcome"] == "failed":
+        stopped.append(ScorecardChild(id=e["epic"], status="failed", cause=e["cause"]))
+    finished = iso_utc(e["finished_at"])
+    run_id = (
+        f"{e['folder']}#{e['run']}"
+        if e["kind"] == "epic"
+        else f"build:{e['epic']}:{finished or ''}"
+    )
+    return ScorecardRun(
+        id=run_id,
+        kind=e["kind"],
+        epic=e["epic"],
+        run=e["run"],
+        version=e["version"],
+        source=e["source"],
+        folder=e["folder"],
+        started_at=iso_utc(e["started_at"]),
+        finished_at=finished,
+        outcome=e["outcome"],
+        cause=e["cause"],
+        spend_usd=spend,
+        spend_complete=e["spend_complete"] and spend is not None,
+        merged=merged,
+        stopped=stopped,
+    )
+
+
+def scorecard(src: ScorecardSources) -> Scorecard:
+    """For each buildme version, the repo's epic runs and single builds, the
+    children merged, parked, failed and held back by another child, the
+    spend, and the parks and failures by cause; each count lists the runs
+    (and children) it came from.
+
+    Runs come from the shared `runs.jsonl` (rows of `multiplai_core.runs`,
+    `target.repo` this repo), and for epic runs without a row from every
+    `runs/NN/summary.json` of the old and new epic folders. A summary
+    without `buildme_version` is of version null, and its causes are read
+    from the reason text (`inferred`). A summary holds the epic's state at
+    the end of the run, so a child counts in the run that merged it, and a
+    child parked or failed counts again only when its status or reason
+    changed since the epic's previous run."""
+    epics, builds, skipped = _epic_entries(src)
+    by_folder: dict[str, list[dict]] = {}
+    for e in epics:
+        by_folder.setdefault(e["folder"], []).append(e)
+    out: list[ScorecardRun] = []
+    for entries in by_folder.values():
+        entries.sort(key=lambda e: int(e["run"]))
+        prev = None
+        for e in entries:
+            out.append(_scorecard_run(e, prev, src.cause_of))
+            if e["source"] != "run-folder":
+                prev = e
+    out += [_scorecard_run(b, None, src.cause_of) for b in builds]
+    out.sort(
+        key=lambda r: (r.finished_at or "", int(r.run) if r.run else 0), reverse=True
+    )
+    versions: dict[str | None, ScorecardVersion] = {}
+    causes: dict[str | None, dict[str, CauseCount]] = {}
+    for r in out:
+        v = versions.setdefault(r.version, ScorecardVersion(version=r.version))
+        v.runs.count += 1
+        v.runs.refs.append(RunRef(run=r.id))
+        if r.spend_usd is not None:
+            v.spend_usd = round(v.spend_usd + r.spend_usd, 6)
+        v.spend_complete = v.spend_complete and r.spend_complete
+        for cid in r.merged:
+            v.merged.count += 1
+            v.merged.refs.append(RunRef(run=r.id, child=cid))
+        for c in r.stopped:
+            if c.same_as_previous_run:
+                continue
+            ref = RunRef(run=r.id, child=c.id)
+            if c.status == BLOCKED_STATUS or c.cause == BLOCKED_CAUSE:
+                v.blocked.count += 1
+                v.blocked.refs.append(ref)
+                continue
+            bucket = v.parked if STOPPED_AS[c.status] == "parked" else v.failed
+            bucket.count += 1
+            bucket.refs.append(ref)
+            key = c.cause or "other"
+            cc = causes.setdefault(r.version, {}).setdefault(key, CauseCount(cause=key))
+            cc.count += 1
+            cc.inferred += int(c.inferred)
+            cc.refs.append(ref)
+    for version, v in versions.items():
+        v.causes = sorted(
+            causes.get(version, {}).values(), key=lambda c: (-c.count, c.cause)
+        )
+    return Scorecard(
+        repo=src.repo,
+        versions=sorted(
+            versions.values(), key=lambda v: _version_key(v.version), reverse=True
+        ),
+        runs=out,
+        skipped_rows=skipped,
     )
 
 

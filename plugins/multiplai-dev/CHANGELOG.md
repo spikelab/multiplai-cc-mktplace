@@ -15,6 +15,20 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.157.0] - 2026-11-05
+
+### Added
+
+- **pipeline-viewer**: a Scorecard page (linked from the changes list) and
+  `GET /api/scorecard`. For each buildme version it counts the repository's
+  buildme runs, the components merged, parked, failed and held back by
+  another component, the spend, and the parks and failures by cause; each
+  count opens the runs it came from. It reads the shared `runs.jsonl` and
+  every run summary of the repository's epics, in the old epic folders and
+  the new ones. Runs from before buildme recorded its version are listed
+  apart, with their causes read from the reason text and marked "inferred
+  from text".
+
 ## [0.156.0] - 2026-11-05
 
 ### Added

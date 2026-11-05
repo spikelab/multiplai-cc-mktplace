@@ -256,12 +256,26 @@ test("diff lines are classified", () => {
 });
 
 test("the address round-trips, and Slack's links parse", () => {
-  assert.deepEqual(L.parseHash("#change=add-export&stop=2"), { change: "add-export", stop: 2, review: false, s: null });
-  const r = { change: "a b", stop: 3, review: true, s: 4 };
+  assert.deepEqual(L.parseHash("#change=add-export&stop=2"), { change: "add-export", stop: 2, review: false, s: null, view: null });
+  const r = { change: "a b", stop: 3, review: true, s: 4, view: null };
   assert.deepEqual(L.parseHash(L.makeHash(r)), r);
-  assert.deepEqual(L.parseHash(""), { change: null, stop: null, review: false, s: null });
+  assert.deepEqual(L.parseHash(""), { change: null, stop: null, review: false, s: null, view: null });
   assert.equal(L.makeHash({}), "#");
   assert.equal(L.parseHash("#stop=x").stop, null);
+});
+
+test("the scorecard has its own address; other views are ignored", () => {
+  assert.equal(L.makeHash({ view: "scorecard" }), "#view=scorecard");
+  assert.equal(L.parseHash("#view=scorecard").view, "scorecard");
+  assert.equal(L.parseHash("#view=nope").view, null);
+});
+
+test("causes and versions read as words", () => {
+  assert.equal(L.causeLabel("merge-conflict"), "Merge conflict");
+  assert.equal(L.causeLabel("SPEC:NOT_READY"), "SPEC:NOT_READY");
+  assert.equal(L.causeLabel(null), "No cause recorded");
+  assert.equal(L.versionLabel("0.157.0"), "buildme 0.157.0");
+  assert.equal(L.versionLabel(null), "Before buildme recorded its version");
 });
 
 let failed = 0;
