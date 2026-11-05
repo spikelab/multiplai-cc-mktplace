@@ -325,12 +325,20 @@ class WatchLog:
 # --- running -----------------------------------------------------------------------
 
 
-def epic_argv(change: str, project: Path, *, session_id: str, trust: bool) -> list:
+def epic_argv(
+    change: str,
+    project: Path,
+    *,
+    session_id: str,
+    trust: bool,
+    branch: str | None = None,
+) -> list:
     """The epic command of the plan's Paths: `build --change <epic> --auto`."""
     argv = [sys.executable, "-m", "build_pipeline"]
     if session_id:
         argv += ["--session-id", session_id]
     argv += ["build", "--change", change, "--project-dir", str(project), "--auto"]
+    argv += ["--branch", branch] if branch else []
     return argv + (["--trust-repo"] if trust else [])
 
 
@@ -514,8 +522,9 @@ def run_cli(args) -> int:
     project = Path(args.project_dir).absolute()
     repo = git_ops.repo_root(project) or project
     change = normalize_change_name(args.change)
+    branch = getattr(args, "branch", "") or None
     try:
-        epic_dir = store.epic_dir_for(repo, change)
+        epic_dir = store.epic_dir_for(repo, change, branch)
     except store.AmbiguousEpic as e:
         print(f"ERROR:{e}", file=sys.stderr, flush=True)
         return 2
@@ -525,12 +534,13 @@ def run_cli(args) -> int:
         project,
         session_id=getattr(args, "session_id", "") or "",
         trust=bool(getattr(args, "trust_repo", False)),
+        branch=branch,
     )
     return Watch(
         change=change,
         epic_dir=epic_dir,
         run_epic=lambda output: run_command(argv, output),
-        read_status=lambda: status.epic_status(project, args.change),
+        read_status=lambda: status.epic_status(project, args.change, branch=branch),
         notify=lambda key, text: slack_post(viewer_repo, change, key, text),
         clock=Clock(),
     ).run()

@@ -291,17 +291,21 @@ def child_status(
 
 
 def epic_status(
-    project_dir: Path, change: str, state_file: str = ".build-state.json"
+    project_dir: Path,
+    change: str,
+    state_file: str = ".build-state.json",
+    branch: str | None = None,
 ) -> list[dict]:
     """One dict per child of the epic *change* of *project_dir*, in the
-    order `epic.json` lists them. Raises StatusError with no epic."""
+    order `epic.json` lists them. *branch* names the feature branch when
+    several hold an epic of that name. Raises StatusError with no epic."""
     from ..change_manager import normalize_change_name
 
     project = Path(project_dir).absolute()
     repo = git_ops.repo_root(project) or project
     name = normalize_change_name(change)
     try:
-        epic_dir = store.epic_dir_for(repo, name)
+        epic_dir = store.epic_dir_for(repo, name, branch)
     except store.AmbiguousEpic as e:
         raise StatusError(str(e)) from None
     try:
@@ -340,7 +344,9 @@ def run_cli(args) -> int:
     import sys
 
     try:
-        rows = epic_status(Path(args.project_dir), args.change)
+        rows = epic_status(
+            Path(args.project_dir), args.change, branch=args.branch or None
+        )
     except StatusError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2

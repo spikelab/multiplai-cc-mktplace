@@ -238,7 +238,7 @@ def _epic_lock(config) -> str | None:
         return None
     for epic in epics:
         try:
-            epic_dir = store.epic_dir_for(repo, epic)
+            epic_dir = store.epic_dir_for(repo, epic, config.feature_branch or None)
         except store.AmbiguousEpic as e:
             return str(e)
         holder = epic_lock.holder_elsewhere(epic_dir)

@@ -3,14 +3,16 @@ the cause of a child that stopped short, and the rows a run appends."""
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import inspect
 import json
 
 import pytest
-from build_pipeline import build_row, orchestrator
+from build_pipeline import build_row, orchestrator, preflight
 from build_pipeline.__main__ import main
-from build_pipeline.epic import CHILD_ENV, causes, coordinator, store
+from build_pipeline.epic import CHILD_ENV, causes, coordinator, store, watch
+from build_pipeline.epic import status as estatus
 from multiplai_core import runs
 
 from .epic_row_helpers import make_project, use_workspace
@@ -60,6 +62,71 @@ def test_two_branches_with_one_epic_name_are_refused(tmp_path, monkeypatch):
     with pytest.raises(store.AmbiguousEpic):
         store.epic_dir_for(project, "e")
     assert store.epic_dir_for(project, "e", "ENG-41-e").parent.name == "ENG-41-e"
+
+
+def test_status_can_name_the_branch_of_a_shared_epic_name(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    _epic(data / "changes" / "r" / "ENG-40-e" / "buildme")
+    _epic(data / "changes" / "r" / "ENG-41-e" / "buildme")
+    assert estatus.epic_status(project, "e", branch="ENG-40-e") == []
+    args = argparse.Namespace(project_dir=str(project), change="e", branch="ENG-40-e")
+    assert estatus.run_cli(args) == 0
+    with pytest.raises(estatus.StatusError):
+        estatus.epic_status(project, "e")
+
+
+def test_preflight_uses_the_childs_feature_branch(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    _epic(data / "changes" / "r" / "ENG-40-e" / "buildme")
+    _epic(data / "changes" / "r" / "ENG-41-e" / "buildme")
+    monkeypatch.delenv(CHILD_ENV, raising=False)
+
+    class Config:
+        change_name = "e/a"
+        project_dir = project
+        feature_branch = "ENG-40-e"
+
+    assert preflight._epic_lock(Config()) is None
+    Config.feature_branch = None
+    assert "several branches" in preflight._epic_lock(Config())
+
+
+def test_watch_runs_the_branch_it_was_named(tmp_path):
+    argv = watch.epic_argv("e", tmp_path, session_id="", trust=False, branch="ENG-40-e")
+    assert argv[argv.index("--branch") + 1] == "ENG-40-e"
+    assert "--branch" not in watch.epic_argv("e", tmp_path, session_id="", trust=False)
+
+
+def _owned(d, remote, name="e"):
+    d.mkdir(parents=True)
+    (d / store.EPIC_FILE).write_text(
+        json.dumps({"name": name, "children": [], "remote": remote})
+    )
+
+
+def test_a_same_named_repo_of_another_owner_gets_its_own_folder(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    owner = store.origin_owner_repo(store._remote_url(project))[0]
+    theirs = data / "changes" / "r" / "ENG-40-e" / "buildme"
+    _owned(theirs, "https://github.com/someone-else/r.git")
+    ours = data / "changes" / f"r@{owner}" / "ENG-40-e" / "buildme"
+    assert store.epic_dir_for(project, "e", "ENG-40-e") == ours
+    assert store.epic_dir_for(project, "e") != theirs
+    _owned(ours, store._remote_url(project))
+    assert store.epic_dir_for(project, "e") == ours
+
+
+def test_the_same_repo_over_another_url_keeps_its_folder(tmp_path, monkeypatch):
+    data = use_workspace(monkeypatch, tmp_path)
+    project = make_project(tmp_path)
+    owner, name = store.origin_owner_repo(store._remote_url(project))
+    mine = data / "changes" / "r" / "ENG-40-e" / "buildme"
+    _owned(mine, f"git@github.com:{owner.upper()}/{name}.git")
+    assert store.epic_dir_for(project, "e", "ENG-40-e") == mine
+    assert store.epic_dir_for(project, "e") == mine
 
 
 # --- causes ----------------------------------------------------------------------

@@ -349,6 +349,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status.add_argument("--change", required=True, help="The epic's change name")
     status.add_argument("--project-dir", default=".", help="Project directory")
+    status.add_argument(
+        "--branch",
+        default="",
+        help="The epic's feature branch, when several branches hold an epic of "
+        "this name",
+    )
     watch = epic_sub.add_parser(
         "watch",
         help="Run the epic, and again after a network failure, an agent timeout "
@@ -357,6 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     watch.add_argument("--change", required=True, help="The epic's change name")
     watch.add_argument("--project-dir", default=".", help="Project directory")
+    watch.add_argument(
+        "--branch",
+        default="",
+        help="The epic's feature branch, when several branches hold an epic of "
+        "this name",
+    )
     watch.add_argument(
         "--viewer-repo",
         help="The --repo the pipeline-viewer page was served with, for its "
