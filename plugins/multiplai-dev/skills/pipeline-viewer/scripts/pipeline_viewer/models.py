@@ -164,6 +164,77 @@ class EpicStatus(_Out):
     agents: list[EpicAgent] = Field(default_factory=list)
 
 
+class ScorecardChild(_Out):
+    """A child an epic run ended with short of merged (or a failed build)."""
+
+    id: str
+    status: str
+    # One of buildme's `epic.causes.CAUSES`; for a build, its last marker.
+    cause: str | None = None
+    # The cause was read from `reason` (a summary from before buildme
+    # recorded causes), not recorded by buildme.
+    inferred: bool = False
+    reason: str = ""
+    pr: str | int | None = None
+    # The epic's previous run ended with this child at the same status and
+    # reason: shown on the run, not counted again.
+    same_as_previous_run: bool = False
+
+
+class ScorecardRun(_Out):
+    id: str
+    kind: Literal["epic", "build"]
+    epic: str
+    run: str | None = None
+    version: str | None = None
+    # `run-folder`: the run's folder has no readable summary (a killed run).
+    source: Literal["row", "summary", "run-folder"]
+    folder: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    outcome: str | None = None
+    cause: str | None = None
+    spend_usd: float | None = None
+    spend_complete: bool = True
+    merged: list[str] = Field(default_factory=list)
+    stopped: list[ScorecardChild] = Field(default_factory=list)
+
+
+class RunRef(_Out):
+    run: str
+    child: str | None = None
+
+
+class Count(_Out):
+    count: int = 0
+    refs: list[RunRef] = Field(default_factory=list)
+
+
+class CauseCount(Count):
+    cause: str
+    # How many of `count` were inferred from reason text.
+    inferred: int = 0
+
+
+class ScorecardVersion(_Out):
+    version: str | None = None
+    runs: Count = Field(default_factory=Count)
+    merged: Count = Field(default_factory=Count)
+    parked: Count = Field(default_factory=Count)
+    failed: Count = Field(default_factory=Count)
+    blocked: Count = Field(default_factory=Count)
+    spend_usd: float = 0.0
+    spend_complete: bool = True
+    causes: list[CauseCount] = Field(default_factory=list)
+
+
+class Scorecard(_Out):
+    repo: str
+    versions: list[ScorecardVersion] = Field(default_factory=list)
+    runs: list[ScorecardRun] = Field(default_factory=list)
+    skipped_rows: int = 0
+
+
 class ChangeStatus(_Out):
     name: str
     branch: str | None = None

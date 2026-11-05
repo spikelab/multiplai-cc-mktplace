@@ -405,6 +405,44 @@
     return "ctx";
   }
 
+  /* --- the scorecard ---------------------------------------------------------- */
+
+  /* buildme's cause codes (`epic/causes.py`) as words; an unknown one as it is. */
+  const CAUSE_LABELS = {
+    "usage-limit": "Usage limit reached",
+    "spec-issues": "The spec has open issues",
+    "spec-not-ready": "The spec is not ready",
+    "plan-waiting": "Waiting for the plan to be approved",
+    "split-required": "The change has to be split",
+    "plan-blocked": "The planning check is blocked",
+    "review-cap": "Review hit the round cap",
+    "fixer-undecided": "The fixer left findings undecided",
+    "fixer-left-blockers": "The fixer left blockers",
+    "baseline-tests-failing": "Tests already failed before the fix",
+    "final-verification-failed": "The fixer's final tests failed",
+    "fixer-failed": "The fixer failed",
+    "merge-tests-failed": "Tests failed at merge",
+    "merge-conflict": "Merge conflict",
+    "merge-unknown": "The merge could not be done",
+    "no-pr": "No pull request was opened",
+    "pr-closed": "The pull request was closed without a merge",
+    "pr-unreadable": "The pull request's state could not be read",
+    dependency: "Held back by another component",
+    timeout: "Timed out",
+    "exit-code": "The process exited with an error",
+    other: "Other",
+  };
+
+  function causeLabel(cause) {
+    if (!cause) return "No cause recorded";
+    return CAUSE_LABELS[cause] || cause;
+  }
+
+  /* A version null is a run from before buildme recorded its version. */
+  function versionLabel(version) {
+    return version ? "buildme " + version : "Before buildme recorded its version";
+  }
+
   /* --- the address ------------------------------------------------------------ */
 
   /* "#change=a&stop=2&review=1&s=4" → {change:"a", stop:2, review:true, s:4}. */
@@ -416,11 +454,13 @@
       stop: num("stop"),
       review: p.get("review") === "1",
       s: num("s"),
+      view: p.get("view") === "scorecard" ? "scorecard" : null,
     };
   }
 
   function makeHash(route) {
     const p = new URLSearchParams();
+    if (route.view) p.set("view", route.view);
     if (route.change) p.set("change", route.change);
     if (route.stop != null) p.set("stop", String(route.stop));
     if (route.review) p.set("review", "1");
@@ -436,5 +476,6 @@
     changeGroup, sortChanges, estimateRemaining, budgetShare, formatUsd,
     isMarkdown, codeLanguage, splitSections, parseReviewFile, reviewSteps,
     groupReplies, questionsFor, askerLabel, diffLineKind, parseHash, makeHash,
+    causeLabel, versionLabel,
   };
 });

@@ -343,3 +343,20 @@ textarea, input[type="text"] {
 .toast.ok { background: var(--ok); color: var(--surface); }
 .toast.warn { background: var(--warn); color: var(--surface); }
 .toast.bad { background: var(--bad); color: var(--surface); }
+
+/* --- the scorecard ------------------------------------------------------------ */
+
+.causes { list-style: none; margin: 0; padding: 0; }
+.cause {
+  display: grid; grid-template-columns: minmax(0, 14rem) minmax(4rem, 1fr) auto auto;
+  align-items: center; gap: var(--space-2);
+  padding: var(--space-1) 0; border-bottom: 1px solid var(--line);
+}
+.cause-name { overflow-wrap: anywhere; }
+.cause-bar { width: 100%; height: 12px; }
+.refs { padding-left: var(--space-4); }
+.refs li { margin-bottom: var(--space-2); }
+@media (max-width: 560px) {
+  .cause { grid-template-columns: minmax(0, 1fr) auto; }
+  .cause-bar { grid-column: 1 / -1; }
+}

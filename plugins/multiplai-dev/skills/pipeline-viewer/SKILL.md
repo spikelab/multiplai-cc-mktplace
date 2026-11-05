@@ -39,7 +39,10 @@ The five stops:
 - **Reads git and files** of the repository and its worktrees: `git worktree
   list`, `git log`, `git ls-tree`, `git show`, `git status`, pm-spec's
   `.pm-spec/` run state and buildme's state files, and buildme's epic records
-  under the multiplai data directory.
+  under the multiplai data directory: every `runs/NN/summary.json` of the
+  repository's epics, in the old `buildme/epics/<owner>-<repo>--<change>/`
+  folders and the new `changes/<repo>/<branch>/buildme/` ones, and the shared
+  `runs.jsonl`, for the scorecard (`/api/scorecard`).
 - **Writes git commits and pushes them.** On the change's branch, in the
   checkout that holds it (the build's worktree, else pm-spec's worktree, else
   the repository when it has that branch checked out), for each comment,
@@ -69,8 +72,10 @@ The five stops:
   (mode 0700): `inbox.jsonl`, `outbox.jsonl`, `people.json` (the tokens,
   0600), `invites/<name>.url` (0600), `deadlines.json`, `notified.json`,
   `slack-outbox.md`, `server.json`; and the log files.
-- **Imports two modules of buildme** (`../buildme/scripts`):
-  `readiness.write_issues` and `epic.store.epic_dir_for`.
+- **Imports three modules of buildme** (`../buildme/scripts`):
+  `readiness.write_issues`, `epic.store` (where an epic's records live) and
+  `epic.causes.cause_of` (the cause of a park, read from its text for runs
+  from before buildme recorded one).
 - **Never calls a model.** You answer and decide; the server only moves rows.
 
 ## Prerequisites
@@ -243,6 +248,18 @@ a deadline that passed while it was down fires once (row S1).
 - A write answered 409 → its message says why (pm-spec running, buildme
   building, uncommitted edits, a diverged branch, no checkout on the branch);
   pass it on as is.
+
+## The scorecard
+
+The page's **Scorecard** (from the changes list, `#view=scorecard`) counts
+the repository's buildme runs per buildme version: runs, components merged,
+parked, failed and held back by another component, spend, and parks and
+failures by cause, each count opening the runs it came from. A run from
+before buildme recorded its version is listed under "Before buildme recorded
+its version", and its causes are read from the reason text and marked
+"inferred from text". A component counts in the run that merged it, and as
+parked or failed again only when its status or reason changed since the
+epic's previous run. `GET /api/scorecard` answers the same (`API.md`).
 
 ## Reference
 

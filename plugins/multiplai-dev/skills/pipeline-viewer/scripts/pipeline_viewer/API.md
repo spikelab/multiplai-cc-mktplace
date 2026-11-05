@@ -222,6 +222,90 @@ From the latest `runs/NN/summary.json` of the change's epic and its `agents/`
 records. A child that is itself a change in this repo is in `/api/changes`
 under its own name.
 
+### Scorecard
+
+```json
+{"repo": "Dolcebot",
+ "versions": [ScorecardVersion, …],
+ "runs": [ScorecardRun, …],
+ "skipped_rows": 0,
+ "generated_at": "…"}
+```
+
+buildme's runs of this repository, for each buildme version. Runs come from
+the shared `<data_dir>/runs.jsonl` (rows whose `producer` is buildme and
+whose `target.repo` is this repository's folder name: origin's repository
+name), and, for each epic run with no row, from its `runs/NN/summary.json`
+in the old `buildme/epics/<owner>-<repo>--<change>/` folder or the new
+`changes/<repo>/<branch>/buildme/` one. A run folder with no readable
+summary (a killed run) is a run with nothing else known.
+`skipped_rows`: lines of `runs.jsonl` left out (cut short, or a
+`row_version` this server does not know).
+
+- `versions`: newest version first; `version: null` (runs from before
+  buildme recorded its version) last.
+- `runs`: newest first (by `finished_at`, then run number).
+
+### ScorecardVersion
+
+```json
+{"version": "0.157.0" | null,
+ "runs":    {"count": 2, "refs": [RunRef]},
+ "merged":  {"count": 1, "refs": [RunRef]},
+ "parked":  {"count": 1, "refs": [RunRef]},
+ "failed":  {"count": 0, "refs": []},
+ "blocked": {"count": 0, "refs": []},
+ "spend_usd": 10.0, "spend_complete": true,
+ "causes": [{"cause": "merge-conflict", "count": 1, "inferred": 1, "refs": [RunRef]}]}
+```
+
+A summary holds the epic's state at the end of a run, so: a component counts
+in `merged` in the run that merged it; in `parked` (status `parked`) or
+`failed` (status `failed` or `unknown`, or a failed single build) when its
+status or reason changed since the epic's previous run with a summary or
+row; in `blocked` when another component held it back (status `skipped`, or
+the cause `dependency`), which is not a cause of its own. `causes` splits
+`parked` and `failed` by cause, most first; `inferred` says how many of
+`count` were read from reason text. `spend_complete` is false when a run's
+spend could not be read.
+
+### RunRef
+
+`{"run": "<ScorecardRun.id>", "child": "api" | null}`: a run, and the
+component counted, for every count.
+
+### ScorecardRun
+
+```json
+{"id": "buildme/epics/acme-shop--cart#03", "kind": "epic" | "build",
+ "epic": "cart", "run": "03", "version": "0.156.0" | null,
+ "source": "row" | "summary" | "run-folder",
+ "folder": "buildme/epics/acme-shop--cart" | null,
+ "started_at": "…" | null, "finished_at": "…" | null,
+ "outcome": "parked" | null, "cause": null,
+ "spend_usd": 15.0 | null, "spend_complete": true,
+ "merged": ["b"],
+ "stopped": [{"id": "c", "status": "parked", "cause": "spec-issues",
+              "inferred": false, "reason": "SPEC:ISSUES:…", "pr": null,
+              "same_as_previous_run": false}]}
+```
+
+- `id`: `<folder>#<run>` for an epic run (the folder relative to the data
+  dir), `build:<change>:<finished_at>` for a single build (`epic` is then
+  the change), and `epic:<change>:<finished_at>` for an epic refused or
+  failed before it wrote a summary (`run` is then null). A build an epic
+  started for one of its components (its row's `requested_by` is set) is no
+  run of its own: its epic's run already counts its spend.
+- `outcome`, `cause`: the row's (`multiplai_core.runs` outcomes); `null` for
+  a run read from its summary.
+- `spend_usd`: the row's; from a summary, its `spent_usd` less the previous
+  run's.
+- `stopped`: every component the run ended with parked, failed, unknown or
+  skipped, or waiting on another component (cause `dependency`). `cause` is one of buildme's `epic.causes.CAUSES` (a single build's
+  is its last marker, such as `SPEC:NOT_READY`); `inferred: true` when it was
+  read from `reason`. `same_as_previous_run: true` marks one shown but not
+  counted.
+
 ### OutboxRow (answers from the session)
 
 ```json
@@ -266,6 +350,10 @@ call re-reads the files, so the page polls it (every 15 s is enough).
 ### `GET /api/change?name=<name>`
 
 One `ChangeStatus`. 404 for an unknown name.
+
+### `GET /api/scorecard`
+
+One `Scorecard`. Each call re-reads `runs.jsonl` and the epic folders.
 
 ### `GET /api/doc?name=<name>&path=<path>`
 
