@@ -16,6 +16,14 @@ are the release dates recorded at the time, not derived from a tag.
 
 ## [Unreleased]
 
+## [0.61.3] - 2026-11-06
+
+### Changed
+
+- Comments in `dream_processed.py` and `learnings_ledger.py` now point at the
+  hub's new home, multiplai-hub's `src/multiplai_hub/dreams.py`, instead of
+  multiplai-gui's `hub/`. No behaviour changes.
+
 ## [0.61.2] - 2026-11-02
 
 ### Fixed

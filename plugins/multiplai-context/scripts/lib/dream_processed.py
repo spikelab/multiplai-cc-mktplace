@@ -1,5 +1,5 @@
 """Processed-section handling for dream proposals — the plugin half of the
-in-file decision record shared with the multiplai-gui hub.
+in-file decision record shared with the multiplai hub.
 
 When a proposal item is decided (applied, edited, or rejected) its block is
 **moved** out of its ``## Updates for``/``## Action Items`` group into a
@@ -9,8 +9,8 @@ the file itself is the decision record: whoever reviews next (GUI or CLI) sees
 only what is still above the processed section.
 
 That one heading — ``## Processed`` — is the entire cross-tool contract. There
-is no sidecar and no key scheme. Mirror of multiplai-gui
-``hub/src/multiplai_hub/dreams.py`` (``move_to_processed`` / ``mark_processed``);
+is no sidecar and no key scheme. Mirror of multiplai-hub's
+``src/multiplai_hub/dreams.py`` (``move_to_processed`` / ``mark_processed``);
 keep the two in sync only on the ``## Processed`` heading.
 
 The ``**Processed:**`` annotation is *history*, and it stays outside that
@@ -33,7 +33,7 @@ from pathlib import Path
 
 _GROUP_RE = re.compile(r"^## Updates for `(?P<file>[^`]+)`(?:\s.*)?$")
 _ACTIONS_HEADER_RE = re.compile(r"^## Action Items\b")
-# These two are duplicated in multiplai-gui's `hub/src/multiplai_hub/dreams.py`
+# These two are duplicated in multiplai-hub's `src/multiplai_hub/dreams.py`
 # on purpose — the cross-tool contract is the `## Processed` heading, not a
 # shared library, and vendoring one into the other would couple a web service
 # to a plugin's release cycle. Duplication is the cheaper of the two costs.
