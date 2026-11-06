@@ -343,8 +343,31 @@ def open_at_cap(found: list[dict], merge: str = "auto") -> list[str]:
     ]
 
 
+def fixer_parks(
+    found: list[dict], verdicts: dict[str, list[str]] | None
+) -> list[tuple[str, str]]:
+    """(id, what the fixer decided) for each blocker in *found* whose lineage
+    the fixer ruled `not a defect`, or marked `fixed` twice: *verdicts* is
+    `findings.history.fixer_verdicts`. No further fixer round runs for them."""
+    from ..findings.history import lineage
+
+    out = []
+    for f in found:
+        said = (verdicts or {}).get(lineage(f), [])
+        if "not a defect" in said:
+            out.append((f["id"], "not a defect"))
+        elif said.count("fixed") >= 2:
+            out.append((f["id"], "fixed twice"))
+    return out
+
+
 def decide(
-    found: list[dict], pr_round: int, cap: int, worth: str, merge: str = "auto"
+    found: list[dict],
+    pr_round: int,
+    cap: int,
+    worth: str,
+    merge: str = "auto",
+    verdicts: dict[str, list[str]] | None = None,
 ) -> tuple[str, str]:
     """What follows a review that left the blockers *found* (not empty): `round`
     (another fix and review), `final_fix` (one fix with no review after it,
@@ -354,7 +377,21 @@ def decide(
     did not rate is not known to be harmless. At the cap, `open_at_cap`
     parks (an open confirmed finding never auto-merges,
     plan-factory-merged-2026-10-29.md, item 18); the rest get the final fix.
-    Reads only the review's own fields; calls no model."""
+    Before all that, a blocker whose lineage the fixer ruled `not a defect`
+    or marked `fixed` twice (`fixer_parks` of *verdicts*) parks: no fix
+    round loops on it, and a person settles it with `epic.accepted_findings`
+    or a fix. Reads only the review's own fields and *verdicts*; calls no
+    model."""
+    held = fixer_parks(found, verdicts)
+    if held:
+        named = ", ".join(f"{fid} ({what})" for fid, what in held)
+        return (
+            "park",
+            (
+                f"the fixer already decided {named}: a person settles it with "
+                "epic.accepted_findings or a fix"
+            ),
+        )
     highs = [f["id"] for f in found if f.get("severity") == "HIGH"]
     if pr_round >= cap:
         parks = open_at_cap(found, merge)

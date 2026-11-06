@@ -22,7 +22,7 @@ import pytest
 from build_pipeline.config import EpicSettings
 from build_pipeline.epic import coordinator, review
 from build_pipeline.epic import lock as epic_lock
-from build_pipeline.findings import decisions, from_review, loop
+from build_pipeline.findings import decisions, from_review, history, loop
 from build_pipeline.findings.models import PRComment, Triage, Verdict
 
 from .epic_row_helpers import pr_url
@@ -956,6 +956,201 @@ def test_lineage_s17_a_person_merging_a_held_child_makes_it_merged(
     assert r.run() == 0
     assert r.status()["status"] == "merged"
     assert len(r.fixers()) == 2
+
+
+# --- a fixed or rejected bug does not come back (item 5) ---------------------------
+
+
+def _state(monkeypatch, *rounds: dict) -> None:
+    """Rounds an earlier fixer left in the child's `.findings-state.json`,
+    read before the ones the fake fixer writes there (the worktree that holds
+    the file does not exist until the child is built)."""
+    from build_pipeline.epic import fix
+
+    real = fix._state_rounds
+    rows = [
+        {"number": n, "finished": ["review"], **rnd}
+        for n, rnd in enumerate(rounds, start=1)
+    ]
+    monkeypatch.setattr(fix, "_state_rounds", lambda *a: [*rows, *real(*a)])
+
+
+def _said(fid: str, decision: str) -> dict:
+    return {"decisions": {fid: {"decision": decision, "reason": "x"}}}
+
+
+def test_rejected_lineage_parks_once(tmp_path, monkeypatch):
+    """Done means 7, row S24: the fixer ruled `m1` not a defect; the review
+    still lists it. The child parks naming it, with `open_ids`, and no fixer
+    is launched; the same head parks again, a new head is reviewed."""
+    m1 = medium("m1", "breaks-users")
+    verdicts = {"m1": ["not a defect"]}
+    got, why = review.decide([m1], 1, 3, "breaks", verdicts=verdicts)
+    assert got == "park" and "m1" in why and "not a defect" in why
+    got, why = review.decide([m1], 1, 3, "breaks", verdicts={"m1": ["fixed", "fixed"]})
+    assert got == "park" and "m1" in why and "fixed" in why
+    assert review.decide([m1], 1, 3, "breaks", verdicts={"m1": ["fixed"]})[0] == (
+        "round"
+    )
+
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [m1]}])
+    _state(monkeypatch, _said("m1", "not a defect"))
+    r.run()
+    st = r.status()
+    assert st["status"] == "parked" and "m1" in st["reason"]
+    assert "not a defect" in st["reason"]
+    [rec] = r.reviewed()
+    assert (rec["next"], rec["open_ids"]) == ("park", ["m1"])
+    assert r.fixers() == [] and r.fakes.post_launches() == []
+    r.run()
+    assert r.status()["status"] == "parked" and r.reviews_of_a() == 1
+    assert r.fixers() == []
+    r.fakes.set_head("e-a", "c" * 40)
+    r.run()
+    assert r.reviews_of_a() == 2
+
+
+def test_accepted_findings_release_a_fixer_park(tmp_path, monkeypatch):
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [medium("m1", "breaks-users")]}])
+    _state(monkeypatch, _said("m1", "not a defect"))
+    r.run()
+    assert r.status()["status"] == "parked"
+    r.config.epic = EpicSettings(
+        max_parallel=2,
+        merge="auto",
+        accepted_findings={"a": {"m1": "Spike: it reads correctly"}},
+    )
+    assert r.run() == 0 and r.merged() and r.fixers() == []
+
+
+def test_lineage_s22_a_fixed_finding_still_present_gets_one_more_round_then_parks(
+    tmp_path, monkeypatch
+):
+    """Row S22: the review rechecked a fixed `m1` and it is still there: one more
+    fixer round, and a park once it is fixed a second time."""
+    m1 = medium("m1", "breaks-users")
+    r = Rounds(
+        tmp_path,
+        monkeypatch,
+        [{"findings": [m1]}],
+        [{"rounds": [{"findings": [m1], "saved": _said("m1", "fixed")}]}],
+    )
+    _state(monkeypatch, _said("m1", "fixed"))
+    r.run()
+    assert len(r.fixers()) == 1
+    st = r.status()
+    assert st["status"] == "parked" and "fixed" in st["reason"] and "m1" in st["reason"]
+    r.run()
+    assert len(r.fixers()) == 1 and r.status()["status"] == "parked"
+
+
+def test_lineage_s25_an_unreadable_findings_state_decides_as_today(
+    tmp_path, monkeypatch, caplog
+):
+    m1 = medium("m1", "breaks-users")
+    from build_pipeline.epic import fix
+
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [m1]}], [{"rounds": [{}]}])
+    real = fix._state_rounds
+
+    def unreadable(project, change):
+        path = fix.change_dir_for(project / "specs", change) / loop.STATE_FILE
+        path.write_text("{not json")
+        return real(project, change)
+
+    monkeypatch.setattr(fix, "_state_rounds", unreadable)
+    with caplog.at_level("INFO"):
+        r.run()
+    first = r.reviewed()[0]
+    assert first["next"] == "round" and len(r.fixers()) == 1
+    assert "cannot read" in caplog.text and "no fixer decisions" in caplog.text
+
+
+def test_fixer_verdicts_count_a_lineage_once_per_round():
+    rounds = [
+        {"decisions": {"x1": {"decision": "fixed"}, "x2": {"decision": "fixed"}}},
+        {"decisions": {"x3": {"decision": "still open"}}},
+        {"decisions": {"y1": {"decision": "not a defect"}}},
+    ]
+    ids = {"x1": "x", "x2": "x", "x3": "x", "y1": "y"}
+    assert history.fixer_verdicts(rounds, ids) == {
+        "x": ["fixed"],
+        "y": ["not a defect"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_fixer_decisions_file_holds_every_round(tmp_path, fake_pr, monkeypatch):
+    """`fixer-decisions.json` beside the review: every saved decision, with its round."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    doc = json.loads((f.dir / from_review.FIXER_DECISIONS).read_text())
+    assert doc[A]["decision"] == from_review.FIXED and doc[A]["round"] == 1
+    assert doc[A]["commit"] == f.state()["decisions"][A]["commit"]
+    assert doc[B] == {
+        "decision": from_review.NOT_DEFECT,
+        "reason": "it reads correctly",
+        "round": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_lineage_s18_a_stale_decisions_file_is_rewritten_at_start(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S18: killed after the decision was saved, before the file was
+    written. The next run, with nothing left to decide, writes it whole."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    path = f.dir / from_review.FIXER_DECISIONS
+    whole = json.loads(path.read_text())
+    path.write_text("{}")
+    run, lines = f.run()
+    assert await loop.run_findings(run) == 0, lines
+    assert lines[-1] == "FINDINGS:MAX_ROUNDS:1"
+    assert json.loads(path.read_text()) == whole
+
+
+@pytest.mark.asyncio
+async def test_lineage_s19_a_write_killed_part_way_leaves_the_old_file(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S19: a temp file beside the old one; the old one still reads, and
+    the next write replaces it."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    path = f.dir / from_review.FIXER_DECISIONS
+    path.write_text(json.dumps({"old": {"decision": "fixed", "round": 1}}))
+    calls = []
+    real = from_review.os.replace
+
+    def killed(src, dst):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("killed")
+        return real(src, dst)
+
+    monkeypatch.setattr(from_review.os, "replace", killed)
+    with pytest.raises(RuntimeError):
+        from_review.write_fixer_decisions(f.dir, _fs_with(A))
+    assert json.loads(path.read_text()) == {"old": {"decision": "fixed", "round": 1}}
+    assert list(f.dir.glob(from_review.FIXER_DECISIONS + ".*"))
+    from_review.write_fixer_decisions(f.dir, _fs_with(A))
+    assert json.loads(path.read_text()) == {
+        A: {"decision": "fixed", "commit": "c1", "round": 1}
+    }
+
+
+def _fs_with(fid: str):
+    from build_pipeline.state import FindingsRound, FindingsState
+
+    rnd = FindingsRound(
+        number=1, decisions={fid: {"decision": "fixed", "commit": "c1"}}
+    )
+    return FindingsState(pr=7, repo="o/r", branch="b", change_dir="c", rounds=[rnd])
 
 
 def _at_cap(r: Rounds, **over) -> None:

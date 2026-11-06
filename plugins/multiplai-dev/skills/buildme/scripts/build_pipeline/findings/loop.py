@@ -204,6 +204,12 @@ def review_files(run: FindingsRun, fs: FindingsState) -> list[dict]:
     return history.review_files([*ledger, *(r.review_run_dir for r in fs.rounds)])
 
 
+def fixer_decisions(run: FindingsRun, fs: FindingsState) -> None:
+    """`from_review.write_fixer_decisions` beside the `--from-review` review."""
+    if run.from_review is not None:
+        from_review.write_fixer_decisions(run.from_review, fs)
+
+
 def lineage_ids(run: FindingsRun, fs: FindingsState) -> dict[str, str]:
     """Finding id → lineage, from `review_files` and the `--from-review`
     directory, which the ledger may not name."""
@@ -920,6 +926,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             await _step(run, st, rnd, name, body)
             if rnd.review_head is not None and from_review.decide(rnd):
                 save()
+                fixer_decisions(run, fs)
         except _Waiting:
             run.emit(f"FINDINGS:REVIEW_READY:{rnd.review_run_dir}")
             return EXIT_WAITING
@@ -934,6 +941,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                 f"FINDINGS:FAILED:{name}:{type(e).__name__}: {' '.join(str(e).split())}"
             )
             return EXIT_FAILED
+    fixer_decisions(run, fs)
     run.emit(f"FINDINGS:ROUND_DONE:{n}")
     return EXIT_OK
 
@@ -1076,8 +1084,10 @@ def review_changed(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int 
         return None
     run.emit(f"{from_review.REVIEW_CHANGED}:{rnd.review_head}\u2192{head}")
     rnd.review_head, rnd.expected = head, ids
-    from_review.decide(rnd)
+    added = from_review.decide(rnd)
     st.checkpoint(run.state_path)
+    if added:
+        fixer_decisions(run, st.findings)
     return None
 
 
@@ -1096,6 +1106,8 @@ async def _run_findings(run: FindingsRun) -> int:
     if mismatch:
         run.emit(f"FINDINGS:FAILED:state:{mismatch}")
         return EXIT_FAILED
+    if fs.rounds:  # a run stopped before its last write catches up (row S18)
+        fixer_decisions(run, fs)
     cache: dict[str, bool] = {}
     max_rounds = run.config.findings.max_rounds
     spent = spend_meter(run) if run.max_usd is not None else None

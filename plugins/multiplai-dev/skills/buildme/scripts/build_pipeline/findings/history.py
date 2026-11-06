@@ -174,6 +174,32 @@ def still_open_blockers(
     return list(out.values())
 
 
+# The fixer's decisions that stop further rounds on a lineage
+# (`epic.review.fixer_parks`): `from_review.FIXED` and `NOT_DEFECT`, copied
+# here because `from_review` imports this module.
+FIXER_VERDICTS = ("fixed", "not a defect")
+
+
+def fixer_verdicts(fs_rounds: list, ids: dict[str, str]) -> dict[str, list[str]]:
+    """Lineage → each `fixed` or `not a defect` decision the fixer saved for
+    it, across *fs_rounds* (`FindingsRound`s or their saved dicts), oldest
+    first. A round counts each decision once per lineage, so two ids of one
+    lineage fixed in one round are one fix. *ids* is `lineages(...)`."""
+    out: dict[str, list[str]] = {}
+    for r in fs_rounds:
+        saved = r.get("decisions") if isinstance(r, dict) else r.decisions
+        said: dict[str, list[str]] = {}
+        for fid, d in (saved or {}).items():
+            what = (d or {}).get("decision") if isinstance(d, dict) else None
+            if what in FIXER_VERDICTS:
+                kinds = said.setdefault(ids.get(fid, fid), [])
+                if what not in kinds:
+                    kinds.append(what)
+        for lin, kinds in said.items():
+            out.setdefault(lin, []).extend(kinds)
+    return out
+
+
 def _lineage_of(comment: PRComment, ids: dict[str, str]) -> str | None:
     fid = comment.finding_id
     return ids.get(fid, fid) if fid else None

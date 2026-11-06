@@ -22,9 +22,11 @@ is printed as `FINDINGS:INGESTION_ERROR:<ids>` (`undecided`).
 from __future__ import annotations
 
 import json
+import logging
+import os
 from pathlib import Path
 
-from ..state import FindingsRound
+from ..state import FindingsRound, FindingsState
 from . import history
 from .decisions import chosen_ids
 from .models import PRComment, Verdict
@@ -34,7 +36,12 @@ NOT_DEFECT = "not a defect"
 SPEC_CHANGE = "spec change"
 STILL_OPEN = "still open"
 
+log = logging.getLogger(__name__)
+
 INGESTION_ERROR = "FINDINGS:INGESTION_ERROR"
+# Beside the review's findings.json: every decision the fixer saved, which the
+# review reads (`review_pipeline.rounds.fixer_decisions`).
+FIXER_DECISIONS = "fixer-decisions.json"
 REVIEW_CHANGED = "FINDINGS:REVIEW_CHANGED"
 
 
@@ -145,6 +152,28 @@ def decide(rnd: FindingsRound) -> bool:
             rnd.decisions[fid] = found
             added = True
     return added
+
+
+def write_fixer_decisions(review_dir: str | Path, fs: FindingsState) -> None:
+    """Write `<review_dir>/fixer-decisions.json` whole from every round's
+    saved decisions, `{<id>: {"decision", "commit" or "reason" or
+    "heading", "round"}}`, a later round's replacing an earlier one's, through
+    a temp file and a rename, so a kill leaves the old file. The review reads
+    only `fixed` and `not a defect`: it rechecks such a finding instead of
+    copying it forward. A file that cannot be written is logged; the next
+    write tries again."""
+    out: dict[str, dict] = {}
+    for r in fs.rounds:
+        for fid, d in r.decisions.items():
+            out[fid] = {**d, "round": r.number}
+    path = Path(review_dir) / FIXER_DECISIONS
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+    except OSError as e:
+        log.warning("cannot write %s: %s", path, e)
+        return
+    os.replace(tmp, path)
 
 
 def undecided(rnd: FindingsRound) -> list[str]:

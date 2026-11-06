@@ -1492,22 +1492,42 @@ class Coordinator:
         if blocking is None:
             fields["parked"] = f"cannot read the review's findings in {review_dir}"
         elif blocking:
+            verdicts = self._fixer_verdicts(c, review_dir)
             fields["next"], fields["next_reason"] = review.decide(
                 found or [],
                 c.pr_round,
                 cap,
                 self.settings.round_worth,
                 self.settings.merge or "auto",
+                verdicts,
             )
             if fields["next"] == "park":
-                fields["open_ids"] = review.open_at_cap(
+                held = [fid for fid, _ in review.fixer_parks(found or [], verdicts)]
+                fields["open_ids"] = held or review.open_at_cap(
                     found or [], self.settings.merge or "auto"
                 )
                 fields["parked"] = (
-                    f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
-                    + "; ".join(blocking)
-                )
+                    f"{fields['next_reason']}; {len(blocking)} blocker(s): "
+                    if held
+                    else f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
+                ) + "; ".join(blocking)
         return fields
+
+    def _fixer_verdicts(self, c: Child, review_dir: str) -> dict[str, list[str]]:
+        """`history.fixer_verdicts` of *c*'s `.findings-state.json`, by the
+        lineages of the reviews in *review_dir*; empty, with a log line, when
+        the state is missing or unreadable, so rounds and the cap apply."""
+        from ..findings import history
+
+        rounds = fix._state_rounds(self._child_project(c), self.change(c.id))
+        if not rounds:
+            log.info(
+                "EPIC child %s: no fixer decisions read from its .findings-state.json",
+                c.id,
+            )
+            return {}
+        ids = history.lineages(history.review_files([review_dir]))
+        return history.fixer_verdicts(rounds, ids)
 
     def _reviewed(self, c: Child, fields: dict) -> None:
         if fields.get("parked"):

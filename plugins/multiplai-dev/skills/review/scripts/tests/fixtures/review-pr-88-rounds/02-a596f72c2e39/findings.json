@@ -1,0 +1,596 @@
+{
+ "schema_version": 1,
+ "mode": "full",
+ "generated_at": "2026-11-03T10:31:03Z",
+ "target": {
+  "head_sha": "a596f72c2e3943be7ba6cc129a7674bfdb68c1fe"
+ },
+ "run": {
+  "started_at": "2026-11-03T10:13:08.600Z"
+ },
+ "findings": [
+  {
+   "id": "ae939f8f7f",
+   "severity": "MEDIUM",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "data",
+   "file": "backend/DolcePricing/migrations/0005_attribuzione_attore_created_by.py",
+   "line_start": 20,
+   "line_end": 33,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "ae939f8f7f"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "eb90b46ffd",
+   "severity": "MEDIUM",
+   "status": "confirmed",
+   "impact": "depends-on-data",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolceSystem/attribution.py",
+   "line_start": 137,
+   "line_end": 139,
+   "lineage": "9a5d247b37",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "9a5d247b37"
+   }
+  },
+  {
+   "id": "97d7c33af4",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "code",
+   "topic": "process",
+   "file": "backend/DolceChannex/migrations/0034_attribuzione_attore_created_by.py",
+   "line_start": 15,
+   "line_end": 18,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "97d7c33af4"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "1e3ea5930d",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "data",
+   "file": "backend/DolceSystem/attribution_backfill.py",
+   "line_start": 120,
+   "line_end": 124,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "1e3ea5930d"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "5da8216f81",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolceSystem/attribution_backfill.py",
+   "line_start": 122,
+   "line_end": 122,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "5da8216f81"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "85aa1a31d4",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolceChannex/admin.py",
+   "line_start": 121,
+   "line_end": 125,
+   "lineage": "4009b6a033",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "4009b6a033"
+   }
+  },
+  {
+   "id": "9ceafc4b96",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolceSystem/attribution.py",
+   "line_start": 160,
+   "line_end": 162,
+   "lineage": "c55fcc5ed4",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "c55fcc5ed4"
+   }
+  },
+  {
+   "id": "6c0cd1c067",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolceSystem/attribution.py",
+   "line_start": 259,
+   "line_end": 262,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "eb4c442944",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "tests",
+   "topic": "tests",
+   "file": "backend/DolceSystem/tests/test_dfaccmgmt1_attribuzione_heatmap.py",
+   "line_start": 40,
+   "line_end": 44,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "ac358ec248",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "code",
+   "topic": "process",
+   "file": "backend/DolceSystem/migrations/0031_attribuzione_attore_db_default.py",
+   "line_start": 13,
+   "line_end": 16,
+   "lineage": "97d7c33af4",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "97d7c33af4"
+   }
+  },
+  {
+   "id": "7156a47aed",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceCleaning/docs/modelli.md",
+   "line_start": 132,
+   "line_end": 133,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "7156a47aed"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "ff5d01d929",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceSystem/tests/test_dfaccmgmt1_attribuzione_backfill.py",
+   "line_start": 39,
+   "line_end": 40,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "ff5d01d929"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "3abf353c57",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceSystem/tests/test_dfaccmgmt1_attribuzione_backfill.py",
+   "line_start": 254,
+   "line_end": 254,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "3abf353c57"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "ad3d60b0eb",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "frontend/src/components/audit/user-chip.tsx",
+   "line_start": 37,
+   "line_end": 37,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "ad3d60b0eb"
+   },
+   "carried_from": "01-157421486e29"
+  },
+  {
+   "id": "93bef5a0db",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceLog/admin.py",
+   "line_start": 23,
+   "line_end": 25,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "4411556a4c",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceFinance/tests/test_dfaccmgmt1_attribuzione_tassa_soggiorno.py",
+   "line_start": 137,
+   "line_end": 138,
+   "lineage": "443089463a",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "443089463a"
+   }
+  },
+  {
+   "id": "68f68ad6f2",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceChannex/tests/test_dfaccmgmt1_attribuzione_booking_note.py",
+   "line_start": 56,
+   "line_end": 61,
+   "lineage": "4a7348e96c",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "4a7348e96c"
+   }
+  },
+  {
+   "id": "3f5022f6f3",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceFinance/tests/test_dfaccmgmt1_attribuzione_tassa_soggiorno.py",
+   "line_start": 86,
+   "line_end": 89,
+   "lineage": "38f473035e",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "38f473035e"
+   }
+  },
+  {
+   "id": "3aab18993e",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceChannex/tests/test_dfaccmgmt1_attribuzione_booking_note.py",
+   "line_start": 84,
+   "line_end": 97,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "66608aaa73",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceFinance/tests/test_dfaccmgmt1_attribuzione_tassa_soggiorno.py",
+   "line_start": 127,
+   "line_end": 127,
+   "lineage": "ae96fd4e4a",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "ae96fd4e4a"
+   }
+  },
+  {
+   "id": "d3191cc615",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceCleaning/tests/test_dfaccmgmt1_attribuzione_message_log.py",
+   "line_start": 77,
+   "line_end": 94,
+   "lineage": "7fc3ebad6e",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "7fc3ebad6e"
+   }
+  },
+  {
+   "id": "ce39018bbc",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceChannex/admin.py",
+   "line_start": 4,
+   "line_end": 7,
+   "lineage": "fcee230005",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "fcee230005"
+   }
+  },
+  {
+   "id": "2d59537e31",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceLog/tests/test_dfaccmgmt1_attribuzione_scrittura.py",
+   "line_start": 169,
+   "line_end": 169,
+   "lineage": "341ad23a74",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "341ad23a74"
+   }
+  },
+  {
+   "id": "ace9d28754",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolcePricing/tests/test_dfaccmgmt1_attribuzione_pricing.py",
+   "line_start": 59,
+   "line_end": 68,
+   "lineage": "7fc3ebad6e",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "7fc3ebad6e"
+   }
+  },
+  {
+   "id": "5876805f70",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceSystem/models.py",
+   "line_start": 14,
+   "line_end": 21,
+   "lineage": "fcee230005",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "fcee230005"
+   }
+  },
+  {
+   "id": "11c0dc9b4c",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceSystem/models.py",
+   "line_start": 250,
+   "line_end": 254,
+   "lineage": "7fc3ebad6e",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "7fc3ebad6e"
+   }
+  },
+  {
+   "id": "d00b04a469",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceSystem/tests/test_dfaccmgmt1_attribuzione_ordinamento_admin.py",
+   "line_start": 42,
+   "line_end": 42,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "24e28900d0",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceSystem/tests/test_dfaccmgmt1_attribuzione_rollback_schema.py",
+   "line_start": 62,
+   "line_end": 63,
+   "lineage": "7fc3ebad6e",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "7fc3ebad6e"
+   }
+  },
+  {
+   "id": "71c4f86839",
+   "severity": "MEDIUM",
+   "status": "rejected",
+   "section": "code",
+   "file": "backend/DolceSystem/attribution.py",
+   "line_start": 138,
+   "line_end": 139
+  },
+  {
+   "id": "aa34e7464e",
+   "severity": "MEDIUM",
+   "status": "rejected",
+   "section": "code",
+   "file": "backend/DolceSystem/attribution.py",
+   "line_start": 137,
+   "line_end": 138
+  },
+  {
+   "id": "ef59038305",
+   "severity": "MEDIUM",
+   "status": "rejected",
+   "section": "code",
+   "file": "backend/DolceSystem/attribution.py",
+   "line_start": 138,
+   "line_end": 139
+  }
+ ],
+ "earlier": [
+  {
+   "earlier_id": "9a5d247b37",
+   "error": "",
+   "lineage": "9a5d247b37",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "5b252a2c5b",
+   "error": "",
+   "lineage": "5b252a2c5b",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "d1bfa3268e",
+   "error": "",
+   "lineage": "d1bfa3268e",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "4009b6a033",
+   "error": "",
+   "lineage": "4009b6a033",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "9b3650273f",
+   "error": "",
+   "lineage": "9b3650273f",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "b81f92491d",
+   "error": "",
+   "lineage": "b81f92491d",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "87a9ebbad9",
+   "error": "",
+   "lineage": "87a9ebbad9",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "bb097de2e0",
+   "error": "",
+   "lineage": "bb097de2e0",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "38f473035e",
+   "error": "",
+   "lineage": "38f473035e",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "7fc3ebad6e",
+   "error": "",
+   "lineage": "7fc3ebad6e",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "4a7348e96c",
+   "error": "",
+   "lineage": "4a7348e96c",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "443089463a",
+   "error": "",
+   "lineage": "443089463a",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "ae96fd4e4a",
+   "error": "",
+   "lineage": "ae96fd4e4a",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "a2e8e2a912",
+   "error": "",
+   "lineage": "a2e8e2a912",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "e32537c14e",
+   "error": "",
+   "lineage": "e32537c14e",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "fcee230005",
+   "error": "",
+   "lineage": "fcee230005",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "193ea96604",
+   "error": "",
+   "lineage": "193ea96604",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "341ad23a74",
+   "error": "",
+   "lineage": "341ad23a74",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "8a23a16df9",
+   "error": "",
+   "lineage": "8a23a16df9",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "0404b543dc",
+   "error": "",
+   "lineage": "0404b543dc",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "032aac0ef0",
+   "error": "",
+   "lineage": "032aac0ef0",
+   "round": "157421486e295b086232f66ca57eaecf87a4a82a",
+   "status": "resolved"
+  }
+ ]
+}
