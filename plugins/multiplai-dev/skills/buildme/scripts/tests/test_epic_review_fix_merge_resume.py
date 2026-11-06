@@ -579,6 +579,183 @@ async def test_lineage_s7_a_blocker_whose_only_thread_is_resolved_ends_ingestion
     assert lines[-1] == f"FINDINGS:INGESTION_ERROR:{NEW}"
 
 
+# --- a round resumed under a newer review -----------------------------------------
+
+PR91 = Path(__file__).parent / "fixtures" / "review-pr-91-rounds"
+ROUND2, ROUND3 = PR91 / "02-18db26975f64", PR91 / "03-18db26975f64"
+PR91_MEDIUMS = ["08672d4746", "c1541b6daf", "d62907b020"]
+
+
+def _head(repo: Path) -> str:
+    return loop.git_ops.rev_parse_head(repo)
+
+
+def _reviewed_at(d: Path, kept: Path, head: str) -> None:
+    """The saved review *kept* as `<d>/findings.json`, at *head*."""
+    doc = json.loads((kept / "findings.json").read_text())
+    doc["target"]["head_sha"] = head
+    (d / "findings.json").write_text(json.dumps(doc))
+
+
+def _two_rounds(f: Fixer) -> None:
+    f.config.findings = dataclasses.replace(f.config.findings, max_rounds=2)
+
+
+@pytest.mark.asyncio
+async def test_pr91_replay(tmp_path, fake_pr, monkeypatch):
+    """Done means 3: round 1's publish never finished and review 156 replaced
+    the review at the head it pushed. The resume runs no review, and round 2
+    triages the three posted MEDIUMs."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    _two_rounds(f)
+    await _stop_at_the_push(f, monkeypatch)
+    for fid in PR91_MEDIUMS:
+        _bot_thread(fake_pr, f"medium {fid}", fid)
+    _reviewed_at(f.dir, ROUND2, _head(f.repo))
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert any(ln.startswith(from_review.REVIEW_CHANGED) for ln in lines)
+    doc = json.loads((f.change / loop.STATE_FILE).read_text())
+    first, second = doc["findings"]["rounds"]
+    assert first["review_run_dir"] == str(f.dir) and first["review_finished_at"]
+    assert sorted(c["finding_id"] for c in second["comments"]) == sorted(PR91_MEDIUMS)
+    assert set(second["decisions"]) == set(PR91_MEDIUMS)
+    # The one review is round 2's own, of the head its records commit made.
+    assert f.review.calls == 1 and f.review.posts == ["/reviews/r2"]
+
+
+@pytest.mark.asyncio
+async def test_lineage_s1_a_resumed_round_finishes_and_keeps_what_it_decided(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S1: the next round acts on the newer review's blockers, less what
+    this review's round already decided. Compared with a fixer that never
+    stopped, `A` is fixed once and its thread has one reply."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    _two_rounds(f)
+    await _stop_at_the_push(f, monkeypatch)
+    c = "cc33cc33cc"
+    _bot_thread(fake_pr, "naming is odd too", c)
+    _write_review(
+        f.dir,
+        _head(f.repo),
+        [_finding(A, "add subtracts"), _finding(c, "naming is odd too")],
+    )
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    doc = json.loads((f.change / loop.STATE_FILE).read_text())
+    first, second = doc["findings"]["rounds"]
+    assert first["review_run_dir"] == str(f.dir)
+    assert second["expected"] == [c]
+    assert second["decisions"][c]["decision"] == from_review.NOT_DEFECT
+    assert len(f.impl_commits()) == 1
+    replies = [r[1] for r in fake_pr.replies()]
+    assert replies.count(f.threads[A]) == 1
+
+
+def _review_killed(f: Fixer) -> list[int]:
+    """A review that dies once, as a kill between its `started` and `finished`."""
+    calls: list[int] = []
+    real = f.review.review
+
+    def review(run, rnd):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("killed")
+        return real(run, rnd)
+
+    f.review.review = review
+    return calls
+
+
+async def _stopped_in_review(f: Fixer) -> list[int]:
+    calls = _review_killed(f)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 1, lines
+    rnd = f.state()
+    assert "review" in rnd["started"] and rnd["review_run_dir"] is None
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_lineage_s4_a_review_killed_with_the_newest_review_at_head_is_skipped(
+    tmp_path, fake_pr, monkeypatch
+):
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    calls = await _stopped_in_review(f)
+    _write_review(f.dir, _head(f.repo), [_finding(A, "add subtracts")])
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert lines[-1] == "FINDINGS:MAX_ROUNDS:1" and len(calls) == 1
+    rnd = f.state()
+    assert rnd["review_run_dir"] == str(f.dir) and "review" in rnd["finished"]
+    assert f.review.posts == []
+
+
+@pytest.mark.asyncio
+async def test_lineage_s5_a_review_killed_with_the_newest_review_elsewhere_runs_again(
+    tmp_path, fake_pr, monkeypatch
+):
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    calls = await _stopped_in_review(f)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert lines[-1] == "FINDINGS:MAX_ROUNDS:1" and len(calls) == 2
+    assert f.state()["review_run_dir"] == "/reviews/r1" and f.review.posts
+
+
+@pytest.mark.asyncio
+async def test_lineage_s10_a_step_stopped_twice_sends_no_reply_twice(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S10: one thread's reply fails twice; the other's is sent once."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    fake_pr.fail_reply_to = {f.threads[B]}
+    for _ in range(2):
+        run, lines = f.run()
+        with _Stubs(engine_stubs(f.repo)):
+            assert await loop.run_findings(run) == 1, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:publish:")
+    fake_pr.fail_reply_to = set()
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    replies = [r[1] for r in fake_pr.replies()]
+    assert sorted(replies) == sorted(f.threads.values())
+    assert len(f.impl_commits()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_second_fetch_of_one_review_drops_what_is_decided(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Item 2: an id with a decision at the review's head is not expected
+    again, so a new round leaves its thread alone."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    d = "dd44dd44dd"
+    _bot_thread(fake_pr, "naming is odd again", d)
+    _write_review(
+        f.dir,
+        "h1",
+        [_finding(A, "add subtracts"), _finding(B, "x"), _finding(d, "y")],
+    )
+    _two_rounds(f)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert f.state()["expected"] == [d]
+    assert sorted(c["finding_id"] for c in f.state()["comments"]) == [d]
+    assert len(f.impl_commits()) == 1
+
+
 # --- the epic (rows S9-S11) -------------------------------------------------------
 
 INGESTION = {"exit": 1, "stdout": "FINDINGS:INGESTION_ERROR:m1"}

@@ -575,6 +575,19 @@ def run_review(run: FindingsRun, rnd: FindingsRound) -> ReviewOutcome:
     return ReviewOutcome(run_dir, True)
 
 
+def review_at_head(run: FindingsRun) -> bool:
+    """True when the `--from-review` review is of the current HEAD, so a round
+    that resumed under it has nothing to review. A file that cannot be read
+    says no, and the review runs as it would without it."""
+    if run.from_review is None:
+        return False
+    try:
+        head, _ = from_review.blockers(run.from_review, run.severities, run.code_only)
+    except (FileNotFoundError, ValueError):
+        return False
+    return bool(head) and head == git_ops.rev_parse_head(run.project_dir)
+
+
 def post_review(run: FindingsRun, run_dir: str, decisions: Path) -> tuple[bool, str]:
     """Unattended (`--auto`): post the findings *decisions* accepts
     (`write_decisions`). `post` skips any finding already marked on the PR,
@@ -866,6 +879,12 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
     async def do_review() -> None:
         if not run.review:  # an epic's final fix: its fixes get no review
             return
+        if rnd.review_run_dir is None and review_at_head(run):
+            # Reviewed already: the epic's post step posted that review, so no
+            # decisions file and nothing posted.
+            rnd.review_run_dir = str(run.from_review)
+            rnd.review_finished_at = _now()
+            return
         if rnd.review_run_dir is None:
             outcome = (seams.review or run_review)(run, rnd)
             if not outcome.ok:
@@ -1137,6 +1156,14 @@ async def _run_findings(run: FindingsRun) -> int:
                 except (FileNotFoundError, ValueError) as e:
                     run.emit(f"FINDINGS:FAILED:fetch:{' '.join(str(e).split())}")
                     return EXIT_FAILED
+            # Decided against this review already: not asked again.
+            decided = {
+                fid
+                for r in fs.rounds
+                if r.review_head is not None and r.review_head == review_head
+                for fid in r.decisions
+            }
+            expected = [fid for fid in expected if fid not in decided]
             try:
                 comments = fetch.fetch_comments(
                     fs.repo, fs.pr, since, cwd=run.project_dir
@@ -1186,15 +1213,8 @@ async def _run_findings(run: FindingsRun) -> int:
                         c.author,
                         triage.should_triage(c)[1],
                     )
-                decided = {
-                    fid
-                    for r in fs.rounds
-                    if r.review_head is not None and r.review_head == review_head
-                    for fid in r.decisions
-                }
-                missing = [fid for fid in expected if fid not in decided]
-                if missing:
-                    run.emit(from_review.ingestion_error(missing))
+                if expected:
+                    run.emit(from_review.ingestion_error(expected))
                     return EXIT_FAILED
                 run.emit(f"FINDINGS:DONE:{done}")
                 return EXIT_OK
