@@ -26,7 +26,7 @@ from pathlib import Path
 
 from ..state import FindingsRound
 from .decisions import chosen_ids
-from .models import Verdict
+from .models import PRComment, Verdict
 
 FIXED = "fixed"
 NOT_DEFECT = "not a defect"
@@ -63,16 +63,38 @@ def blockers(
     return head, ids
 
 
+def link_comments(
+    expected: list[str], comments: list[PRComment], ids: dict[str, str]
+) -> dict[str, str]:
+    """Each expected id → the `finding_id` on the comment that answers it: the
+    comment with that id, else the newest comment of its lineage. *ids* is
+    `history.lineages(...)`. An id with neither is left out."""
+    out: dict[str, str] = {}
+    posted = [c for c in comments if c.finding_id]
+    exact = {c.finding_id for c in posted}
+    for fid in expected:
+        if fid in exact:
+            out[fid] = fid
+            continue
+        lin = ids.get(fid, fid)
+        same = [c for c in posted if ids.get(c.finding_id, c.finding_id) == lin]
+        if same:
+            out[fid] = max(same, key=lambda c: (c.created_at, c.id)).finding_id
+    return out
+
+
 def _decision(rnd: FindingsRound, fid: str) -> dict[str, str] | None:
     """The decision on finding *fid* that the round's finished steps settle;
-    None while none does, or when no triaged comment of the round names it."""
+    None while none does, or when no triaged comment of the round answers it
+    (`FindingsRound.comment_for`)."""
     from .publish import records_of
 
+    answers = rnd.comment_for.get(fid, fid)
     record = next(
         (
             r
             for r in records_of(rnd)
-            if r.comment.finding_id == fid and r.triage is not None
+            if r.comment.finding_id == answers and r.triage is not None
         ),
         None,
     )

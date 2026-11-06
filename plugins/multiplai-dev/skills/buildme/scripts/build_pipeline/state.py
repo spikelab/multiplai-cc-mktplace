@@ -373,6 +373,11 @@ class FindingsRound(BaseModel):
     review_head: str | None = None
     expected: list[str] = Field(default_factory=list)
     decisions: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # Expected id → the `finding_id` on the comment that answers it
+    # (`from_review.link_comments`): itself, or an earlier id of its lineage
+    # when the re-review gave the open defect a new id, which no comment
+    # carries. Empty in older checkpoints, where decisions match by exact id.
+    comment_for: dict[str, str] = Field(default_factory=dict)
 
     @property
     def seen_ids(self) -> set[int]:

@@ -204,6 +204,14 @@ def review_files(run: FindingsRun, fs: FindingsState) -> list[dict]:
     return history.review_files([*ledger, *(r.review_run_dir for r in fs.rounds)])
 
 
+def lineage_ids(run: FindingsRun, fs: FindingsState) -> dict[str, str]:
+    """Finding id → lineage, from `review_files` and the `--from-review`
+    directory, which the ledger may not name."""
+    return history.lineages(
+        [*review_files(run, fs), *history.review_files([run.from_review])]
+    )
+
+
 def recurring_lines(run: FindingsRun, fs: FindingsState) -> list[str]:
     """What follows `FINDINGS:MAX_ROUNDS`: one `FINDINGS_RECURRING:<lineage>:<rounds>`
     per lineage open in two or more of the PR's reviews, then one
@@ -1139,8 +1147,12 @@ async def _run_findings(run: FindingsRun) -> int:
             fetch.prepare(
                 comments, run.config.findings, cache, repo=fs.repo, cwd=run.project_dir
             )
+            comment_for = from_review.link_comments(
+                expected, comments, lineage_ids(run, fs) if expected else {}
+            )
+            answering = set(comment_for.values())
             for c in comments:  # the review's own blockers, whoever posted them
-                if c.finding_id is not None and c.finding_id in expected:
+                if c.finding_id is not None and c.finding_id in answering:
                     c.allowed = True
             seen = fs.seen_ids()
             # A fix deferred over a spec conflict is triaged again, once,
@@ -1152,7 +1164,7 @@ async def _run_findings(run: FindingsRun) -> int:
             new = [
                 c
                 for c in comments
-                if c.id not in seen - again or c.finding_id in expected
+                if c.id not in seen - again or c.finding_id in answering
             ]
             for _, _, c in retries:  # a top-level comment older than `since`
                 if all(n.id != c.id for n in new):
@@ -1212,6 +1224,7 @@ async def _run_findings(run: FindingsRun) -> int:
                 escalated=run.escalate and done + 1 == max_rounds and done + 1 >= 2,
                 review_head=review_head,
                 expected=expected,
+                comment_for=comment_for,
             )
             fs.rounds.append(rnd)
             st.checkpoint(run.state_path)
