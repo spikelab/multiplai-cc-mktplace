@@ -11,12 +11,27 @@ still lists it. Every other comment is still allowed by `findings.authors`
 and `findings.allow_bots` alone, and every reply still goes under the
 comment.
 
+The blockers are the chosen ids, then each defect the review stopped
+choosing while an `earlier` row says it is still there (a lower severity, or
+nothing listed for its lineage): `history.still_open_blockers`, under the
+earlier finding's id.
+
+A re-review gives an open defect a new id, and the review's `post` posts no
+comment for it (`drop_posted`). `link_comments` answers each expected id with
+the comment of the same id, else the newest comment of its lineage, and the
+round saves that link (`FindingsRound.comment_for`); the decision is saved
+under the expected id.
+
 The round saves the review's head and the ids (`FindingsRound.review_head`,
 `expected`) when it starts, and one decision per id as the step that settles
 it finishes (`decide`): `fixed` with its commit, `not a defect` with the
 reason, `spec change` with the `spec-issues.md` heading, or `still open` with
 why. A saved decision is never replaced. An id with none when the fixer ends
 is printed as `FINDINGS:INGESTION_ERROR:<ids>` (`undecided`).
+
+`write_fixer_decisions` writes every saved decision to
+`<review_dir>/fixer-decisions.json`, which the next review reads: it rechecks
+a finding decided `fixed` or `not a defect` instead of copying it forward.
 """
 
 from __future__ import annotations

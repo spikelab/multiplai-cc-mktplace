@@ -11,7 +11,10 @@ The findings that round left open (`rounds.open_findings`) on a file still in th
 of whose citations is in a re-reviewed file and whose cited files are the same at both heads, are copied into this round with their id, verdict,
 severity and plain-language text, marked `carried_from`; they make no agent call. Decisions are
 keyed by id, so they keep theirs. An open finding on a re-reviewed file is rechecked as before,
-and one whose file left the change is `resolved` by the recheck stage with no call.
+and one whose file left the change is `resolved` by the recheck stage with no call. A finding
+buildme's fixer decided `fixed` or `not a defect` (`rounds.fixer_decisions`) is never copied:
+the recheck stage gives it a status at this head. An unreadable decisions file copies as if it
+were empty, with a line in `state.errors`.
 
 `incremental` needs all of: a PR or branch target, a kept round with a `findings.json`, its
 `diff.patch` and `review-state.json`, the same mode, a different head (a rerun of the same

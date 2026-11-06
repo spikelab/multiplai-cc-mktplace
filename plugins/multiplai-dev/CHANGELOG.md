@@ -15,6 +15,31 @@ tagging then lapsed until `0.9.1`, and from there on every release is tagged
 when it lands. Dates on untagged versions are the release dates recorded at the
 time, not derived from a tag.
 
+## [0.159.0] - 2026-11-06
+
+### Fixed
+
+- **buildme**: the fixer acts on a re-review's blocker that the review gave a
+  new id. The review posts no comment for such a finding, so the fixer used to
+  end `FINDINGS:INGESTION_ERROR`; it now answers it through the earlier
+  comment of the same defect, with one reply in that thread.
+- **buildme**: a fix round resumed after a newer review of its own head runs
+  no second review of that head, and the next round does not act again on a
+  blocker it already decided.
+- **buildme**: a defect that was blocking keeps blocking until a later review
+  says it is resolved, a person rejects it, or the recheck cannot verify it.
+  A review that only lowered its severity, or listed nothing for it while
+  still saying it is open, no longer lets the epic merge past it.
+- **buildme**: an epic component held by two `INGESTION_ERROR`s goes back to
+  the review step once its pull request head moves, and a single error
+  relaunches the fixer only on the head it ran on.
+- **buildme**, **review**: a bug the fixer fixed or ruled not a defect no
+  longer comes back unchanged and holds a pull request in a loop. The fixer
+  writes its decisions to `fixer-decisions.json` beside the review; the next
+  review rechecks those findings at the new head instead of copying them
+  forward. The epic parks a blocker the fixer ruled not a defect, or fixed
+  twice, naming the ids, and `epic.accepted_findings` releases it.
+
 ## [0.158.0] - 2026-11-05
 
 ### Added

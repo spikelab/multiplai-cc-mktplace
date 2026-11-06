@@ -20,6 +20,11 @@ own in `decisions.json`; its `repeat` assessment records the earlier
 decision. `load_rounds` reads that as the finding's own decision, so a later
 round's copy of the reworded finding is matched by id as well.
 
+buildme's fixer writes `fixer-decisions.json` at the top of the target folder: what it decided
+on each finding it acted on. `keep_round` copies it into a kept round and never moves it, so
+`fixer_decisions` reads it at the top. `incremental.decide` rechecks a finding the fixer decided
+`fixed` or `not a defect` instead of copying it; it is never a person's rejection.
+
 The person's decisions live in `viewer/decisions.json` (written by
 review-viewer), one entry per finding id, and persist across rounds. Because
 they are keyed by id alone, a decision is applied to an earlier round's copy

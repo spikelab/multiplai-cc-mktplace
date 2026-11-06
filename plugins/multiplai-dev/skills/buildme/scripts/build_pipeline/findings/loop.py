@@ -28,9 +28,15 @@ finished steps and restarts the first unfinished one:
 - under `--auto`, review writes `buildme-decisions.json` in the review's own
   folder (`decisions.write_decisions`) and posts only what it accepts;
 - with `--from-review`, the fetch acts on the review's blockers whoever
-  posted them, and each blocker gets a decision as its step finishes
-  (`from_review.py`); one with none when the run ends prints
-  `FINDINGS:INGESTION_ERROR:<ids>`, exit 1.
+  posted them, each answered by its own comment or, when the re-review gave
+  it a new id, the newest comment of its lineage (`FindingsRound.comment_for`),
+  less any id already decided against the same review head; each blocker
+  gets a decision as its step finishes (`from_review.py`), and every saved
+  decision is written to `fixer-decisions.json` beside the review, also once
+  at the start of a run; one with none when the run ends prints
+  `FINDINGS:INGESTION_ERROR:<ids>`, exit 1. A round resumed after a newer
+  review of its own head takes that review as its re-review and runs none
+  (`review_at_head`).
 
 The loop stops when a fetch finds no new comment to act on
 (`FINDINGS:DONE:<rounds>`), after `findings.max_rounds` rounds

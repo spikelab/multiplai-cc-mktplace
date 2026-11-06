@@ -12,6 +12,12 @@ as a file. Each review appends a `started` line and, when it ends, a
 and `run` (`cost_usd`). A review stopped by a signal writes no `finished`
 line.
 
+A blocker is an open Code HIGH or MEDIUM the review lists, or one an earlier
+review chose that this review's `earlier` row still says is there
+(`blocking_findings`). `decide` parks, before any round, a blocker whose
+lineage the fixer ruled `not a defect` or marked `fixed` twice
+(`fixer_parks`, from the child's `.findings-state.json`).
+
 The steps that run it are `Coordinator._review` in `coordinator.py`.
 """
 

@@ -8,7 +8,18 @@ status, impact, section, topic, file, line and title).
 The fixer rows run the real findings loop on a fixture repo with GitHub, the
 triage agent and the TDD engine's agents stubbed (`test_findings_round`); the
 epic rows run the coordinator with the fake review, post and fixer first on
-PATH (`test_epic_rounds.Rounds`)."""
+PATH (`test_epic_rounds.Rounds`).
+
+plan-buildme-findings-lineage-2026-11-06.md: the `test_lineage_s<N>_` tests
+are its rows S1-S7, S10, S12-S15, S17-S19, S22 and S25; S21 and S23 are
+`test_resolved_lineage_does_not_block`, S24 `test_rejected_lineage_parks_once`,
+S16 `test_s9_an_ingestion_error_fails_the_child_and_the_next_run_relaunches_once`,
+S9 `test_s7_a_fixer_stopped_before_its_push_finishes_the_round_once`, S8
+`test_findings_round`'s `test_row_R2_a_users_edit_on_a_resumed_code_step_is_refused_and_left_in_place`,
+S11 `test_epic_stop_resume_d2`'s `test_D2_S4_coordinator_killed_with_the_fixer_alive_waits_for_it`,
+and S20 is
+in the review skill's `test_incremental.py`. `fixtures/review-pr-91-rounds/` holds
+#91's rounds 02 and 03, trimmed as the #39 fixture was."""
 
 from __future__ import annotations
 
