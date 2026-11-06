@@ -962,6 +962,16 @@ class Coordinator:
                 and len(fixes) >= 2
                 and all((a.result or {}).get("ingestion_error") for a in fixes[-2:])
             ):
+                # Held for good only at this head: as for a fixer's park (M1),
+                # a moved head is left for the review step.
+                try:
+                    moved = self._fix_head_moved(c, fixes[-1])
+                except ReadFailed as e:
+                    c.status, c.reason = "unknown", str(e)
+                    continue
+                if moved:
+                    c.status, c.reason = "built", ""
+                    continue
                 c.status, c.reason = "failed", fixes[-1].result["failed"]
                 c.relaunched = True
         for c in (
@@ -2093,7 +2103,8 @@ class Coordinator:
             and not (
                 len(fixes) >= 2 and (fixes[-2].result or {}).get("ingestion_error")
             )
-        ):  # S9: once more, with a fresh round
+            and head == fixes[-1].started.get("head_sha")
+        ):  # S9: once more, with a fresh round; a moved head is reviewed first
             argv = fixes[-1].started.get("argv") or []
             if self._over_budget():
                 c.status = "built"

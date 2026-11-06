@@ -20,11 +20,12 @@ from pathlib import Path
 
 import pytest
 from build_pipeline.config import EpicSettings
+from build_pipeline.epic import coordinator, review
 from build_pipeline.epic import lock as epic_lock
-from build_pipeline.epic import review
 from build_pipeline.findings import decisions, from_review, loop
 from build_pipeline.findings.models import PRComment, Triage, Verdict
 
+from .epic_row_helpers import pr_url
 from .test_epic_rounds import Rounds, high, medium
 from .test_findings_round import (
     FIX,
@@ -881,6 +882,80 @@ def test_s9_an_ingestion_error_fails_the_child_and_the_next_run_relaunches_once(
     assert r.run() == 1  # never a third time
     assert len(r.fixers()) == 2 and len(r.tries("build")) == 1
     assert r.status()["status"] == "failed" and r.reviews_of_a() == 1
+
+
+def _held(tmp_path, monkeypatch, *later: dict) -> Rounds:
+    """A child held by two `INGESTION_ERROR`s at one head, with *later* reviews
+    to come."""
+    r = Rounds(
+        tmp_path,
+        monkeypatch,
+        [{"findings": [medium("m1", "breaks-users")]}, *later],
+        [INGESTION],
+    )
+    assert r.run() == 1 and r.run() == 1
+    assert len(r.fixers()) == 2 and r.status()["status"] == "failed"
+    return r
+
+
+MOVED = "c" * 40
+
+
+def test_lineage_s12_two_errors_at_one_head_stay_held(tmp_path, monkeypatch):
+    r = _held(tmp_path, monkeypatch)
+    assert r.run() == 1
+    st = r.status()
+    assert st["status"] == "failed" and "m1" in st["reason"]
+    assert len(r.fixers()) == 2 and r.reviews_of_a() == 1
+
+
+def test_lineage_s13_two_errors_and_a_moved_head_go_back_to_the_review_step(
+    tmp_path, monkeypatch
+):
+    r = _held(tmp_path, monkeypatch, {"findings": []})
+    r.fakes.set_head("e-a", MOVED)
+    r.run()  # the merge step's own check of the fake head is not under test
+    assert r.status()["status"] != "failed"
+    assert r.reviews_of_a() == 2 and len(r.fixers()) == 2
+    assert r.reviewed()[-1]["head_sha"] == MOVED
+
+
+def test_lineage_s14_a_held_child_whose_pr_cannot_be_read_is_unknown(
+    tmp_path, monkeypatch
+):
+    r = _held(tmp_path, monkeypatch, {"findings": []})
+    (r.root / "gh-fails").write_text("")
+    assert r.run() == 1
+    st = r.status()
+    assert (st["status"], st["reason"]) == ("unknown", coordinator.PR_UNREAD)
+    assert len(r.fixers()) == 2 and r.reviews_of_a() == 1
+
+
+def test_lineage_s15_one_error_and_a_moved_head_reviews_with_no_relaunch(
+    tmp_path, monkeypatch
+):
+    r = Rounds(
+        tmp_path,
+        monkeypatch,
+        [{"findings": [medium("m1", "breaks-users")]}, {"findings": []}],
+        [INGESTION],
+    )
+    assert r.run() == 1 and len(r.fixers()) == 1
+    r.fakes.set_head("e-a", MOVED)
+    r.run()
+    assert r.status()["status"] != "failed"
+    assert len(r.fixers()) == 1 and r.reviews_of_a() == 2
+    assert r.reviewed()[-1]["head_sha"] == MOVED
+
+
+def test_lineage_s17_a_person_merging_a_held_child_makes_it_merged(
+    tmp_path, monkeypatch
+):
+    r = _held(tmp_path, monkeypatch)
+    r.fakes._update_prs(pr_url("e-a"), state="MERGED")
+    assert r.run() == 0
+    assert r.status()["status"] == "merged"
+    assert len(r.fixers()) == 2
 
 
 def _at_cap(r: Rounds, **over) -> None:
