@@ -11,29 +11,52 @@ still lists it. Every other comment is still allowed by `findings.authors`
 and `findings.allow_bots` alone, and every reply still goes under the
 comment.
 
+The blockers are the chosen ids, then each defect the review stopped
+choosing while an `earlier` row says it is still there (a lower severity, or
+nothing listed for its lineage): `history.still_open_blockers`, under the
+earlier finding's id.
+
+A re-review gives an open defect a new id, and the review's `post` posts no
+comment for it (`drop_posted`). `link_comments` answers each expected id with
+the comment of the same id, else the newest comment of its lineage, and the
+round saves that link (`FindingsRound.comment_for`); the decision is saved
+under the expected id.
+
 The round saves the review's head and the ids (`FindingsRound.review_head`,
 `expected`) when it starts, and one decision per id as the step that settles
 it finishes (`decide`): `fixed` with its commit, `not a defect` with the
 reason, `spec change` with the `spec-issues.md` heading, or `still open` with
 why. A saved decision is never replaced. An id with none when the fixer ends
 is printed as `FINDINGS:INGESTION_ERROR:<ids>` (`undecided`).
+
+`write_fixer_decisions` writes every saved decision to
+`<review_dir>/fixer-decisions.json`, which the next review reads: it rechecks
+a finding decided `fixed` or `not a defect` instead of copying it forward.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import os
 from pathlib import Path
 
-from ..state import FindingsRound
+from ..state import FindingsRound, FindingsState
+from . import history
 from .decisions import chosen_ids
-from .models import Verdict
+from .models import PRComment, Verdict
 
 FIXED = "fixed"
 NOT_DEFECT = "not a defect"
 SPEC_CHANGE = "spec change"
 STILL_OPEN = "still open"
 
+log = logging.getLogger(__name__)
+
 INGESTION_ERROR = "FINDINGS:INGESTION_ERROR"
+# Beside the review's findings.json: every decision the fixer saved, which the
+# review reads (`review_pipeline.rounds.fixer_decisions`).
+FIXER_DECISIONS = "fixer-decisions.json"
 REVIEW_CHANGED = "FINDINGS:REVIEW_CHANGED"
 
 
@@ -42,7 +65,8 @@ def blockers(
     severities: tuple[str, ...] | None = None,
     code_only: bool = False,
 ) -> tuple[str, list[str]]:
-    """(the reviewed head, the ids `--auto` posts) from
+    """(the reviewed head, the ids `--auto` posts, then the still-open ones
+    the review stopped choosing, `history.still_open_blockers`) from
     `<review_dir>/findings.json`. Raises `FileNotFoundError` when the file is
     missing and `ValueError` when it cannot be read as the review's findings."""
     source = Path(review_dir) / "findings.json"
@@ -52,6 +76,11 @@ def blockers(
         doc = json.loads(source.read_text(encoding="utf-8"))
         head = str((doc.get("target") or {}).get("head_sha") or "")
         ids = chosen_ids(doc, severities, code_only)
+        files = history.review_files([review_dir])
+        ids += [
+            str(f["id"])
+            for f in history.still_open_blockers(doc, files, severities, code_only)
+        ]
     except (
         json.JSONDecodeError,
         UnicodeDecodeError,
@@ -63,16 +92,38 @@ def blockers(
     return head, ids
 
 
+def link_comments(
+    expected: list[str], comments: list[PRComment], ids: dict[str, str]
+) -> dict[str, str]:
+    """Each expected id → the `finding_id` on the comment that answers it: the
+    comment with that id, else the newest comment of its lineage. *ids* is
+    `history.lineages(...)`. An id with neither is left out."""
+    out: dict[str, str] = {}
+    posted = [c for c in comments if c.finding_id]
+    exact = {c.finding_id for c in posted}
+    for fid in expected:
+        if fid in exact:
+            out[fid] = fid
+            continue
+        lin = ids.get(fid, fid)
+        same = [c for c in posted if ids.get(c.finding_id, c.finding_id) == lin]
+        if same:
+            out[fid] = max(same, key=lambda c: (c.created_at, c.id)).finding_id
+    return out
+
+
 def _decision(rnd: FindingsRound, fid: str) -> dict[str, str] | None:
     """The decision on finding *fid* that the round's finished steps settle;
-    None while none does, or when no triaged comment of the round names it."""
+    None while none does, or when no triaged comment of the round answers it
+    (`FindingsRound.comment_for`)."""
     from .publish import records_of
 
+    answers = rnd.comment_for.get(fid, fid)
     record = next(
         (
             r
             for r in records_of(rnd)
-            if r.comment.finding_id == fid and r.triage is not None
+            if r.comment.finding_id == answers and r.triage is not None
         ),
         None,
     )
@@ -116,6 +167,28 @@ def decide(rnd: FindingsRound) -> bool:
             rnd.decisions[fid] = found
             added = True
     return added
+
+
+def write_fixer_decisions(review_dir: str | Path, fs: FindingsState) -> None:
+    """Write `<review_dir>/fixer-decisions.json` whole from every round's
+    saved decisions, `{<id>: {"decision", "commit" or "reason" or
+    "heading", "round"}}`, a later round's replacing an earlier one's, through
+    a temp file and a rename, so a kill leaves the old file. The review reads
+    only `fixed` and `not a defect`: it rechecks such a finding instead of
+    copying it forward. A file that cannot be written is logged; the next
+    write tries again."""
+    out: dict[str, dict] = {}
+    for r in fs.rounds:
+        for fid, d in r.decisions.items():
+            out[fid] = {**d, "round": r.number}
+    path = Path(review_dir) / FIXER_DECISIONS
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+    except OSError as e:
+        log.warning("cannot write %s: %s", path, e)
+        return
+    os.replace(tmp, path)
 
 
 def undecided(rnd: FindingsRound) -> list[str]:

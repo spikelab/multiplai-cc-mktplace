@@ -20,6 +20,11 @@ own in `decisions.json`; its `repeat` assessment records the earlier
 decision. `load_rounds` reads that as the finding's own decision, so a later
 round's copy of the reworded finding is matched by id as well.
 
+buildme's fixer writes `fixer-decisions.json` at the top of the target folder: what it decided
+on each finding it acted on. `keep_round` copies it into a kept round and never moves it, so
+`fixer_decisions` reads it at the top. `incremental.decide` rechecks a finding the fixer decided
+`fixed` or `not a defect` instead of copying it; it is never a person's rejection.
+
 The person's decisions live in `viewer/decisions.json` (written by
 review-viewer), one entry per finding id, and persist across rounds. Because
 they are keyed by id alone, a decision is applied to an earlier round's copy
@@ -48,6 +53,7 @@ log = logging.getLogger(__name__)
 
 ROUNDS_DIR = "rounds"
 PATHS_CACHE = "paths-cache"  # the paths stage's answer cache (`stages/paths.py`)
+FIXER_DECISIONS = "fixer-decisions.json"  # written by buildme's fixer
 SHOWN_STATUSES = ("confirmed", "unverifiable", "unverified")
 
 
@@ -284,6 +290,25 @@ def load_decisions(target_dir: Path) -> dict[str, dict]:
     """`viewer/decisions.json`: {finding id: {decision, note, ts}}, or {}."""
     data = _read_json(target_dir / "viewer" / "decisions.json")
     return {k: v for k, v in (data or {}).items() if isinstance(v, dict)}
+
+
+def fixer_decisions(target_dir: Path) -> dict[str, dict]:
+    """`fixer-decisions.json`, which buildme's fixer writes at the top of the target directory:
+    {finding id: {decision, commit or reason, round}}, or {} when there is none. `keep_round`
+    copies it and never moves it, so `incremental.decide` reads it here after a round is kept.
+    A fixer's decision is not a person's rejection: it only sends the finding to the recheck.
+    Raises `ValueError` when the file cannot be read, `TypeError` when it holds no mapping.
+    """
+    path = target_dir / FIXER_DECISIONS
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ValueError(f"unreadable {path.name}: {e}") from e
+    if not isinstance(data, dict):
+        raise TypeError(f"unreadable {path.name}: not a mapping")
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
 
 
 @dataclass

@@ -28,9 +28,15 @@ finished steps and restarts the first unfinished one:
 - under `--auto`, review writes `buildme-decisions.json` in the review's own
   folder (`decisions.write_decisions`) and posts only what it accepts;
 - with `--from-review`, the fetch acts on the review's blockers whoever
-  posted them, and each blocker gets a decision as its step finishes
-  (`from_review.py`); one with none when the run ends prints
-  `FINDINGS:INGESTION_ERROR:<ids>`, exit 1.
+  posted them, each answered by its own comment or, when the re-review gave
+  it a new id, the newest comment of its lineage (`FindingsRound.comment_for`),
+  less any id already decided against the same review head; each blocker
+  gets a decision as its step finishes (`from_review.py`), and every saved
+  decision is written to `fixer-decisions.json` beside the review, also once
+  at the start of a run; one with none when the run ends prints
+  `FINDINGS:INGESTION_ERROR:<ids>`, exit 1. A round resumed after a newer
+  review of its own head takes that review as its re-review and runs none
+  (`review_at_head`).
 
 The loop stops when a fetch finds no new comment to act on
 (`FINDINGS:DONE:<rounds>`), after `findings.max_rounds` rounds
@@ -202,6 +208,20 @@ def review_files(run: FindingsRun, fs: FindingsState) -> list[dict]:
         run.seams.review_dirs or (lambda r: history.ledger_dirs(r.project_dir, r.pr))
     )(run)
     return history.review_files([*ledger, *(r.review_run_dir for r in fs.rounds)])
+
+
+def fixer_decisions(run: FindingsRun, fs: FindingsState) -> None:
+    """`from_review.write_fixer_decisions` beside the `--from-review` review."""
+    if run.from_review is not None:
+        from_review.write_fixer_decisions(run.from_review, fs)
+
+
+def lineage_ids(run: FindingsRun, fs: FindingsState) -> dict[str, str]:
+    """Finding id → lineage, from `review_files` and the `--from-review`
+    directory, which the ledger may not name."""
+    return history.lineages(
+        [*review_files(run, fs), *history.review_files([run.from_review])]
+    )
 
 
 def recurring_lines(run: FindingsRun, fs: FindingsState) -> list[str]:
@@ -567,6 +587,19 @@ def run_review(run: FindingsRun, rnd: FindingsRound) -> ReviewOutcome:
     return ReviewOutcome(run_dir, True)
 
 
+def review_at_head(run: FindingsRun) -> bool:
+    """True when the `--from-review` review is of the current HEAD, so a round
+    that resumed under it has nothing to review. A file that cannot be read
+    says no, and the review runs as it would without it."""
+    if run.from_review is None:
+        return False
+    try:
+        head, _ = from_review.blockers(run.from_review, run.severities, run.code_only)
+    except (FileNotFoundError, ValueError):
+        return False
+    return bool(head) and head == git_ops.rev_parse_head(run.project_dir)
+
+
 def post_review(run: FindingsRun, run_dir: str, decisions: Path) -> tuple[bool, str]:
     """Unattended (`--auto`): post the findings *decisions* accepts
     (`write_decisions`). `post` skips any finding already marked on the PR,
@@ -858,6 +891,12 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
     async def do_review() -> None:
         if not run.review:  # an epic's final fix: its fixes get no review
             return
+        if rnd.review_run_dir is None and review_at_head(run):
+            # Reviewed already: the epic's post step posted that review, so no
+            # decisions file and nothing posted.
+            rnd.review_run_dir = str(run.from_review)
+            rnd.review_finished_at = _now()
+            return
         if rnd.review_run_dir is None:
             outcome = (seams.review or run_review)(run, rnd)
             if not outcome.ok:
@@ -893,6 +932,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
             await _step(run, st, rnd, name, body)
             if rnd.review_head is not None and from_review.decide(rnd):
                 save()
+                fixer_decisions(run, fs)
         except _Waiting:
             run.emit(f"FINDINGS:REVIEW_READY:{rnd.review_run_dir}")
             return EXIT_WAITING
@@ -907,6 +947,7 @@ async def run_round(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int
                 f"FINDINGS:FAILED:{name}:{type(e).__name__}: {' '.join(str(e).split())}"
             )
             return EXIT_FAILED
+    fixer_decisions(run, fs)
     run.emit(f"FINDINGS:ROUND_DONE:{n}")
     return EXIT_OK
 
@@ -1049,8 +1090,10 @@ def review_changed(run: FindingsRun, st: BuildState, rnd: FindingsRound) -> int 
         return None
     run.emit(f"{from_review.REVIEW_CHANGED}:{rnd.review_head}\u2192{head}")
     rnd.review_head, rnd.expected = head, ids
-    from_review.decide(rnd)
+    added = from_review.decide(rnd)
     st.checkpoint(run.state_path)
+    if added:
+        fixer_decisions(run, st.findings)
     return None
 
 
@@ -1069,6 +1112,8 @@ async def _run_findings(run: FindingsRun) -> int:
     if mismatch:
         run.emit(f"FINDINGS:FAILED:state:{mismatch}")
         return EXIT_FAILED
+    if fs.rounds:  # a run stopped before its last write catches up (row S18)
+        fixer_decisions(run, fs)
     cache: dict[str, bool] = {}
     max_rounds = run.config.findings.max_rounds
     spent = spend_meter(run) if run.max_usd is not None else None
@@ -1129,6 +1174,14 @@ async def _run_findings(run: FindingsRun) -> int:
                 except (FileNotFoundError, ValueError) as e:
                     run.emit(f"FINDINGS:FAILED:fetch:{' '.join(str(e).split())}")
                     return EXIT_FAILED
+            # Decided against this review already: not asked again.
+            decided = {
+                fid
+                for r in fs.rounds
+                if r.review_head is not None and r.review_head == review_head
+                for fid in r.decisions
+            }
+            expected = [fid for fid in expected if fid not in decided]
             try:
                 comments = fetch.fetch_comments(
                     fs.repo, fs.pr, since, cwd=run.project_dir
@@ -1139,8 +1192,12 @@ async def _run_findings(run: FindingsRun) -> int:
             fetch.prepare(
                 comments, run.config.findings, cache, repo=fs.repo, cwd=run.project_dir
             )
+            comment_for = from_review.link_comments(
+                expected, comments, lineage_ids(run, fs) if expected else {}
+            )
+            answering = set(comment_for.values())
             for c in comments:  # the review's own blockers, whoever posted them
-                if c.finding_id is not None and c.finding_id in expected:
+                if c.finding_id is not None and c.finding_id in answering:
                     c.allowed = True
             seen = fs.seen_ids()
             # A fix deferred over a spec conflict is triaged again, once,
@@ -1152,7 +1209,7 @@ async def _run_findings(run: FindingsRun) -> int:
             new = [
                 c
                 for c in comments
-                if c.id not in seen - again or c.finding_id in expected
+                if c.id not in seen - again or c.finding_id in answering
             ]
             for _, _, c in retries:  # a top-level comment older than `since`
                 if all(n.id != c.id for n in new):
@@ -1174,15 +1231,8 @@ async def _run_findings(run: FindingsRun) -> int:
                         c.author,
                         triage.should_triage(c)[1],
                     )
-                decided = {
-                    fid
-                    for r in fs.rounds
-                    if r.review_head is not None and r.review_head == review_head
-                    for fid in r.decisions
-                }
-                missing = [fid for fid in expected if fid not in decided]
-                if missing:
-                    run.emit(from_review.ingestion_error(missing))
+                if expected:
+                    run.emit(from_review.ingestion_error(expected))
                     return EXIT_FAILED
                 run.emit(f"FINDINGS:DONE:{done}")
                 return EXIT_OK
@@ -1212,6 +1262,7 @@ async def _run_findings(run: FindingsRun) -> int:
                 escalated=run.escalate and done + 1 == max_rounds and done + 1 >= 2,
                 review_head=review_head,
                 expected=expected,
+                comment_for=comment_for,
             )
             fs.rounds.append(rnd)
             st.checkpoint(run.state_path)

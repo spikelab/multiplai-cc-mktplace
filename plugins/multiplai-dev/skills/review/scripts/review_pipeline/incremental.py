@@ -11,7 +11,10 @@ The findings that round left open (`rounds.open_findings`) on a file still in th
 of whose citations is in a re-reviewed file and whose cited files are the same at both heads, are copied into this round with their id, verdict,
 severity and plain-language text, marked `carried_from`; they make no agent call. Decisions are
 keyed by id, so they keep theirs. An open finding on a re-reviewed file is rechecked as before,
-and one whose file left the change is `resolved` by the recheck stage with no call.
+and one whose file left the change is `resolved` by the recheck stage with no call. A finding
+buildme's fixer decided `fixed` or `not a defect` (`rounds.fixer_decisions`) is never copied:
+the recheck stage gives it a status at this head. An unreadable decisions file copies as if it
+were empty, with a line in `state.errors`.
 
 `incremental` needs all of: a PR or branch target, a kept round with a `findings.json`, its
 `diff.patch` and `review-state.json`, the same mode, a different head (a rerun of the same
@@ -36,6 +39,8 @@ log = logging.getLogger(__name__)
 
 _HUNK_HEAD = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
 LEFT_THE_CHANGE = "file no longer in the change"
+# A fixer's decisions that send a finding to the recheck instead of being copied.
+RECHECKED_DECISIONS = ("fixed", "not a defect")
 
 
 def normalised_patches(diff: str) -> dict[str, str]:
@@ -107,6 +112,7 @@ class Carried:
     write_answers: dict[str, WriteAnswer] = field(default_factory=dict)
     original_severity: dict[str, str] = field(default_factory=dict)
     lineage: dict[str, str] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
 
 
 def _full(reason: str, total: int) -> tuple[Scope, Carried]:
@@ -150,10 +156,18 @@ def decide(
     in_change = {f.path for f in diff_files(diff)}
     by_id = {f.id: f for f in earlier.findings}
     carried = Carried()
+    try:
+        decided = rounds.fixer_decisions(target_dir)
+    except (ValueError, TypeError) as e:
+        log.warning("%s", e)
+        decided = {}
+        carried.errors.append(f"incremental: {e}; findings copied as if it were empty")
     for o in rounds.open_findings(target_dir, info.head_sha):
         f = by_id.get(o.id)
         if f is None or f.file not in in_change:
             continue  # the recheck stage gives it a status
+        if (decided.get(o.id) or {}).get("decision") in RECHECKED_DECISIONS:
+            continue  # the fixer acted on it: never copied, so the recheck looks again
         cited = {f.file} | {
             c.path for c in f.citations if not c.is_web and not c.is_dependency
         }
@@ -199,6 +213,7 @@ def apply(state: ReviewState, scope: Scope, carried: Carried) -> None:
     state.write_answers.update(carried.write_answers)
     state.original_severity.update(carried.original_severity)
     state.lineage.update(carried.lineage)
+    state.errors.extend(carried.errors)
 
 
 def is_incremental(state: ReviewState) -> bool:

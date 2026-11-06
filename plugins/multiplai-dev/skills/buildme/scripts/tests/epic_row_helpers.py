@@ -817,7 +817,7 @@ FAKE_FINDINGS = r'''#!{python}
 fix round: an empty commit on the PR branch, one more round in the change's
 `.findings-state.json` (its steps all `finished`), and the fixer's own review
 of that head in the review ledger with the round's `findings` (none under
-`--no-review`; with `push`, the commit is pushed to the branch's upstream). A round with
+`--no-review`; a round's `saved` fields, as `decisions`, go into its state; with `push`, the commit is pushed to the branch's upstream). A round with
 `stop` is SIGKILLed part-way: `fetch` right after the round is added (no commit,
 no review), `review` after its review is in the ledger but before the round
 records it as finished. A launch that finds the last round unfinished
@@ -898,6 +898,7 @@ for i, r in enumerate(todo):
     if step.get("push"):        # as `findings` publishes: the round's commit on the PR's branch
         subprocess.run(["git", "push", "-q"], cwd=project, check=True, capture_output=True)
     rnd["finished"] = ALL[:-1]
+    rnd.update(r.get("saved", {{}}))     # fields the round saves, as `decisions`
     save()
     if "--no-review" not in argv:       # the epic's final fix runs no review of its round
         target.mkdir(parents=True, exist_ok=True)

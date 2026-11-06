@@ -8,7 +8,18 @@ status, impact, section, topic, file, line and title).
 The fixer rows run the real findings loop on a fixture repo with GitHub, the
 triage agent and the TDD engine's agents stubbed (`test_findings_round`); the
 epic rows run the coordinator with the fake review, post and fixer first on
-PATH (`test_epic_rounds.Rounds`)."""
+PATH (`test_epic_rounds.Rounds`).
+
+plan-buildme-findings-lineage-2026-11-06.md: the `test_lineage_s<N>_` tests
+are its rows S1-S7, S10, S12-S15, S17-S19, S22 and S25; S21 and S23 are
+`test_resolved_lineage_does_not_block`, S24 `test_rejected_lineage_parks_once`,
+S16 `test_s9_an_ingestion_error_fails_the_child_and_the_next_run_relaunches_once`,
+S9 `test_s7_a_fixer_stopped_before_its_push_finishes_the_round_once`, S8
+`test_findings_round`'s `test_row_R2_a_users_edit_on_a_resumed_code_step_is_refused_and_left_in_place`,
+S11 `test_epic_stop_resume_d2`'s `test_D2_S4_coordinator_killed_with_the_fixer_alive_waits_for_it`,
+and S20 is
+in the review skill's `test_incremental.py`. `fixtures/review-pr-91-rounds/` holds
+#91's rounds 02 and 03, trimmed as the #39 fixture was."""
 
 from __future__ import annotations
 
@@ -20,11 +31,12 @@ from pathlib import Path
 
 import pytest
 from build_pipeline.config import EpicSettings
+from build_pipeline.epic import coordinator, review
 from build_pipeline.epic import lock as epic_lock
-from build_pipeline.epic import review
-from build_pipeline.findings import decisions, from_review, loop
-from build_pipeline.findings.models import Triage, Verdict
+from build_pipeline.findings import decisions, from_review, history, loop
+from build_pipeline.findings.models import PRComment, Triage, Verdict
 
+from .epic_row_helpers import pr_url
 from .test_epic_rounds import Rounds, high, medium
 from .test_findings_round import (
     FIX,
@@ -381,6 +393,478 @@ async def test_s9_a_review_with_no_blockers_still_ends_done_0(
     assert lines[-1] == "FINDINGS:DONE:0"
 
 
+# --- lineage: a re-review's new id answers through the earlier comment ------------
+
+NEW, NEWER = "ee55ee55ee", "ff66ff66ff"
+
+
+def _still_open(fid: str, earlier: str, claim: str = "add subtracts", **over) -> dict:
+    """A finding a re-review gave a new id: `drop_posted` posts no comment for it."""
+    return {
+        **_finding(fid, claim),
+        "lineage": earlier,
+        "assessment": {"label": "still-open", "earlier_id": earlier},
+        **over,
+    }
+
+
+def _kept(d: Path, name: str, doc: dict) -> None:
+    """A review the next one kept in `rounds/`."""
+    (d / "rounds" / name).mkdir(parents=True, exist_ok=True)
+    (d / "rounds" / name / "findings.json").write_text(json.dumps(doc))
+
+
+@pytest.mark.asyncio
+async def test_still_open_blocker_uses_the_earlier_comment(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Done means 1: `NEW` has no comment; `A`'s thread answers it, once."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch, ids=(A,))
+    _write_review(f.dir, "h1", [_still_open(NEW, A)])
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert lines[-1] in ("FINDINGS:MAX_ROUNDS:1", "FINDINGS:DONE:1")
+    rnd = f.state()
+    assert rnd["comment_for"] == {NEW: A}
+    assert rnd["decisions"][NEW]["decision"] == from_review.FIXED
+    assert [r[1] for r in fake_pr.replies()] == [f.threads[A]]
+
+
+@pytest.mark.asyncio
+async def test_still_open_chain_links_across_three_reviews(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Done means 2: `NEWER`'s `earlier_id`, `NEW`, was itself never posted;
+    `lineage` reaches `A`'s comment."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch, ids=(A,))
+    _kept(
+        f.dir,
+        "01-h0",
+        {"mode": "full", "generated_at": "2026-01-01T00:00:00Z", "findings": []},
+    )
+    _kept(
+        f.dir,
+        "02-h1",
+        {
+            "mode": "full",
+            "generated_at": "2026-01-02T00:00:00Z",
+            "findings": [_still_open(NEW, A)],
+        },
+    )
+    _write_review(
+        f.dir,
+        "h2",
+        [{**_still_open(NEWER, NEW), "lineage": A}],
+    )
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    rnd = f.state()
+    assert rnd["comment_for"] == {NEWER: A}
+    assert rnd["decisions"][NEWER]["decision"] == from_review.FIXED
+    assert [r[1] for r in fake_pr.replies()] == [f.threads[A]]
+
+
+def test_link_comments_prefers_the_same_id_then_the_newest_of_the_lineage():
+    def comment(cid: int, fid: str, created: str) -> PRComment:
+        return PRComment(
+            id=cid, kind="review", author="b", finding_id=fid, created_at=created
+        )
+
+    old, later = comment(1, A, "2026-01-01"), comment(2, B, "2026-01-02")
+    same = comment(3, NEW, "2026-01-03")
+    ids = {NEW: A, B: A, NEWER: A}
+    assert from_review.link_comments([NEWER], [old, later], ids) == {NEWER: B}
+    assert from_review.link_comments([NEW], [old, same, later], ids) == {NEW: NEW}
+    assert from_review.link_comments(["zz"], [old, later], ids) == {}
+
+
+@pytest.mark.asyncio
+async def test_lineage_s2_a_stop_after_the_fetch_triages_the_saved_link_with_no_fetch(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S2: a fetch that saved its round and stopped; the resume reads no
+    comments and triages what was saved. Compared with a fixer that never stopped."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch, ids=(A,))
+    _write_review(f.dir, "h1", [_still_open(NEW, A)])
+    real = loop.run_round
+    calls = []
+
+    async def stops_once(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("killed")
+        return await real(*a, **k)
+
+    monkeypatch.setattr(loop, "run_round", stops_once)
+    run, lines = f.run()
+    with pytest.raises(RuntimeError), _Stubs(engine_stubs(f.repo)):
+        await loop.run_findings(run)
+    saved = f.state()
+    assert saved["comment_for"] == {NEW: A} and saved["finished"] == ["fetch"]
+
+    def no_fetch(*a, **k):
+        raise AssertionError("a second fetch")
+
+    monkeypatch.setattr(loop.fetch, "fetch_comments", no_fetch)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    after = f.state()
+    assert after["comment_for"] == {NEW: A}
+    assert after["decisions"][NEW]["decision"] == from_review.FIXED
+    assert [r[1] for r in fake_pr.replies()] == [f.threads[A]]
+    assert len(f.impl_commits()) == 1
+
+
+@pytest.mark.asyncio
+async def test_lineage_s3_a_stop_in_code_saves_the_decision_under_the_expected_id(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S3: stopped in the code step of a round linked by lineage."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch, ids=(A,))
+    _write_review(f.dir, "h1", [_still_open(NEW, A)])
+    real = loop.code.run_code_step
+    calls = []
+
+    async def stops_once(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("killed")
+        return await real(*a, **k)
+
+    monkeypatch.setattr(loop.code, "run_code_step", stops_once)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 1, lines
+    assert f.state()["comment_for"] == {NEW: A} and f.state()["decisions"] == {}
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert f.state()["decisions"][NEW]["decision"] == from_review.FIXED
+    assert len(f.triage.prompts) == 1 and len(f.impl_commits()) == 1
+
+
+@pytest.mark.asyncio
+async def test_lineage_s6_a_checkpoint_with_no_comment_for_matches_by_exact_id(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S6: a round saved before `comment_for` existed."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    real = loop.code.run_code_step
+    calls = []
+
+    async def stops_once(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("killed")
+        return await real(*a, **k)
+
+    monkeypatch.setattr(loop.code, "run_code_step", stops_once)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 1, lines
+    path = f.change / loop.STATE_FILE
+    doc = json.loads(path.read_text())
+    del doc["findings"]["rounds"][-1]["comment_for"]
+    path.write_text(json.dumps(doc))
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    rnd = f.state()
+    assert rnd["comment_for"] == {}
+    assert rnd["decisions"][A]["decision"] == from_review.FIXED
+
+
+@pytest.mark.asyncio
+async def test_lineage_s7_a_blocker_whose_only_thread_is_resolved_ends_ingestion_error(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S7: no comment in its lineage, as today."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch, ids=(A,))
+    _write_review(f.dir, "h1", [_still_open(NEW, A)])
+    for t in fake_pr.threads:
+        t["isResolved"] = True
+    run, lines = f.run()
+    assert await loop.run_findings(run) == 1, lines
+    assert lines[-1] == f"FINDINGS:INGESTION_ERROR:{NEW}"
+
+
+# --- a round resumed under a newer review -----------------------------------------
+
+PR91 = Path(__file__).parent / "fixtures" / "review-pr-91-rounds"
+ROUND2, ROUND3 = PR91 / "02-18db26975f64", PR91 / "03-18db26975f64"
+PR91_MEDIUMS = ["08672d4746", "c1541b6daf", "d62907b020"]
+
+
+def _head(repo: Path) -> str:
+    return loop.git_ops.rev_parse_head(repo)
+
+
+def _reviewed_at(d: Path, kept: Path, head: str) -> None:
+    """The saved review *kept* as `<d>/findings.json`, at *head*."""
+    doc = json.loads((kept / "findings.json").read_text())
+    doc["target"]["head_sha"] = head
+    (d / "findings.json").write_text(json.dumps(doc))
+
+
+def _two_rounds(f: Fixer) -> None:
+    f.config.findings = dataclasses.replace(f.config.findings, max_rounds=2)
+
+
+@pytest.mark.asyncio
+async def test_pr91_replay(tmp_path, fake_pr, monkeypatch):
+    """Done means 3: round 1's publish never finished and review 156 replaced
+    the review at the head it pushed. The resume runs no review, and round 2
+    triages the three posted MEDIUMs."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    _two_rounds(f)
+    await _stop_at_the_push(f, monkeypatch)
+    for fid in PR91_MEDIUMS:
+        _bot_thread(fake_pr, f"medium {fid}", fid)
+    _reviewed_at(f.dir, ROUND2, _head(f.repo))
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert any(ln.startswith(from_review.REVIEW_CHANGED) for ln in lines)
+    doc = json.loads((f.change / loop.STATE_FILE).read_text())
+    first, second = doc["findings"]["rounds"]
+    assert first["review_run_dir"] == str(f.dir) and first["review_finished_at"]
+    assert sorted(c["finding_id"] for c in second["comments"]) == sorted(PR91_MEDIUMS)
+    assert set(second["decisions"]) == set(PR91_MEDIUMS)
+    # The one review is round 2's own, of the head its records commit made.
+    assert f.review.calls == 1 and f.review.posts == ["/reviews/r2"]
+
+
+@pytest.mark.asyncio
+async def test_lineage_s1_a_resumed_round_finishes_and_keeps_what_it_decided(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S1: the next round acts on the newer review's blockers, less what
+    this review's round already decided. Compared with a fixer that never
+    stopped, `A` is fixed once and its thread has one reply."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    _two_rounds(f)
+    await _stop_at_the_push(f, monkeypatch)
+    c = "cc33cc33cc"
+    _bot_thread(fake_pr, "naming is odd too", c)
+    _write_review(
+        f.dir,
+        _head(f.repo),
+        [_finding(A, "add subtracts"), _finding(c, "naming is odd too")],
+    )
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    doc = json.loads((f.change / loop.STATE_FILE).read_text())
+    first, second = doc["findings"]["rounds"]
+    assert first["review_run_dir"] == str(f.dir)
+    assert second["expected"] == [c]
+    assert second["decisions"][c]["decision"] == from_review.NOT_DEFECT
+    assert len(f.impl_commits()) == 1
+    replies = [r[1] for r in fake_pr.replies()]
+    assert replies.count(f.threads[A]) == 1
+
+
+def _review_killed(f: Fixer) -> list[int]:
+    """A review that dies once, as a kill between its `started` and `finished`."""
+    calls: list[int] = []
+    real = f.review.review
+
+    def review(run, rnd):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("killed")
+        return real(run, rnd)
+
+    f.review.review = review
+    return calls
+
+
+async def _stopped_in_review(f: Fixer) -> list[int]:
+    calls = _review_killed(f)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 1, lines
+    rnd = f.state()
+    assert "review" in rnd["started"] and rnd["review_run_dir"] is None
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_lineage_s4_a_review_killed_with_the_newest_review_at_head_is_skipped(
+    tmp_path, fake_pr, monkeypatch
+):
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    calls = await _stopped_in_review(f)
+    _write_review(f.dir, _head(f.repo), [_finding(A, "add subtracts")])
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert lines[-1] == "FINDINGS:MAX_ROUNDS:1" and len(calls) == 1
+    rnd = f.state()
+    assert rnd["review_run_dir"] == str(f.dir) and "review" in rnd["finished"]
+    assert f.review.posts == []
+
+
+@pytest.mark.asyncio
+async def test_lineage_s5_a_review_killed_with_the_newest_review_elsewhere_runs_again(
+    tmp_path, fake_pr, monkeypatch
+):
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    calls = await _stopped_in_review(f)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert lines[-1] == "FINDINGS:MAX_ROUNDS:1" and len(calls) == 2
+    assert f.state()["review_run_dir"] == "/reviews/r1" and f.review.posts
+
+
+@pytest.mark.asyncio
+async def test_lineage_s10_a_step_stopped_twice_sends_no_reply_twice(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S10: one thread's reply fails twice; the other's is sent once."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    fake_pr.fail_reply_to = {f.threads[B]}
+    for _ in range(2):
+        run, lines = f.run()
+        with _Stubs(engine_stubs(f.repo)):
+            assert await loop.run_findings(run) == 1, lines
+        assert lines[-1].startswith("FINDINGS:FAILED:publish:")
+    fake_pr.fail_reply_to = set()
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    replies = [r[1] for r in fake_pr.replies()]
+    assert sorted(replies) == sorted(f.threads.values())
+    assert len(f.impl_commits()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_second_fetch_of_one_review_drops_what_is_decided(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Item 2: an id with a decision at the review's head is not expected
+    again, so a new round leaves its thread alone."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    d = "dd44dd44dd"
+    _bot_thread(fake_pr, "naming is odd again", d)
+    _write_review(
+        f.dir,
+        "h1",
+        [_finding(A, "add subtracts"), _finding(B, "x"), _finding(d, "y")],
+    )
+    _two_rounds(f)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    assert f.state()["expected"] == [d]
+    assert sorted(c["finding_id"] for c in f.state()["comments"]) == [d]
+    assert len(f.impl_commits()) == 1
+
+
+# --- a defect that was blocking stays blocking -------------------------------------
+
+
+def _review_91_round_3(tmp_path: Path) -> Path:
+    d = tmp_path / "pr-91"
+    (d / "rounds" / ROUND2.name).mkdir(parents=True)
+    shutil.copy(ROUND2 / "findings.json", d / "rounds" / ROUND2.name / "findings.json")
+    shutil.copy(ROUND3 / "findings.json", d / "findings.json")
+    return d
+
+
+def test_lowered_severity_keeps_blocking(tmp_path):
+    """Done means 5: `d62907b020` came back as LOW `65004cfe30` and still_present."""
+    d = _review_91_round_3(tmp_path)
+    want = ["208582c793", "db90668ede", "d62907b020"]
+    _, ids = from_review.blockers(d, ("HIGH", "MEDIUM"), True)
+    assert ids == want
+    assert [f["id"] for f in review.blocking_findings(d)] == want
+
+
+def _reviews_with_row(d: Path, status: str, *later: dict) -> None:
+    _kept(
+        d,
+        "01-h1",
+        {
+            "mode": "full",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "target": {"head_sha": "h1"},
+            "findings": [_finding(A, "add subtracts")],
+        },
+    )
+    (d / "findings.json").write_text(
+        json.dumps(
+            {
+                "mode": "full",
+                "generated_at": "2026-01-02T00:00:00Z",
+                "target": {"head_sha": "h2"},
+                "findings": list(later),
+                "earlier": [{"earlier_id": A, "lineage": A, "status": status}],
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize("status", ["resolved", "cannot_verify"])
+def test_resolved_lineage_does_not_block(tmp_path, status):
+    """Done means 6, and `cannot_verify` carries no blocker forward."""
+    _reviews_with_row(tmp_path, status)
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == []
+    assert review.blocking_findings(tmp_path) == []
+
+
+@pytest.mark.parametrize("status", ["still_present", "partially_resolved"])
+def test_an_open_row_with_no_listed_finding_blocks_under_its_earlier_id(
+    tmp_path, status
+):
+    """#88's `77de1139c8`: the row stayed open and nothing listed its lineage."""
+    _reviews_with_row(tmp_path, status)
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == [A]
+    [f] = review.blocking_findings(tmp_path)
+    assert (f["id"], f["severity"]) == (A, "MEDIUM")
+    got, _ = review.decide([f], 1, 3, "breaks")
+    assert got == "round"
+
+
+def test_an_open_row_adds_nothing_when_its_lineage_is_chosen(tmp_path):
+    _reviews_with_row(tmp_path, "still_present", _still_open(NEW, A))
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == [NEW]
+
+
+def test_a_lineage_no_review_chose_adds_nothing(tmp_path):
+    """A LOW defect that stays open never blocked."""
+    _reviews_with_row(tmp_path, "still_present")
+    doc = json.loads((tmp_path / "rounds/01-h1/findings.json").read_text())
+    doc["findings"][0]["severity"] = "LOW"
+    (tmp_path / "rounds/01-h1/findings.json").write_text(json.dumps(doc))
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == []
+
+
+def test_one_blocker_per_lineage_and_the_newest_review_wins(tmp_path):
+    _reviews_with_row(tmp_path, "still_present")
+    doc = json.loads((tmp_path / "findings.json").read_text())
+    doc["earlier"].append({"earlier_id": NEW, "lineage": A, "status": "still_present"})
+    (tmp_path / "findings.json").write_text(json.dumps(doc))
+    _kept(
+        tmp_path,
+        "02-h1",
+        {
+            "mode": "full",
+            "generated_at": "2026-01-01T12:00:00Z",
+            "target": {"head_sha": "h1"},
+            "findings": [_still_open(NEW, A)],
+        },
+    )
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == [NEW]
+
+
 # --- the epic (rows S9-S11) -------------------------------------------------------
 
 INGESTION = {"exit": 1, "stdout": "FINDINGS:INGESTION_ERROR:m1"}
@@ -409,6 +893,275 @@ def test_s9_an_ingestion_error_fails_the_child_and_the_next_run_relaunches_once(
     assert r.run() == 1  # never a third time
     assert len(r.fixers()) == 2 and len(r.tries("build")) == 1
     assert r.status()["status"] == "failed" and r.reviews_of_a() == 1
+
+
+def _held(tmp_path, monkeypatch, *later: dict) -> Rounds:
+    """A child held by two `INGESTION_ERROR`s at one head, with *later* reviews
+    to come."""
+    r = Rounds(
+        tmp_path,
+        monkeypatch,
+        [{"findings": [medium("m1", "breaks-users")]}, *later],
+        [INGESTION],
+    )
+    assert r.run() == 1 and r.run() == 1
+    assert len(r.fixers()) == 2 and r.status()["status"] == "failed"
+    return r
+
+
+MOVED = "c" * 40
+
+
+def test_lineage_s12_two_errors_at_one_head_stay_held(tmp_path, monkeypatch):
+    r = _held(tmp_path, monkeypatch)
+    assert r.run() == 1
+    st = r.status()
+    assert st["status"] == "failed" and "m1" in st["reason"]
+    assert len(r.fixers()) == 2 and r.reviews_of_a() == 1
+
+
+def test_lineage_s13_two_errors_and_a_moved_head_go_back_to_the_review_step(
+    tmp_path, monkeypatch
+):
+    r = _held(tmp_path, monkeypatch, {"findings": []})
+    r.fakes.set_head("e-a", MOVED)
+    r.run()  # the merge step's own check of the fake head is not under test
+    assert r.status()["status"] != "failed"
+    assert r.reviews_of_a() == 2 and len(r.fixers()) == 2
+    assert r.reviewed()[-1]["head_sha"] == MOVED
+
+
+def test_lineage_s14_a_held_child_whose_pr_cannot_be_read_is_unknown(
+    tmp_path, monkeypatch
+):
+    r = _held(tmp_path, monkeypatch, {"findings": []})
+    (r.root / "gh-fails").write_text("")
+    assert r.run() == 1
+    st = r.status()
+    assert (st["status"], st["reason"]) == ("unknown", coordinator.PR_UNREAD)
+    assert len(r.fixers()) == 2 and r.reviews_of_a() == 1
+
+
+def test_lineage_s15_one_error_and_a_moved_head_reviews_with_no_relaunch(
+    tmp_path, monkeypatch
+):
+    r = Rounds(
+        tmp_path,
+        monkeypatch,
+        [{"findings": [medium("m1", "breaks-users")]}, {"findings": []}],
+        [INGESTION],
+    )
+    assert r.run() == 1 and len(r.fixers()) == 1
+    r.fakes.set_head("e-a", MOVED)
+    r.run()
+    assert r.status()["status"] != "failed"
+    assert len(r.fixers()) == 1 and r.reviews_of_a() == 2
+    assert r.reviewed()[-1]["head_sha"] == MOVED
+
+
+def test_lineage_s17_a_person_merging_a_held_child_makes_it_merged(
+    tmp_path, monkeypatch
+):
+    r = _held(tmp_path, monkeypatch)
+    r.fakes._update_prs(pr_url("e-a"), state="MERGED")
+    assert r.run() == 0
+    assert r.status()["status"] == "merged"
+    assert len(r.fixers()) == 2
+
+
+# --- a fixed or rejected bug does not come back (item 5) ---------------------------
+
+
+def _state(monkeypatch, *rounds: dict) -> None:
+    """Rounds an earlier fixer left in the child's `.findings-state.json`,
+    read before the ones the fake fixer writes there (the worktree that holds
+    the file does not exist until the child is built)."""
+    from build_pipeline.epic import fix
+
+    real = fix._state_rounds
+    rows = [
+        {"number": n, "finished": ["review"], **rnd}
+        for n, rnd in enumerate(rounds, start=1)
+    ]
+    monkeypatch.setattr(fix, "_state_rounds", lambda *a: [*rows, *real(*a)])
+
+
+def _said(fid: str, decision: str) -> dict:
+    return {"decisions": {fid: {"decision": decision, "reason": "x"}}}
+
+
+def test_rejected_lineage_parks_once(tmp_path, monkeypatch):
+    """Done means 7, row S24: the fixer ruled `m1` not a defect; the review
+    still lists it. The child parks naming it, with `open_ids`, and no fixer
+    is launched; the same head parks again, a new head is reviewed."""
+    m1 = medium("m1", "breaks-users")
+    verdicts = {"m1": ["not a defect"]}
+    got, why = review.decide([m1], 1, 3, "breaks", verdicts=verdicts)
+    assert got == "park" and "m1" in why and "not a defect" in why
+    got, why = review.decide([m1], 1, 3, "breaks", verdicts={"m1": ["fixed", "fixed"]})
+    assert got == "park" and "m1" in why and "fixed" in why
+    assert review.decide([m1], 1, 3, "breaks", verdicts={"m1": ["fixed"]})[0] == (
+        "round"
+    )
+
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [m1]}])
+    _state(monkeypatch, _said("m1", "not a defect"))
+    r.run()
+    st = r.status()
+    assert st["status"] == "parked" and "m1" in st["reason"]
+    assert "not a defect" in st["reason"]
+    [rec] = r.reviewed()
+    assert (rec["next"], rec["open_ids"]) == ("park", ["m1"])
+    assert r.fixers() == [] and r.fakes.post_launches() == []
+    r.run()
+    assert r.status()["status"] == "parked" and r.reviews_of_a() == 1
+    assert r.fixers() == []
+    r.fakes.set_head("e-a", "c" * 40)
+    r.run()
+    assert r.reviews_of_a() == 2
+
+
+def test_accepted_findings_release_a_fixer_park(tmp_path, monkeypatch):
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [medium("m1", "breaks-users")]}])
+    _state(monkeypatch, _said("m1", "not a defect"))
+    r.run()
+    assert r.status()["status"] == "parked"
+    r.config.epic = EpicSettings(
+        max_parallel=2,
+        merge="auto",
+        accepted_findings={"a": {"m1": "Spike: it reads correctly"}},
+    )
+    assert r.run() == 0 and r.merged() and r.fixers() == []
+
+
+def test_lineage_s22_a_fixed_finding_still_present_gets_one_more_round_then_parks(
+    tmp_path, monkeypatch
+):
+    """Row S22: the review rechecked a fixed `m1` and it is still there: one more
+    fixer round, and a park once it is fixed a second time."""
+    m1 = medium("m1", "breaks-users")
+    r = Rounds(
+        tmp_path,
+        monkeypatch,
+        [{"findings": [m1]}],
+        [{"rounds": [{"findings": [m1], "saved": _said("m1", "fixed")}]}],
+    )
+    _state(monkeypatch, _said("m1", "fixed"))
+    r.run()
+    assert len(r.fixers()) == 1
+    st = r.status()
+    assert st["status"] == "parked" and "fixed" in st["reason"] and "m1" in st["reason"]
+    r.run()
+    assert len(r.fixers()) == 1 and r.status()["status"] == "parked"
+
+
+def test_lineage_s25_an_unreadable_findings_state_decides_as_today(
+    tmp_path, monkeypatch, caplog
+):
+    m1 = medium("m1", "breaks-users")
+    from build_pipeline.epic import fix
+
+    r = Rounds(tmp_path, monkeypatch, [{"findings": [m1]}], [{"rounds": [{}]}])
+    real = fix._state_rounds
+
+    def unreadable(project, change):
+        path = fix.change_dir_for(project / "specs", change) / loop.STATE_FILE
+        path.write_text("{not json")
+        return real(project, change)
+
+    monkeypatch.setattr(fix, "_state_rounds", unreadable)
+    with caplog.at_level("INFO"):
+        r.run()
+    first = r.reviewed()[0]
+    assert first["next"] == "round" and len(r.fixers()) == 1
+    assert "cannot read" in caplog.text and "no fixer decisions" in caplog.text
+
+
+def test_fixer_verdicts_count_a_lineage_once_per_round():
+    rounds = [
+        {"decisions": {"x1": {"decision": "fixed"}, "x2": {"decision": "fixed"}}},
+        {"decisions": {"x3": {"decision": "still open"}}},
+        {"decisions": {"y1": {"decision": "not a defect"}}},
+    ]
+    ids = {"x1": "x", "x2": "x", "x3": "x", "y1": "y"}
+    assert history.fixer_verdicts(rounds, ids) == {
+        "x": ["fixed"],
+        "y": ["not a defect"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_fixer_decisions_file_holds_every_round(tmp_path, fake_pr, monkeypatch):
+    """`fixer-decisions.json` beside the review: every saved decision, with its round."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    doc = json.loads((f.dir / from_review.FIXER_DECISIONS).read_text())
+    assert doc[A]["decision"] == from_review.FIXED and doc[A]["round"] == 1
+    assert doc[A]["commit"] == f.state()["decisions"][A]["commit"]
+    assert doc[B] == {
+        "decision": from_review.NOT_DEFECT,
+        "reason": "it reads correctly",
+        "round": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_lineage_s18_a_stale_decisions_file_is_rewritten_at_start(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S18: killed after the decision was saved, before the file was
+    written. The next run, with nothing left to decide, writes it whole."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    run, lines = f.run()
+    with _Stubs(engine_stubs(f.repo)):
+        assert await loop.run_findings(run) == 0, lines
+    path = f.dir / from_review.FIXER_DECISIONS
+    whole = json.loads(path.read_text())
+    path.write_text("{}")
+    run, lines = f.run()
+    assert await loop.run_findings(run) == 0, lines
+    assert lines[-1] == "FINDINGS:MAX_ROUNDS:1"
+    assert json.loads(path.read_text()) == whole
+
+
+@pytest.mark.asyncio
+async def test_lineage_s19_a_write_killed_part_way_leaves_the_old_file(
+    tmp_path, fake_pr, monkeypatch
+):
+    """Row S19: a temp file beside the old one; the old one still reads, and
+    the next write replaces it."""
+    f = Fixer(tmp_path, fake_pr, monkeypatch)
+    path = f.dir / from_review.FIXER_DECISIONS
+    path.write_text(json.dumps({"old": {"decision": "fixed", "round": 1}}))
+    calls = []
+    real = from_review.os.replace
+
+    def killed(src, dst):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("killed")
+        return real(src, dst)
+
+    monkeypatch.setattr(from_review.os, "replace", killed)
+    with pytest.raises(RuntimeError):
+        from_review.write_fixer_decisions(f.dir, _fs_with(A))
+    assert json.loads(path.read_text()) == {"old": {"decision": "fixed", "round": 1}}
+    assert list(f.dir.glob(from_review.FIXER_DECISIONS + ".*"))
+    from_review.write_fixer_decisions(f.dir, _fs_with(A))
+    assert json.loads(path.read_text()) == {
+        A: {"decision": "fixed", "commit": "c1", "round": 1}
+    }
+
+
+def _fs_with(fid: str):
+    from build_pipeline.state import FindingsRound, FindingsState
+
+    rnd = FindingsRound(
+        number=1, decisions={fid: {"decision": "fixed", "commit": "c1"}}
+    )
+    return FindingsState(pr=7, repo="o/r", branch="b", change_dir="c", rounds=[rnd])
 
 
 def _at_cap(r: Rounds, **over) -> None:

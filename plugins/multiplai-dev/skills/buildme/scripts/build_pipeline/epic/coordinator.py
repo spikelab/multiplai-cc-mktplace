@@ -962,6 +962,16 @@ class Coordinator:
                 and len(fixes) >= 2
                 and all((a.result or {}).get("ingestion_error") for a in fixes[-2:])
             ):
+                # Held for good only at this head: as for a fixer's park (M1),
+                # a moved head is left for the review step.
+                try:
+                    moved = self._fix_head_moved(c, fixes[-1])
+                except ReadFailed as e:
+                    c.status, c.reason = "unknown", str(e)
+                    continue
+                if moved:
+                    c.status, c.reason = "built", ""
+                    continue
                 c.status, c.reason = "failed", fixes[-1].result["failed"]
                 c.relaunched = True
         for c in (
@@ -1482,22 +1492,42 @@ class Coordinator:
         if blocking is None:
             fields["parked"] = f"cannot read the review's findings in {review_dir}"
         elif blocking:
+            verdicts = self._fixer_verdicts(c, review_dir)
             fields["next"], fields["next_reason"] = review.decide(
                 found or [],
                 c.pr_round,
                 cap,
                 self.settings.round_worth,
                 self.settings.merge or "auto",
+                verdicts,
             )
             if fields["next"] == "park":
-                fields["open_ids"] = review.open_at_cap(
+                held = [fid for fid, _ in review.fixer_parks(found or [], verdicts)]
+                fields["open_ids"] = held or review.open_at_cap(
                     found or [], self.settings.merge or "auto"
                 )
                 fields["parked"] = (
-                    f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
-                    + "; ".join(blocking)
-                )
+                    f"{fields['next_reason']}; {len(blocking)} blocker(s): "
+                    if held
+                    else f"review round {c.pr_round} of {cap} left {len(blocking)} blocker(s): "
+                ) + "; ".join(blocking)
         return fields
+
+    def _fixer_verdicts(self, c: Child, review_dir: str) -> dict[str, list[str]]:
+        """`history.fixer_verdicts` of *c*'s `.findings-state.json`, by the
+        lineages of the reviews in *review_dir*; empty, with a log line, when
+        the state is missing or unreadable, so rounds and the cap apply."""
+        from ..findings import history
+
+        rounds = fix._state_rounds(self._child_project(c), self.change(c.id))
+        if not rounds:
+            log.info(
+                "EPIC child %s: no fixer decisions read from its .findings-state.json",
+                c.id,
+            )
+            return {}
+        ids = history.lineages(history.review_files([review_dir]))
+        return history.fixer_verdicts(rounds, ids)
 
     def _reviewed(self, c: Child, fields: dict) -> None:
         if fields.get("parked"):
@@ -2093,7 +2123,8 @@ class Coordinator:
             and not (
                 len(fixes) >= 2 and (fixes[-2].result or {}).get("ingestion_error")
             )
-        ):  # S9: once more, with a fresh round
+            and head == fixes[-1].started.get("head_sha")
+        ):  # S9: once more, with a fresh round; a moved head is reviewed first
             argv = fixes[-1].started.get("argv") or []
             if self._over_budget():
                 c.status = "built"

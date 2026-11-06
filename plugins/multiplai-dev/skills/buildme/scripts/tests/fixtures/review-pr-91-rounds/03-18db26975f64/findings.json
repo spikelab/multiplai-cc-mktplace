@@ -1,0 +1,410 @@
+{
+ "schema_version": 1,
+ "mode": "full",
+ "generated_at": "2026-11-05T10:41:57Z",
+ "target": {
+  "head_sha": "18db26975f64ed062a1cc40dfb49775c41145347"
+ },
+ "run": {
+  "started_at": "2026-11-05T10:23:40.375Z"
+ },
+ "findings": [
+  {
+   "id": "208582c793",
+   "severity": "MEDIUM",
+   "status": "confirmed",
+   "impact": "breaks-users",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 127,
+   "line_end": 133,
+   "lineage": "08672d4746",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "08672d4746"
+   }
+  },
+  {
+   "id": "db90668ede",
+   "severity": "MEDIUM",
+   "status": "confirmed",
+   "impact": "breaks-users",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/nuovo-account-form.tsx",
+   "line_start": 170,
+   "line_end": 170,
+   "lineage": "c1541b6daf",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "c1541b6daf"
+   }
+  },
+  {
+   "id": "f537a00147",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 250,
+   "line_end": 253,
+   "lineage": "9937c3e728",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "9a6021456f"
+   }
+  },
+  {
+   "id": "0224a701bd",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/account-creato-dialog.tsx",
+   "line_start": 34,
+   "line_end": 35,
+   "lineage": "54e534aaeb",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "54e534aaeb"
+   }
+  },
+  {
+   "id": "5efb549514",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/nuovo-account-form.tsx",
+   "line_start": 197,
+   "line_end": 197,
+   "lineage": "659cbc4d76",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "35c4343886"
+   }
+  },
+  {
+   "id": "abe68b9b08",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/api.ts",
+   "line_start": 114,
+   "line_end": 114,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "65004cfe30",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 152,
+   "line_end": 152,
+   "lineage": "d62907b020",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "d62907b020"
+   }
+  },
+  {
+   "id": "4cd5390785",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 273,
+   "line_end": 273,
+   "lineage": "74225fccfa",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "30528ec800"
+   }
+  },
+  {
+   "id": "38cc6378e7",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 256,
+   "line_end": 286,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "be2e6b5d5a",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolcePMS/tests/test_dfaccmgmt1_account_create.py",
+   "line_start": 28,
+   "line_end": 28,
+   "lineage": "7fdc1c395e",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "ef7c4f2b1c"
+   }
+  },
+  {
+   "id": "953512ce88",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "frontend/src/app/dolceops/account/components/nuovo-account-form.tsx",
+   "line_start": 111,
+   "line_end": 111,
+   "lineage": "b08aadf669",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "f5d4d75bd4"
+   }
+  },
+  {
+   "id": "1fc9be4e02",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "frontend/src/app/dolceops/account/__tests__/account-create-api.test.ts",
+   "line_start": 42,
+   "line_end": 42,
+   "lineage": "393e1fa82f",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "393e1fa82f"
+   }
+  },
+  {
+   "id": "b418278197",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 378,
+   "line_end": 379,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "5fbf36a516",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 334,
+   "line_end": 334,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "69e8307521",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "frontend/src/app/dolceops/account/components/account-creato-dialog.tsx",
+   "line_start": 41,
+   "line_end": 41,
+   "lineage": "dfac02c1e4",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "dfac02c1e4"
+   }
+  }
+ ],
+ "earlier": [
+  {
+   "earlier_id": "08672d4746",
+   "error": "",
+   "lineage": "08672d4746",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "c1541b6daf",
+   "error": "",
+   "lineage": "c1541b6daf",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "d62907b020",
+   "error": "",
+   "lineage": "d62907b020",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "dfac02c1e4",
+   "error": "",
+   "lineage": "dfac02c1e4",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "30528ec800",
+   "error": "",
+   "lineage": "74225fccfa",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "0699cc961e",
+   "error": "",
+   "lineage": "0699cc961e",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "9a6021456f",
+   "error": "",
+   "lineage": "9937c3e728",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "f5d4d75bd4",
+   "error": "",
+   "lineage": "b08aadf669",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "393e1fa82f",
+   "error": "",
+   "lineage": "393e1fa82f",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "35c4343886",
+   "error": "",
+   "lineage": "659cbc4d76",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "456a9aba3e",
+   "error": "",
+   "lineage": "91976986b5",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "54e534aaeb",
+   "error": "",
+   "lineage": "54e534aaeb",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "3543362d65",
+   "error": "",
+   "lineage": "3543362d65",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "bc8c3901d7",
+   "error": "",
+   "lineage": "bc8c3901d7",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "partially_resolved"
+  },
+  {
+   "earlier_id": "dadd77aa3b",
+   "error": "",
+   "lineage": "dadd77aa3b",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "693d0d1fc0",
+   "error": "",
+   "lineage": "693d0d1fc0",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "ef7c4f2b1c",
+   "error": "",
+   "lineage": "7fdc1c395e",
+   "round": "18db26975f64ed062a1cc40dfb49775c41145347",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "9937c3e728",
+   "error": "",
+   "lineage": "9937c3e728",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "38ec0b4dee",
+   "error": "",
+   "lineage": "38ec0b4dee",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "b08aadf669",
+   "error": "",
+   "lineage": "b08aadf669",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "a6a55f30fa",
+   "error": "",
+   "lineage": "a6a55f30fa",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "partially_resolved"
+  },
+  {
+   "earlier_id": "659cbc4d76",
+   "error": "",
+   "lineage": "659cbc4d76",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "91976986b5",
+   "error": "",
+   "lineage": "91976986b5",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "74225fccfa",
+   "error": "",
+   "lineage": "74225fccfa",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "7fdc1c395e",
+   "error": "",
+   "lineage": "7fdc1c395e",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  }
+ ]
+}

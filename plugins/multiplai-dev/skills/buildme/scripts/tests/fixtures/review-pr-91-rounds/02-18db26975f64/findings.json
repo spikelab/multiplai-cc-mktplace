@@ -1,0 +1,343 @@
+{
+ "schema_version": 1,
+ "mode": "full",
+ "generated_at": "2026-11-05T02:52:49Z",
+ "target": {
+  "head_sha": "18db26975f64ed062a1cc40dfb49775c41145347"
+ },
+ "run": {
+  "started_at": "2026-11-05T02:39:02.105Z"
+ },
+ "findings": [
+  {
+   "id": "08672d4746",
+   "severity": "MEDIUM",
+   "status": "confirmed",
+   "impact": "breaks-users",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 133,
+   "line_end": 133,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "c1541b6daf",
+   "severity": "MEDIUM",
+   "status": "confirmed",
+   "impact": "breaks-users",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/nuovo-account-form.tsx",
+   "line_start": 171,
+   "line_end": 171,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "d62907b020",
+   "severity": "MEDIUM",
+   "status": "confirmed",
+   "impact": "breaks-users",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 151,
+   "line_end": 152,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "dfac02c1e4",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/account-creato-dialog.tsx",
+   "line_start": 41,
+   "line_end": 41,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "dfac02c1e4"
+   },
+   "carried_from": "01-b28481b59e96"
+  },
+  {
+   "id": "30528ec800",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 353,
+   "line_end": 355,
+   "lineage": "74225fccfa",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "74225fccfa"
+   }
+  },
+  {
+   "id": "0699cc961e",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 192,
+   "line_end": 192,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "9a6021456f",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 249,
+   "line_end": 253,
+   "lineage": "9937c3e728",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "9937c3e728"
+   }
+  },
+  {
+   "id": "f5d4d75bd4",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/nuovo-account-form.tsx",
+   "line_start": 111,
+   "line_end": 111,
+   "lineage": "b08aadf669",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "b08aadf669"
+   }
+  },
+  {
+   "id": "393e1fa82f",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "tests",
+   "topic": "tests",
+   "file": "frontend/src/app/dolceops/account/__tests__/account-create-api.test.ts",
+   "line_start": 42,
+   "line_end": 42,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "35c4343886",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "hygiene",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/nuovo-account-form.tsx",
+   "line_start": 258,
+   "line_end": 258,
+   "lineage": "659cbc4d76",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "659cbc4d76"
+   }
+  },
+  {
+   "id": "456a9aba3e",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "backend/DolcePMS/endpointz/newclient.py",
+   "line_start": 274,
+   "line_end": 277,
+   "lineage": "91976986b5",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "91976986b5"
+   }
+  },
+  {
+   "id": "54e534aaeb",
+   "severity": "LOW",
+   "status": "confirmed",
+   "impact": "correctness-only",
+   "section": "code",
+   "topic": "code",
+   "file": "frontend/src/app/dolceops/account/components/account-creato-dialog.tsx",
+   "line_start": 34,
+   "line_end": 34,
+   "assessment": {
+    "label": "useful",
+    "earlier_id": null
+   }
+  },
+  {
+   "id": "3543362d65",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolceSystem/contracts.py",
+   "line_start": 56,
+   "line_end": 56,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "3543362d65"
+   },
+   "carried_from": "01-b28481b59e96"
+  },
+  {
+   "id": "bc8c3901d7",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "frontend/src/app/dolceops/account/api.ts",
+   "line_start": 111,
+   "line_end": 113,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "bc8c3901d7"
+   },
+   "carried_from": "01-b28481b59e96"
+  },
+  {
+   "id": "dadd77aa3b",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "frontend/src/app/dolceops/account/__tests__/account-create-form.test.tsx",
+   "line_start": 37,
+   "line_end": 37,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "dadd77aa3b"
+   },
+   "carried_from": "01-b28481b59e96"
+  },
+  {
+   "id": "693d0d1fc0",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "frontend/src/app/dolceops/account/routes.ts",
+   "line_start": 5,
+   "line_end": 5,
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "693d0d1fc0"
+   },
+   "carried_from": "01-b28481b59e96"
+  },
+  {
+   "id": "ef7c4f2b1c",
+   "severity": "LOW",
+   "status": "unverified",
+   "section": "code",
+   "file": "backend/DolcePMS/tests/test_dfaccmgmt1_account_create.py",
+   "line_start": 28,
+   "line_end": 28,
+   "lineage": "7fdc1c395e",
+   "assessment": {
+    "label": "still-open",
+    "earlier_id": "7fdc1c395e"
+   }
+  },
+  {
+   "id": "52da7dc209",
+   "severity": "MEDIUM",
+   "status": "refuted",
+   "section": "code",
+   "file": "frontend/src/app/dolceops/account/__tests__/account-create-form-avatar-password.test.tsx",
+   "line_start": 70,
+   "line_end": 70
+  }
+ ],
+ "earlier": [
+  {
+   "earlier_id": "e910269355",
+   "error": "",
+   "lineage": "e910269355",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "resolved"
+  },
+  {
+   "earlier_id": "9937c3e728",
+   "error": "",
+   "lineage": "9937c3e728",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "38ec0b4dee",
+   "error": "",
+   "lineage": "38ec0b4dee",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "b08aadf669",
+   "error": "",
+   "lineage": "b08aadf669",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "a6a55f30fa",
+   "error": "",
+   "lineage": "a6a55f30fa",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "partially_resolved"
+  },
+  {
+   "earlier_id": "659cbc4d76",
+   "error": "",
+   "lineage": "659cbc4d76",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "91976986b5",
+   "error": "",
+   "lineage": "91976986b5",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "74225fccfa",
+   "error": "",
+   "lineage": "74225fccfa",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  },
+  {
+   "earlier_id": "7fdc1c395e",
+   "error": "",
+   "lineage": "7fdc1c395e",
+   "round": "b28481b59e96462a409827ae096694aaf4cd9d0b",
+   "status": "still_present"
+  }
+ ]
+}
