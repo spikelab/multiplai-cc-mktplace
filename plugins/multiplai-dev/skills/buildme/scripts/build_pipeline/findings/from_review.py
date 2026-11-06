@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 
 from ..state import FindingsRound
+from . import history
 from .decisions import chosen_ids
 from .models import PRComment, Verdict
 
@@ -42,7 +43,8 @@ def blockers(
     severities: tuple[str, ...] | None = None,
     code_only: bool = False,
 ) -> tuple[str, list[str]]:
-    """(the reviewed head, the ids `--auto` posts) from
+    """(the reviewed head, the ids `--auto` posts, then the still-open ones
+    the review stopped choosing, `history.still_open_blockers`) from
     `<review_dir>/findings.json`. Raises `FileNotFoundError` when the file is
     missing and `ValueError` when it cannot be read as the review's findings."""
     source = Path(review_dir) / "findings.json"
@@ -52,6 +54,11 @@ def blockers(
         doc = json.loads(source.read_text(encoding="utf-8"))
         head = str((doc.get("target") or {}).get("head_sha") or "")
         ids = chosen_ids(doc, severities, code_only)
+        files = history.review_files([review_dir])
+        ids += [
+            str(f["id"])
+            for f in history.still_open_blockers(doc, files, severities, code_only)
+        ]
     except (
         json.JSONDecodeError,
         UnicodeDecodeError,

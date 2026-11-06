@@ -271,7 +271,11 @@ def conflicts(view: dict) -> bool | None:
 def blocking_findings(review_dir: Path | str) -> list[dict] | None:
     """The open Code findings at HIGH or MEDIUM in `<review_dir>/findings.json`;
     None when the file cannot be read. "Open" is what the review lists
-    (`findings.decisions._listed`, a copy of the review skill's rule)."""
+    (`findings.decisions._listed`, a copy of the review skill's rule), then
+    the blockers it stopped choosing while an `earlier` row says they are
+    still there (`history.still_open_blockers`): a lower severity alone does
+    not unblock a defect."""
+    from ..findings import history
     from ..findings.decisions import _listed, _section
 
     path = Path(review_dir) / "findings.json"
@@ -284,7 +288,9 @@ def blocking_findings(review_dir: Path | str) -> list[dict] | None:
             if _listed(f, mode)
             and _section(f) == "code"
             and f.get("severity") in BLOCKING_SEVERITIES
-        ]
+        ] + history.still_open_blockers(
+            doc, history.review_files([review_dir]), BLOCKING_SEVERITIES, True
+        )
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         log.warning("cannot read %s: %s", path, e)
         return None

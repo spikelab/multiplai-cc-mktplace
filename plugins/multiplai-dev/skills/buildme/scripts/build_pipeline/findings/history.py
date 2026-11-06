@@ -30,13 +30,16 @@ from pathlib import Path
 
 from multiplai_core.untrusted import defang, fence
 
-from .decisions import _listed
+from .decisions import _listed, chosen_ids
 from .models import PRComment, TriageRecord
 
 log = logging.getLogger(__name__)
 
 FINDINGS_FILE = "findings.json"
 ROUNDS_DIR = "rounds"
+# The `earlier` statuses that say a defect is still there. `cannot_verify`
+# is not one: it carries no blocker forward.
+OPEN_STATUSES = ("still_present", "partially_resolved")
 
 
 def ledger_dirs(project_dir: Path, pr: int) -> list[str]:
@@ -126,6 +129,49 @@ def lineages(files: list[dict]) -> dict[str, str]:
             if e.get("earlier_id"):
                 out.setdefault(str(e["earlier_id"]), str(e["lineage"]))
     return out
+
+
+def _chosen(
+    data: dict, severities: tuple[str, ...] | None, code_only: bool
+) -> list[dict]:
+    """The findings of *data* that `--auto` chose (`decisions.chosen_ids`); none
+    in a file of another shape, which can only remove history."""
+    try:
+        ids = set(chosen_ids(data, severities, code_only))
+    except (KeyError, TypeError, AttributeError):
+        return []
+    return [f for f in _findings(data) if str(f["id"]) in ids]
+
+
+def still_open_blockers(
+    doc: dict,
+    files: list[dict],
+    severities: tuple[str, ...] | None,
+    code_only: bool,
+) -> list[dict]:
+    """The blockers *doc* stopped choosing while it still says they are open.
+    For each `earlier` row of an `OPEN_STATUSES` status whose lineage has no
+    finding *doc* chose (the re-review lowered its severity, or listed nothing
+    for it), the finding from the newest review in *files* older than *doc*
+    that chose that lineage, one per lineage. Its id is the earlier one, so
+    its PR comment matches directly and its own severity, status and impact
+    are what is read."""
+    chosen = {lineage(f) for f in _chosen(doc, severities, code_only)}
+    written = str(doc.get("generated_at") or "")
+    older = [d for d in files if str(d.get("generated_at") or "") < written]
+    out: dict[str, dict] = {}
+    for e in _earlier(doc):
+        lin = str(e["lineage"])
+        if e.get("status") not in OPEN_STATUSES or lin in chosen or lin in out:
+            continue
+        for data in reversed(older):
+            found = [
+                f for f in _chosen(data, severities, code_only) if lineage(f) == lin
+            ]
+            if found:
+                out[lin] = found[0]
+                break
+    return list(out.values())
 
 
 def _lineage_of(comment: PRComment, ids: dict[str, str]) -> str | None:

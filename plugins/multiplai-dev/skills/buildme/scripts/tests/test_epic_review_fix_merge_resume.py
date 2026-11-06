@@ -756,6 +756,103 @@ async def test_a_second_fetch_of_one_review_drops_what_is_decided(
     assert len(f.impl_commits()) == 1
 
 
+# --- a defect that was blocking stays blocking -------------------------------------
+
+
+def _review_91_round_3(tmp_path: Path) -> Path:
+    d = tmp_path / "pr-91"
+    (d / "rounds" / ROUND2.name).mkdir(parents=True)
+    shutil.copy(ROUND2 / "findings.json", d / "rounds" / ROUND2.name / "findings.json")
+    shutil.copy(ROUND3 / "findings.json", d / "findings.json")
+    return d
+
+
+def test_lowered_severity_keeps_blocking(tmp_path):
+    """Done means 5: `d62907b020` came back as LOW `65004cfe30` and still_present."""
+    d = _review_91_round_3(tmp_path)
+    want = ["208582c793", "db90668ede", "d62907b020"]
+    _, ids = from_review.blockers(d, ("HIGH", "MEDIUM"), True)
+    assert ids == want
+    assert [f["id"] for f in review.blocking_findings(d)] == want
+
+
+def _reviews_with_row(d: Path, status: str, *later: dict) -> None:
+    _kept(
+        d,
+        "01-h1",
+        {
+            "mode": "full",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "target": {"head_sha": "h1"},
+            "findings": [_finding(A, "add subtracts")],
+        },
+    )
+    (d / "findings.json").write_text(
+        json.dumps(
+            {
+                "mode": "full",
+                "generated_at": "2026-01-02T00:00:00Z",
+                "target": {"head_sha": "h2"},
+                "findings": list(later),
+                "earlier": [{"earlier_id": A, "lineage": A, "status": status}],
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize("status", ["resolved", "cannot_verify"])
+def test_resolved_lineage_does_not_block(tmp_path, status):
+    """Done means 6, and `cannot_verify` carries no blocker forward."""
+    _reviews_with_row(tmp_path, status)
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == []
+    assert review.blocking_findings(tmp_path) == []
+
+
+@pytest.mark.parametrize("status", ["still_present", "partially_resolved"])
+def test_an_open_row_with_no_listed_finding_blocks_under_its_earlier_id(
+    tmp_path, status
+):
+    """#88's `77de1139c8`: the row stayed open and nothing listed its lineage."""
+    _reviews_with_row(tmp_path, status)
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == [A]
+    [f] = review.blocking_findings(tmp_path)
+    assert (f["id"], f["severity"]) == (A, "MEDIUM")
+    got, _ = review.decide([f], 1, 3, "breaks")
+    assert got == "round"
+
+
+def test_an_open_row_adds_nothing_when_its_lineage_is_chosen(tmp_path):
+    _reviews_with_row(tmp_path, "still_present", _still_open(NEW, A))
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == [NEW]
+
+
+def test_a_lineage_no_review_chose_adds_nothing(tmp_path):
+    """A LOW defect that stays open never blocked."""
+    _reviews_with_row(tmp_path, "still_present")
+    doc = json.loads((tmp_path / "rounds/01-h1/findings.json").read_text())
+    doc["findings"][0]["severity"] = "LOW"
+    (tmp_path / "rounds/01-h1/findings.json").write_text(json.dumps(doc))
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == []
+
+
+def test_one_blocker_per_lineage_and_the_newest_review_wins(tmp_path):
+    _reviews_with_row(tmp_path, "still_present")
+    doc = json.loads((tmp_path / "findings.json").read_text())
+    doc["earlier"].append({"earlier_id": NEW, "lineage": A, "status": "still_present"})
+    (tmp_path / "findings.json").write_text(json.dumps(doc))
+    _kept(
+        tmp_path,
+        "02-h1",
+        {
+            "mode": "full",
+            "generated_at": "2026-01-01T12:00:00Z",
+            "target": {"head_sha": "h1"},
+            "findings": [_still_open(NEW, A)],
+        },
+    )
+    assert from_review.blockers(tmp_path, ("HIGH", "MEDIUM"), True)[1] == [NEW]
+
+
 # --- the epic (rows S9-S11) -------------------------------------------------------
 
 INGESTION = {"exit": 1, "stdout": "FINDINGS:INGESTION_ERROR:m1"}
